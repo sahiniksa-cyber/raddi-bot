@@ -669,7 +669,7 @@ label{display:flex;align-items:center}
       <div class="g2">
         <div>
           <label>اللغة</label>
-          <select id="rsLanguage">
+          <select id="rsLanguage" onchange="toggleDialect(this.value)">
             <option value="dialect">عامية (أكثر طبيعية)</option>
             <option value="standard">فصحى سهلة</option>
             <option value="formal">فصحى رسمية</option>
@@ -1100,7 +1100,9 @@ function fillForm(c){
   const r=c.replyStyle||{};
   document.getElementById('rsEmployeeName').value=r.employeeName||'';
   document.getElementById('rsTone').value=r.tone||'ودي ومحترم';
-  document.getElementById('rsLanguage').value=r.useDialect===false?'standard':(r.languageStyle||'dialect');
+  const lang=r.useDialect===false?'standard':(r.languageStyle||'dialect');
+  document.getElementById('rsLanguage').value=lang;
+  toggleDialect(lang);
   document.getElementById('rsDialect').value=r.dialect||'السعودية الخفيفة';
   document.getElementById('rsEmoji').value=r.emojiLevel||'medium';
   document.getElementById('rsLength').value=r.replyLength||'medium';
@@ -1169,6 +1171,11 @@ async function resetTestChat(){
   document.getElementById('testChat').innerHTML='';
   try{await fetch('/api/test-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:true,sessionId:testSessionId})});}catch(_){}
   toast('✅ بدأت محادثة جديدة');
+}
+
+// ── DIALECT TOGGLE ──
+function toggleDialect(lang){
+  document.getElementById('dialectField').style.display = lang==='dialect' ? '' : 'none';
 }
 
 // ── CHIPS ──

@@ -663,8 +663,8 @@ ${productsBlock}
       this.log('✅ رد: ' + reply.substring(0, 70));
     } catch (err) {
       this.log('❌ خطأ في الرد على ' + sender.replace('@c.us', '').replace('@lid', '') + ': ' + err.message);
-      const fallback = this.config.errorMessage?.trim() || 'عذراً، سيصلك رد خلال دقائق 🙏';
-      try { await this.humanLikeReply(msg, fallback); } catch (_) {}
+      const fallback = this.config.errorMessage?.trim();
+      if (fallback) try { await this.humanLikeReply(msg, fallback); } catch (_) {}
     }
   }
 
