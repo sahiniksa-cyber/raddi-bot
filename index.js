@@ -32,9 +32,17 @@ function isPrivateUrl(urlStr) {
 }
 
 function findChrome() {
+  // env var takes priority (Railway, Docker, CI)
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
   const paths = [
+    // Nixpacks / Railway
+    '/nix/var/nix/profiles/default/bin/chromium',
+    '/run/current-system/sw/bin/chromium',
+    // Linux
     '/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser', '/usr/bin/chromium',
+    '/snap/bin/chromium',
+    // Windows
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     (process.env.LOCALAPPDATA || '') + '\\Google\\Chrome\\Application\\chrome.exe',
