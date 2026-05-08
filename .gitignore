@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Session & Auth (sensitive)
+session/
+.session-secret
+*.pem
+
+# User data (sensitive)
+users.json
+data/
+
+# Runtime logs
+logs/
+*.log
+
+# Conversations & costs (runtime data)
+conversations.json
+costs.json
+bot-config.json
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bat files (Windows only)
+*.bat

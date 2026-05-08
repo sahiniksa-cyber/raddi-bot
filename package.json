@@ -1,0 +1,27 @@
+{
+  "name": "raddi-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "ردّي — بوت واتساب ذكي لخدمة العملاء",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "body-parser": "^1.20.2",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.4.1",
+    "express-session": "^1.19.0",
+    "openai": "^4.47.1",
+    "qrcode": "^1.5.3",
+    "qrcode-terminal": "^0.12.0",
+    "uuid": "^14.0.0",
+    "whatsapp-web.js": "^1.34.7"
+  }
+}

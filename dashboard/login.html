@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ردّي — تسجيل الدخول</title>
+<style>
+@font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Light.otf') format('opentype');font-weight:300}
+@font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Regular.otf') format('opentype');font-weight:400}
+@font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Medium.otf') format('opentype');font-weight:500}
+@font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Bold.otf') format('opentype');font-weight:700}
+@font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Balck.otf') format('opentype');font-weight:900}
+:root{--font:'Fatima','Cairo','Segoe UI',Tahoma,sans-serif;--green:#25d366;--green2:#128c7e;--bg:#0a0e1a;--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.08)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg);color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;position:relative;overflow:hidden}
+
+/* Background glow */
+body::before{content:'';position:fixed;top:-40%;left:50%;transform:translateX(-50%);width:700px;height:700px;background:radial-gradient(circle,rgba(37,211,102,.06) 0%,transparent 70%);pointer-events:none}
+body::after{content:'';position:fixed;bottom:-30%;right:-10%;width:500px;height:500px;background:radial-gradient(circle,rgba(124,58,237,.05) 0%,transparent 70%);pointer-events:none}
+
+.logo-wrap{text-align:center;margin-bottom:28px}
+.logo{font-size:38px;font-weight:900;background:linear-gradient(135deg,var(--green),#a3e635);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.02em;display:block}
+.logo-sub{font-size:14px;color:#475569;margin-top:4px}
+
+.card{background:rgba(255,255,255,.03);border:1.5px solid rgba(255,255,255,.08);border-radius:28px;padding:36px;width:100%;max-width:420px;backdrop-filter:blur(20px);position:relative;z-index:1}
+
+.tabs{display:flex;background:rgba(255,255,255,.04);border-radius:14px;padding:4px;margin-bottom:28px;gap:4px}
+.tab-btn{flex:1;padding:10px;border:none;border-radius:11px;background:transparent;color:#64748b;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s}
+.tab-btn.active{background:linear-gradient(135deg,var(--green),var(--green2));color:#fff}
+
+.form-group{margin-bottom:16px}
+label{display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;letter-spacing:.05em;text-transform:uppercase}
+input{width:100%;background:rgba(255,255,255,.05);border:1.5px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 16px;color:#e2e8f0;font-size:15px;font-family:var(--font);outline:none;transition:border-color .2s}
+input:focus{border-color:var(--green)}
+input::placeholder{color:#334155}
+
+.submit-btn{width:100%;padding:15px;border:none;border-radius:14px;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-family:var(--font);font-size:16px;font-weight:900;cursor:pointer;transition:opacity .2s,transform .2s;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:8px}
+.submit-btn:hover{opacity:.9;transform:translateY(-1px)}
+.submit-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+.error-box{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);border-radius:12px;padding:12px 16px;font-size:13px;color:#fca5a5;margin-bottom:14px;display:none}
+.error-box.show{display:block}
+.success-box{background:rgba(37,211,102,.08);border:1px solid rgba(37,211,102,.22);border-radius:12px;padding:12px 16px;font-size:13px;color:#86efac;margin-bottom:14px;display:none}
+.success-box.show{display:block}
+
+.divider{height:1px;background:var(--border);margin:20px 0;position:relative}
+.divider span{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg);padding:0 12px;color:#334155;font-size:12px}
+
+.features{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:28px}
+.feat{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:14px;padding:14px;text-align:center}
+.feat-icon{font-size:24px;margin-bottom:6px}
+.feat-label{font-size:11px;color:#475569;font-weight:600}
+
+.spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.pass-strength{height:3px;border-radius:3px;margin-top:6px;transition:all .3s;background:#1e293b}
+.pass-strength.weak{background:linear-gradient(90deg,#ef4444 33%,#1e293b 33%)}
+.pass-strength.ok{background:linear-gradient(90deg,#f59e0b 66%,#1e293b 66%)}
+.pass-strength.strong{background:#25d366}
+.pass-label{font-size:10px;color:#475569;margin-top:3px}
+</style>
+</head>
+<body>
+
+<div class="logo-wrap">
+  <span class="logo">ردّي</span>
+  <div class="logo-sub">بوت الواتس أب الذكي لمتجرك</div>
+</div>
+
+<div class="card">
+  <div class="tabs">
+    <button class="tab-btn active" id="tabLogin" onclick="showTab('login')">تسجيل الدخول</button>
+    <button class="tab-btn" id="tabRegister" onclick="showTab('register')">إنشاء حساب</button>
+  </div>
+
+  <div class="error-box" id="errBox"></div>
+  <div class="success-box" id="successBox"></div>
+
+  <!-- LOGIN -->
+  <div id="formLogin">
+    <div class="form-group">
+      <label>الإيميل</label>
+      <input type="email" id="loginEmail" placeholder="example@email.com" dir="ltr" autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label>كلمة المرور</label>
+      <input type="password" id="loginPass" placeholder="••••••••" dir="ltr" autocomplete="current-password"
+             onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="submit-btn" id="loginBtn" onclick="doLogin()">
+      <span id="loginBtnTxt">🔓 دخول</span>
+    </button>
+  </div>
+
+  <!-- REGISTER -->
+  <div id="formRegister" style="display:none">
+    <div class="form-group">
+      <label>الاسم</label>
+      <input type="text" id="regName" placeholder="اسمك">
+    </div>
+    <div class="form-group">
+      <label>الإيميل</label>
+      <input type="email" id="regEmail" placeholder="example@email.com" dir="ltr" autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label>كلمة المرور</label>
+      <input type="password" id="regPass" placeholder="8 أحرف على الأقل" dir="ltr"
+             autocomplete="new-password" oninput="checkStrength(this.value)"
+             onkeydown="if(event.key==='Enter')doRegister()">
+      <div class="pass-strength" id="passStrength"></div>
+      <div class="pass-label" id="passLabel"></div>
+    </div>
+    <button class="submit-btn" id="registerBtn" onclick="doRegister()">
+      <span id="regBtnTxt">✅ إنشاء الحساب</span>
+    </button>
+  </div>
+</div>
+
+<div class="features">
+  <div class="feat"><div class="feat-icon">🤖</div><div class="feat-label">بوت ذكي يرد تلقائياً</div></div>
+  <div class="feat"><div class="feat-icon">🎓</div><div class="feat-label">يتعلم أسلوبك بالضبط</div></div>
+  <div class="feat"><div class="feat-icon">💰</div><div class="feat-label">تتبع التكلفة فوري</div></div>
+  <div class="feat"><div class="feat-icon">🔒</div><div class="feat-label">حساب آمن ومشفّر</div></div>
+</div>
+
+<script>
+function showTab(t){
+  document.getElementById('formLogin').style.display=t==='login'?'block':'none';
+  document.getElementById('formRegister').style.display=t==='register'?'block':'none';
+  document.getElementById('tabLogin').classList.toggle('active',t==='login');
+  document.getElementById('tabRegister').classList.toggle('active',t==='register');
+  hideMsg();
+}
+
+function showErr(m){const b=document.getElementById('errBox');b.textContent=m;b.className='error-box show';document.getElementById('successBox').className='success-box';}
+function showOk(m){const b=document.getElementById('successBox');b.textContent=m;b.className='success-box show';document.getElementById('errBox').className='error-box';}
+function hideMsg(){document.getElementById('errBox').className='error-box';document.getElementById('successBox').className='success-box';}
+
+function setLoading(btnId,txtId,loading,defaultTxt){
+  const btn=document.getElementById(btnId),txt=document.getElementById(txtId);
+  btn.disabled=loading;
+  txt.innerHTML=loading?'<div class="spinner"></div>':defaultTxt;
+}
+
+function checkStrength(v){
+  const el=document.getElementById('passStrength'),lbl=document.getElementById('passLabel');
+  if(!v){el.className='pass-strength';lbl.textContent='';return;}
+  const strong=v.length>=10&&/[A-Z]/.test(v)&&/[0-9]/.test(v);
+  const ok=v.length>=8;
+  el.className='pass-strength '+(strong?'strong':ok?'ok':'weak');
+  lbl.textContent=strong?'✅ قوية جداً':ok?'⚠️ مقبولة':'❌ ضعيفة — 8 أحرف على الأقل';
+}
+
+async function doLogin(){
+  const email=document.getElementById('loginEmail').value.trim();
+  const pass=document.getElementById('loginPass').value;
+  if(!email||!pass){showErr('أدخل الإيميل وكلمة المرور');return;}
+  setLoading('loginBtn','loginBtnTxt',true,'');
+  try{
+    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pass})});
+    const d=await r.json();
+    if(d.success){showOk('✅ مرحباً '+d.name+'! جاري التحميل...');setTimeout(()=>location.href='/',800);}
+    else showErr(d.message);
+  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
+  finally{setLoading('loginBtn','loginBtnTxt',false,'🔓 دخول');}
+}
+
+async function doRegister(){
+  const name=document.getElementById('regName').value.trim();
+  const email=document.getElementById('regEmail').value.trim();
+  const pass=document.getElementById('regPass').value;
+  if(!name||!email||!pass){showErr('جميع الحقول مطلوبة');return;}
+  if(pass.length<8){showErr('كلمة المرور يجب أن تكون 8 أحرف على الأقل');return;}
+  setLoading('registerBtn','regBtnTxt',true,'');
+  try{
+    const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password:pass})});
+    const d=await r.json();
+    if(d.success){showOk('✅ تم إنشاء الحساب! جاري الدخول...');setTimeout(()=>location.href='/',800);}
+    else showErr(d.message);
+  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
+  finally{setLoading('registerBtn','regBtnTxt',false,'✅ إنشاء الحساب');}
+}
+</script>
+</body>
+</html>
