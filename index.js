@@ -252,13 +252,49 @@ async function fetchZidProducts(storeUrl, token, managerToken) {
   return products;
 }
 
+// جرّب الـ API العامة للمتجر مباشرة (بدون توكن)
+async function tryStorefrontAPI(storeUrl) {
+  try {
+    const base = new URL(storeUrl);
+    const candidates = [
+      base.origin + '/api/products?per_page=50&status=sale',
+      base.origin + '/api/products?per_page=50',
+      base.origin + '/api/v2/products',
+      base.origin + '/products.json?limit=50',
+      base.origin + '/collections/all/products.json?limit=50', // Shopify
+    ];
+    for (const ep of candidates) {
+      try {
+        const { body, status } = await fetchURL(ep, {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        });
+        if (status !== 200) continue;
+        const trimmed = body.trim();
+        if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) continue;
+        const data = JSON.parse(trimmed);
+        const items = data?.data || data?.products || data?.items || (Array.isArray(data) ? data : []);
+        if (Array.isArray(items) && items.length > 0) {
+          console.log(`✅ Storefront API: ${items.length} منتج من ${ep}`);
+          return items;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return [];
+}
+
 async function fetchWithPuppeteer(url) {
   let puppeteer;
   try { puppeteer = require('puppeteer'); } catch (_) {
     try { puppeteer = require('puppeteer-core'); } catch (_) { return null; }
   }
   const chromePath = findChrome();
-  const opts = { headless: true, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-extensions'] };
+  const opts = {
+    headless: true,
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+           '--disable-gpu','--disable-extensions','--disable-blink-features=AutomationControlled'],
+  };
   if (chromePath) opts.executablePath = chromePath;
   let browser;
   try {
@@ -266,13 +302,57 @@ async function fetchWithPuppeteer(url) {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1280, height: 900 });
-    // networkidle0 لانتظار اكتمال JS (سلة وزد JavaScript-heavy)
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 45000 }).catch(async () => {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
-    });
-    await new Promise(r => setTimeout(r, 6000));
 
-    // استخراج مباشر من window objects لمتاجر سلة
+    // ══ اعتراض طلبات XHR/Fetch — يجمع بيانات المنتجات مباشرة من API responses ══
+    const capturedProducts = [];
+    await page.setRequestInterception(true);
+
+    page.on('request', (req) => {
+      // حجب الموارد غير الضرورية لتسريع التحميل
+      const rt = req.resourceType();
+      if (['image','font','media','stylesheet'].includes(rt)) return req.abort();
+      req.continue();
+    });
+
+    page.on('response', async (response) => {
+      const resUrl = response.url();
+      const ct = response.headers()['content-type'] || '';
+      if (!ct.includes('json')) return;
+      // التقط أي رد JSON يحتوي على منتجات (patterns شائعة في سلة/زد/شوبيفاي)
+      const isProductUrl = /product|catalog|collection|item|inventory/i.test(resUrl);
+      if (!isProductUrl) return;
+      try {
+        const json = await response.json();
+        const items = json?.data || json?.products || json?.items || json?.result?.data || [];
+        if (Array.isArray(items) && items.length > 0) {
+          capturedProducts.push(...items.slice(0, 60));
+          console.log(`📡 XHR اعتراض: ${items.length} منتج من ${resUrl}`);
+        }
+      } catch (_) {}
+    });
+
+    // حمّل صفحة المنتجات مباشرة
+    const base = new URL(url);
+    const targetUrl = base.origin + '/products';
+    try {
+      await page.goto(targetUrl, { waitUntil: 'networkidle0', timeout: 40000 });
+    } catch (_) {
+      try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 }); } catch (_) {}
+    }
+    await new Promise(r => setTimeout(r, 4000));
+
+    // إذا نجح الاعتراض، أرجع HTML مصنوع من البيانات
+    if (capturedProducts.length > 0) {
+      const fakeHtml = capturedProducts.slice(0, 60).map(p => {
+        const name = (p.name || p.title || p.product_name || '').replace(/</g, '&lt;');
+        const price = p.price?.amount || p.price?.regular?.amount || p.price || p.regular_price || '';
+        const desc = (p.description || p.short_description || '').replace(/<[^>]+>/g, '').substring(0, 200);
+        return `<div class="s-product-card" data-product-id="${p.id || ''}"><div class="s-product-card__title">${name}</div><div class="s-product-card__price">${price} SAR</div><p class="desc">${desc}</p></div>`;
+      }).join('');
+      return `<html><body>${fakeHtml}</body></html>`;
+    }
+
+    // استخراج مباشر من window objects (fallback)
     const sallaProducts = await page.evaluate(() => {
       try {
         const sources = [
@@ -453,6 +533,7 @@ class UserBot {
     this.client     = null;
     this.botRunning = false;
     this.lastAIDebug = null;
+    this.lastAICallAt = 0; // throttle: prevent > 1 call per 4s to avoid 429
     this.costsData = { totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUSD: 0, byModel: {}, resetAt: new Date().toISOString() };
 
     this.config = this._loadConfig();
@@ -620,14 +701,28 @@ class UserBot {
       const anthropicDirect = c.anthropicApiKey?.trim();
       const orKey = c.openrouterApiKey?.trim();
       if (anthropicDirect && anthropicDirect.length > 10) {
+        // نستخدم المفتاح الحقيقي في apiKey حتى يُرسل صح في Authorization: Bearer
+        // ونضيف x-api-key كـ header إضافي (Anthropic يقبل كلاهما)
         const claudeModel = model.replace('anthropic/', '');
+        // تعيين اسم الموديل الصحيح: claude-opus-4-5 أو claude-sonnet-4-5 إلخ
+        const modelId = claudeModel.includes('20') ? claudeModel :
+          claudeModel === 'claude-opus-4-5'    ? 'claude-opus-4-5' :
+          claudeModel === 'claude-sonnet-4-5'  ? 'claude-sonnet-4-5' :
+          claudeModel === 'claude-3-5-sonnet'  ? 'claude-3-5-sonnet-20241022' :
+          claudeModel === 'claude-3-5-haiku'   ? 'claude-3-5-haiku-20241022' :
+          claudeModel === 'claude-3-opus'      ? 'claude-3-opus-20240229' :
+          claudeModel === 'claude-3-haiku'     ? 'claude-3-haiku-20240307' :
+          claudeModel;
         return {
           openai: new OpenAI({
-            apiKey: 'anthropic',
+            apiKey: anthropicDirect,
             baseURL: 'https://api.anthropic.com/v1',
-            defaultHeaders: { 'x-api-key': anthropicDirect, 'anthropic-version': '2023-06-01' },
+            defaultHeaders: {
+              'x-api-key': anthropicDirect,
+              'anthropic-version': '2023-06-01',
+            },
           }),
-          model: claudeModel,
+          model: modelId,
         };
       }
       if (orKey && orKey.length > 20) {
@@ -735,9 +830,20 @@ ${productsBlock}
       historyPreview: history.slice(-8).map(m => ({ role: m.role, content: m.content.substring(0, 100) })),
     };
 
-    // ── إعادة المحاولة تلقائياً عند خطأ 429 (حد الطلبات) ──
+    // ── تحديد معدل الاستدعاء: لا أكثر من مرة كل 4 ثوان (يمنع 429 مسبقاً) ──
+    const MIN_CALL_INTERVAL = 4000;
+    const sinceLastCall = Date.now() - this.lastAICallAt;
+    if (this.lastAICallAt > 0 && sinceLastCall < MIN_CALL_INTERVAL) {
+      const waitNeeded = MIN_CALL_INTERVAL - sinceLastCall;
+      this.log(`⏳ تأخير استباقي ${(waitNeeded / 1000).toFixed(1)}ث (حماية من 429)...`);
+      await sleep(waitNeeded);
+    }
+    this.lastAICallAt = Date.now();
+
+    // ── إعادة المحاولة عند خطأ 429 (حد الطلبات) — انتظار 30ث ثم 60ث ──
+    const maxRetries = opts.maxRetries ?? 2; // 0 = لا إعادة (للاختبار السريع)
     let lastErr;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const res = await openai.chat.completions.create({ model, max_tokens: 800, temperature: 0.7, messages });
         const reply = res.choices[0]?.message?.content || '';
@@ -749,11 +855,13 @@ ${productsBlock}
         return reply;
       } catch (err) {
         lastErr = err;
-        const is429 = err.status === 429 || String(err.message).includes('429');
-        if (is429 && attempt < 2) {
-          const waitMs = (attempt + 1) * 4000; // 4ث ثم 8ث
-          this.log(`⏳ حد الطلبات (429) — إعادة المحاولة بعد ${waitMs / 1000}ث (${attempt + 1}/2)...`);
+        const is429 = err.status === 429 || String(err.message).includes('429') || String(err.message).includes('rate limit') || String(err.message).includes('quota');
+        if (is429 && attempt < maxRetries) {
+          // انتظار حقيقي يكفي لإعادة تعيين حد الطلبات: 30ث ثم 60ث
+          const waitMs = attempt === 0 ? 30000 : 60000;
+          this.log(`⏳ حد الطلبات (429) — إعادة المحاولة بعد ${waitMs / 1000}ث (${attempt + 1}/${maxRetries})...`);
           await sleep(waitMs);
+          this.lastAICallAt = Date.now();
           continue;
         }
         break;
@@ -1379,7 +1487,8 @@ app.post('/api/test-chat', async (req, res) => {
     const memSize = Math.max(2, parseInt(bot.config.memoryMessages) || 50);
     if (hist.length > memSize) hist.splice(0, hist.length - memSize);
 
-    const reply = await bot.getAIReply(hist, { isFirstMsg: isFirst });
+    // test-chat: لا إعادة محاولة عند 429 — يظهر الخطأ فوراً للمستخدم
+    const reply = await bot.getAIReply(hist, { isFirstMsg: isFirst, maxRetries: 0 });
     hist.push({ role: 'assistant', content: reply });
     res.json({ success: true, reply, source: 'ai', historyLength: hist.length, welcomeShown });
   } catch (e) {
@@ -1453,9 +1562,29 @@ app.post('/api/enhance-text', async (req, res) => {
     if (!text || text.trim().length < 3) return res.status(400).json({ success: false, message: 'النص قصير جداً' });
     const { openai, model } = bot.buildAIClient();
     const prompts = {
-      welcome: `حسّن رسالة الترحيب التالية لتبدو طبيعية وودية وبشرية كأنها من موظف حقيقي في متجر "${storeName || 'المتجر'}". يجب ألا تبدو AI أبداً. لا تستخدم تنسيق Markdown. أعد رسالة الترحيب فقط:`,
-      instructions: `حسّن وفصّل تعليمات البوت التالية لتكون أوضح وأكثر تفصيلاً. اجعلها تعليمات منظمة ومفصلة. أعد التعليمات المحسّنة فقط:`,
-      reply: `حسّن هذا الرد ليبدو طبيعياً كأن إنساناً كتبه. أزل أي تنسيق Markdown. أعد الرد المحسّن فقط:`,
+      welcome: `أنت خبير في كتابة رسائل واتساب تجارية. حسّن رسالة الترحيب لتبدو إنسانية تماماً، عفوية، ودية، من موظف حقيقي في متجر "${storeName || 'المتجر'}".
+
+القواعد:
+- لا AI لا بوت لا ChatGPT لا Markdown (لا ** ولا ## ولا ---)
+- استخدم لغة طبيعية عامية خليجية/سعودية
+- قصيرة ومباشرة: جملة ترحيب + جملة عرض مساعدة
+- ممكن إيموجي واحد أو اثنين فقط
+
+أعد رسالة الترحيب المحسّنة فقط، بدون أي شرح:`,
+
+      instructions: `أنت خبير في كتابة System Prompts لنماذج ذكاء اصطناعي (LLMs). مهمتك: حوّل هذه التعليمات إلى System Prompt احترافي يفهمه الذكاء الاصطناعي ويطبّقه بدقة.
+
+اجعل الناتج:
+- مكتوب بصيغة "أنت [الاسم]، موظف خدمة عملاء في متجر..."
+- يحدد السلوك بوضوح: ماذا يقول، ماذا لا يقول، كيف يرد، متى يسأل عن تفاصيل
+- يشمل أمثلة حرفية للردود إذا كان هناك أسلوب معين
+- يضم قواعد واضحة: "إذا سأل X → رد بـ Y"
+- تعليمات مباشرة لا نصائح عامة
+
+أعد System Prompt المحسّن فقط، جاهز للاستخدام المباشر، بدون أي شرح:`,
+
+      reply: `حسّن هذا الرد ليبدو طبيعياً كأن إنساناً كتبه على واتساب. أزل أي تنسيق Markdown (** ## ---). استخدم لغة عامية طبيعية. أعد الرد المحسّن فقط:`,
+
       general: `حسّن النص التالي ليبدو طبيعياً وبشرياً وأكثر ودّاً. لا تستخدم Markdown. أعد النص المحسّن فقط:`,
     };
     const result = await openai.chat.completions.create({
@@ -1495,6 +1624,7 @@ app.post('/api/scan-store', async (req, res) => {
       result.usedAPI = true;
     }
 
+    // ── جرّب صفحة المنتجات مباشرة (HTTP عادي) ──
     if (result.products.length < 3) {
       try {
         const base = new URL(url);
@@ -1508,9 +1638,29 @@ app.post('/api/scan-store', async (req, res) => {
       } catch (_) {}
     }
 
+    // ── جرّب الـ API العامة للمتجر (بدون توكن) ──
+    if (result.products.length < 3) {
+      bot.log('🔌 جاري محاولة Storefront API...');
+      try {
+        const sfItems = await tryStorefrontAPI(url);
+        if (sfItems.length > 0) {
+          const sfProds = sfItems.slice(0, 60).map(p => ({
+            name: p.name || p.title || p.product_name || '',
+            price: String(p.price?.amount || p.price?.regular?.amount || p.price || p.regular_price || ''),
+            description: (p.description || p.short_description || '').replace(/<[^>]+>/g, '').substring(0, 200),
+          })).filter(p => isValidProduct(p.name));
+          if (sfProds.length > result.products.length) {
+            result.products = sfProds;
+            result.usedAPI = true;
+            bot.log(`✅ Storefront API: ${sfProds.length} منتج`);
+          }
+        }
+      } catch (e) { bot.log('⚠️ Storefront API فشل: ' + e.message); }
+    }
+
     let usedPuppeteer = false;
-    if (result.products.length === 0) {
-      bot.log('⏳ جاري الفحص المتقدم (Puppeteer)...');
+    if (result.products.length < 3) {
+      bot.log('⏳ جاري الفحص المتقدم (Puppeteer + XHR)...');
       try {
         const puppeteerHtml = await fetchWithPuppeteer(url);
         if (puppeteerHtml) { result = extractFromHTML(puppeteerHtml, url); usedPuppeteer = true; }
