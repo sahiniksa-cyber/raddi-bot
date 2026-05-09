@@ -386,7 +386,7 @@ class UserBot {
     // New user — return completely empty config (never copy another user's data)
     return {
       storeName: '', storeDescription: '', workingHours: '', welcomeMessage: '',
-      botInstructions: '', welcomeMode: 'inline', model: '', openaiApiKey: '',
+      botInstructions: '', welcomeMode: 'inline', model: 'google/gemini-2.0-flash', openaiApiKey: '',
       openrouterApiKey: '', replyDelayPreset: '30s', memoryMessages: 50,
       maxResponseLength: 300, products: [], autoReplyKeywords: {},
       replyStyle: { tone: 'ودي ومحترم', useDialect: true, dialect: 'السعودية الخفيفة', emojiLevel: 'medium', useShortReplies: false },

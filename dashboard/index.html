@@ -384,8 +384,8 @@ label{display:flex;align-items:center}
     <div class="stat"><div class="v" id="stMdl">—</div><div class="l">النموذج</div></div>
     <div class="stat"><div class="v" id="stStatus">⏹</div><div class="l">الحالة</div></div>
     <div class="stat" style="cursor:pointer" onclick="goTab('train')" title="اضغط لعرض التفاصيل">
-      <div class="v" id="stCost" style="font-size:14px;color:#f59e0b">$0.00</div>
-      <div class="l">تكلفة AI <span style="font-size:9px;color:#475569" id="stCostCalls"></span></div>
+      <div class="v" id="stCost" style="font-size:13px;color:#f59e0b">0 ر.س</div>
+      <div class="l">تكلفة الخدمة <span style="font-size:9px;color:#475569" id="stCostCalls"></span></div>
     </div>
   </div>
 
@@ -417,162 +417,24 @@ label{display:flex;align-items:center}
     <div class="phdr">🧠 الذكاء الاصطناعي</div>
     <div class="pbdy">
 
-      <div class="models-scroll">
-
-        <!-- OpenAI -->
-        <div class="prov-hdr">🤖 OpenAI <span></span></div>
-        <div class="models-row">
-          <div class="mc sel" data-model="gpt-4o-mini" data-prov="openai" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">⚡ GPT-4o Mini</div><div class="md">سريع واقتصادي</div><span class="mp ch">موصى به</span>
-          </div>
-          <div class="mc" data-model="gpt-4o" data-prov="openai" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🧠 GPT-4o</div><div class="md">أذكى وأدق</div><span class="mp md2">متوسط</span>
-          </div>
-          <div class="mc" data-model="gpt-4-turbo" data-prov="openai" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🚀 GPT-4 Turbo</div><div class="md">قوي مع سياق طويل</div><span class="mp hi">مرتفع</span>
-          </div>
-          <div class="mc" data-model="gpt-3.5-turbo" data-prov="openai" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">💨 GPT-3.5 Turbo</div><div class="md">الأسرع والأرخص</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="o3-mini" data-prov="openai" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🧩 O3 Mini</div><div class="md">تفكير واستنتاج</div><span class="mp md2">متوسط</span>
-          </div>
-          <div class="mc" data-model="o1-mini" data-prov="openai" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🎯 O1 Mini</div><div class="md">تحليل دقيق</div><span class="mp md2">متوسط</span>
-          </div>
-        </div>
-
-        <!-- Claude -->
-        <div class="prov-hdr">💜 Claude — Anthropic <span></span></div>
-        <div class="models-row">
-          <div class="mc" data-model="anthropic/claude-opus-4" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">👑 Claude Opus 4</div><div class="md">الأذكى من Anthropic</div><span class="mp hi">مرتفع</span>
+      <div class="models-row" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+          <div class="mc sel" data-model="google/gemini-2.0-flash" data-prov="openrouter" onclick="selModel(this)">
+            <div class="mcheck">✓</div><div class="mn">⚡ Flash 2.0</div><div class="md">سريع ومتوازن</div><span class="mp ch">رخيص</span>
           </div>
           <div class="mc" data-model="anthropic/claude-sonnet-4-5" data-prov="openrouter" onclick="selModel(this)">
             <div class="mcheck">✓</div><div class="mn">🎵 Sonnet 4.5</div><div class="md">توازن مثالي</div><span class="mp md2">موصى به</span>
           </div>
-          <div class="mc" data-model="anthropic/claude-3-5-haiku" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">⚡ Haiku 3.5</div><div class="md">سريع جداً</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="anthropic/claude-3-5-sonnet" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🎶 Sonnet 3.5</div><div class="md">جودة عالية</div><span class="mp md2">متوسط</span>
-          </div>
-          <div class="mc" data-model="anthropic/claude-3-opus" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">📚 Opus 3</div><div class="md">تحليل عميق</div><span class="mp hi">مرتفع</span>
-          </div>
-          <div class="mc" data-model="anthropic/claude-3-haiku" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🌸 Haiku 3</div><div class="md">سريع واقتصادي</div><span class="mp ch">رخيص</span>
-          </div>
-        </div>
-
-        <!-- Gemini -->
-        <div class="prov-hdr">🌟 Gemini — Google <span></span></div>
-        <div class="models-row">
-          <div class="mc" data-model="google/gemini-2.5-pro" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">✨ Gemini 2.5 Pro</div><div class="md">أحدث وأقوى من Google</div><span class="mp hi">مرتفع</span>
-          </div>
-          <div class="mc" data-model="google/gemini-2.0-flash" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">⚡ 2.0 Flash</div><div class="md">سريع ومتوازن</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="google/gemini-2.0-flash:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 2.0 Flash</div><div class="md">مجاني تماماً</div><span class="mp fr">مجاني ✓</span>
-          </div>
-          <div class="mc" data-model="google/gemini-1.5-pro" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">💎 1.5 Pro</div><div class="md">سياق ضخم وذاكرة قوية</div><span class="mp md2">متوسط</span>
-          </div>
-          <div class="mc" data-model="google/gemini-1.5-flash" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🔥 1.5 Flash</div><div class="md">سريع وفعال</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="google/gemini-1.5-flash:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 1.5 Flash</div><div class="md">مجاني</div><span class="mp fr">مجاني ✓</span>
-          </div>
-        </div>
-
-        <!-- Llama -->
-        <div class="prov-hdr">🦙 Llama — Meta <span></span></div>
-        <div class="models-row">
-          <div class="mc" data-model="meta-llama/llama-3.3-70b-instruct" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🦙 Llama 3.3 70B</div><div class="md">أقوى مفتوح المصدر</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="meta-llama/llama-3.3-70b-instruct:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 Llama 3.3 70B</div><div class="md">مجاني ومفتوح</div><span class="mp fr">مجاني ✓</span>
-          </div>
-          <div class="mc" data-model="meta-llama/llama-4-maverick" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🚀 Llama 4 Maverick</div><div class="md">أحدث جيل من Meta</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="meta-llama/llama-3.1-405b-instruct" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🏆 Llama 3.1 405B</div><div class="md">الأضخم — منافس GPT-4</div><span class="mp md2">متوسط</span>
-          </div>
-          <div class="mc" data-model="meta-llama/llama-3.1-8b-instruct:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 Llama 3.1 8B</div><div class="md">خفيف وسريع ومجاني</div><span class="mp fr">مجاني ✓</span>
-          </div>
-        </div>
-
-        <!-- DeepSeek -->
-        <div class="prov-hdr">🔵 DeepSeek <span></span></div>
-        <div class="models-row">
-          <div class="mc" data-model="deepseek/deepseek-chat:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 DeepSeek Chat</div><div class="md">مجاني — جودة ممتازة</div><span class="mp fr">مجاني ✓</span>
-          </div>
-          <div class="mc" data-model="deepseek/deepseek-chat" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🔵 DeepSeek Chat</div><div class="md">أرخص بكثير من GPT</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="deepseek/deepseek-r1:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 DeepSeek R1</div><div class="md">تفكير عميق مجاناً</div><span class="mp fr">مجاني ✓</span>
-          </div>
-          <div class="mc" data-model="deepseek/deepseek-r1" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🧠 DeepSeek R1</div><div class="md">مثل O1 من OpenAI</div><span class="mp ch">رخيص</span>
-          </div>
-        </div>
-
-        <!-- Mistral -->
-        <div class="prov-hdr">🌊 Mistral <span></span></div>
-        <div class="models-row">
-          <div class="mc" data-model="mistralai/mistral-nemo:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 Mistral Nemo</div><div class="md">مجاني وسريع</div><span class="mp fr">مجاني ✓</span>
-          </div>
-          <div class="mc" data-model="mistralai/mistral-small-3.1-24b-instruct:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 Mistral Small 3.1</div><div class="md">مجاني ومفيد</div><span class="mp fr">مجاني ✓</span>
-          </div>
-          <div class="mc" data-model="mistralai/mistral-large-2411" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🌊 Mistral Large</div><div class="md">أقوى نموذج من Mistral</div><span class="mp md2">متوسط</span>
-          </div>
-        </div>
-
-        <!-- Other -->
-        <div class="prov-hdr">✨ نماذج أخرى <span></span></div>
-        <div class="models-row">
-          <div class="mc" data-model="qwen/qwen3-235b-a22b:free" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🆓 Qwen 3 235B</div><div class="md">مجاني — عربي ممتاز</div><span class="mp fr">مجاني ✓</span>
-          </div>
-          <div class="mc" data-model="qwen/qwen3-235b-a22b" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🀄 Qwen 3 235B</div><div class="md">ضخم من Alibaba</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="qwen/qwen-2.5-72b-instruct" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🀄 Qwen 2.5 72B</div><div class="md">داعم للعربية بامتياز</div><span class="mp ch">رخيص</span>
-          </div>
-          <div class="mc" data-model="x-ai/grok-3-mini" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🐦 Grok 3 Mini</div><div class="md">نموذج xAI</div><span class="mp md2">متوسط</span>
-          </div>
-          <div class="mc" data-model="x-ai/grok-3" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🐦 Grok 3</div><div class="md">أقوى نموذج من xAI</div><span class="mp hi">مرتفع</span>
-          </div>
-          <div class="mc" data-model="cohere/command-r-plus-08-2024" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🔗 Cohere R+</div><div class="md">متخصص في الردود الطويلة</div><span class="mp md2">متوسط</span>
-          </div>
-        </div>
-
-      </div><!-- end models-scroll -->
+      </div>
 
       <!-- Dynamic Key Input -->
       <div class="key-area">
-        <label id="keyLabel">مفتاح OpenAI API</label>
+        <label id="keyLabel">مفتاح OpenRouter API</label>
         <div class="key-row">
-          <input type="password" id="apiKeyInput" placeholder="sk-..." dir="ltr">
+          <input type="password" id="apiKeyInput" placeholder="sk-or-..." dir="ltr">
           <button class="key-get-btn" id="keyGetBtn" onclick="window.open(document.getElementById('keyLink').value,'_blank')">احصل عليه ↗</button>
-          <input type="hidden" id="keyLink" value="https://platform.openai.com/api-keys">
+          <input type="hidden" id="keyLink" value="https://openrouter.ai/keys">
         </div>
-        <div class="hint" id="keyHint">مفتاح سري من <a href="https://platform.openai.com/api-keys" id="keyHintLink" target="_blank">platform.openai.com</a></div>
+        <div class="hint" id="keyHint">سجّل مجاناً في <a href="https://openrouter.ai/keys" id="keyHintLink" target="_blank" style="color:var(--green)">openrouter.ai</a> للحصول على مفتاحك</div>
       </div>
 
     </div>
@@ -873,9 +735,9 @@ label{display:flex;align-items:center}
     <div class="pbdy">
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
         <div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.18);border-radius:12px;padding:12px;text-align:center">
-          <div style="font-size:22px;font-weight:900;color:#f59e0b" id="costTotal">$0.00</div>
-          <div style="font-size:11px;color:#475569;margin-top:3px">إجمالي التكلفة</div>
-          <div style="font-size:10px;color:#64748b;margin-top:2px" id="costTotalSAR"></div>
+          <div style="font-size:22px;font-weight:900;color:#f59e0b" id="costTotal">0.00 ر.س</div>
+          <div style="font-size:11px;color:#475569;margin-top:3px">تكلفة الخدمة على العميل</div>
+          <div style="font-size:10px;color:#34d399;margin-top:2px" id="costTotalSAR">شامل هامش الربح</div>
         </div>
         <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center">
           <div style="font-size:22px;font-weight:900;color:var(--green)" id="costCalls">0</div>
@@ -1392,11 +1254,12 @@ async function loadCosts(){
   try{
     const d=await fetch('/api/costs').then(r=>r.json());
     const usd=d.totalCostUSD||0;
-    const sar=(usd*3.75).toFixed(2);
-    document.getElementById('stCost').textContent='$'+usd.toFixed(4);
+    // تكلفة AI بالدولار → ريال (×3.75) → تكلفة الخدمة على العميل (×3 هامش ربح)
+    const sarBilled=(usd*3.75*3).toFixed(2);
+    document.getElementById('stCost').textContent=sarBilled+' ر.س';
     document.getElementById('stCostCalls').textContent=d.totalCalls?`(${d.totalCalls})` :'';
-    document.getElementById('costTotal').textContent='$'+usd.toFixed(4);
-    document.getElementById('costTotalSAR').textContent='≈ '+sar+' ريال';
+    document.getElementById('costTotal').textContent=sarBilled+' ر.س';
+    document.getElementById('costTotalSAR').textContent='شامل هامش الربح';
     document.getElementById('costCalls').textContent=d.totalCalls||0;
     const totalTok=(d.totalInputTokens||0)+(d.totalOutputTokens||0);
     document.getElementById('costTokens').textContent=totalTok>1000?Math.round(totalTok/1000)+'K':totalTok;
@@ -1406,7 +1269,8 @@ async function loadCosts(){
     for(const[m,v] of Object.entries(d.byModel||{})){
       const row=document.createElement('div');
       row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.03);border-radius:8px;padding:7px 12px;font-size:12px';
-      row.innerHTML=`<span style="color:#94a3b8;font-weight:700">${esc(m)}</span><span style="color:#64748b">${v.calls} طلب</span><span style="color:#f59e0b;font-weight:700">$${(v.costUSD||0).toFixed(4)}</span>`;
+      const mSar=((v.costUSD||0)*3.75*3).toFixed(2);
+      row.innerHTML=`<span style="color:#94a3b8;font-weight:700">${esc(m)}</span><span style="color:#64748b">${v.calls} طلب</span><span style="color:#f59e0b;font-weight:700">${mSar} ر.س</span>`;
       bm.appendChild(row);
     }
   }catch(_){}
