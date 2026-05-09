@@ -367,6 +367,7 @@ class UserBot {
     this.conversations    = new Map();
     this.testConversations = new Map();
     this.ownerPausedChats = new Map();
+    this.botReplyingTo    = new Set(); // ← tracks chats where bot is actively sending a reply
     this.appState = { status: 'stopped', qrDataUrl: null, phone: null, activeChats: 0, error: null, logs: [] };
     this.client     = null;
     this.botRunning = false;
@@ -483,13 +484,27 @@ class UserBot {
   async humanLikeReply(msg, text) {
     const delaySec = this.randomDelay();
     this.log(`⏳ سيرد بعد ${delaySec} ثانية (محاكاة إنسان)...`);
+    let chat = null;
     try {
-      const chat = await msg.getChat();
+      chat = await msg.getChat();
       if (delaySec > 0) await chat.sendStateTyping().catch(() => {});
       if (delaySec > 0) await sleep(delaySec * 1000);
       await chat.clearState().catch(() => {});
     } catch (_) {}
-    await msg.reply(text);
+
+    // Mark chat as "bot is replying" so message_create won't pause it
+    this.botReplyingTo.add(msg.from);
+    try {
+      // Use sendMessage (no quote) — more reliable than msg.reply() after a delay
+      if (chat) {
+        await chat.sendMessage(text);
+      } else {
+        await msg.reply(text); // fallback
+      }
+    } finally {
+      // Clear the flag after 5s to handle any timing edge cases
+      setTimeout(() => this.botReplyingTo.delete(msg.from), 5000);
+    }
   }
 
   // ── Keywords ──
@@ -702,6 +717,9 @@ ${productsBlock}
     this.appState.status = 'waiting_qr';
     this.appState.error = null;
     this.appState.qrDataUrl = null;
+    // Clear any stale paused chats from previous session
+    this.ownerPausedChats.clear();
+    this.botReplyingTo.clear();
     this.log('🚀 جاري تشغيل البوت...');
     this.client = this.createClient();
     this.attachEvents(this.client);
@@ -773,7 +791,10 @@ ${productsBlock}
 
     c.on('message_create', (msg) => {
       if (msg.fromMe && !msg.to?.includes('@g.us') && msg.to !== 'status@broadcast') {
-        this.pauseChat(msg.to, 'owner_replied');
+        // Only pause if the message was sent MANUALLY by the owner (not by the bot itself)
+        if (!this.botReplyingTo.has(msg.to)) {
+          this.pauseChat(msg.to, 'owner_replied');
+        }
       }
     });
   }
