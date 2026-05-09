@@ -734,36 +734,34 @@ class UserBot {
       throw new Error('أضف مفتاح Anthropic (من console.anthropic.com) أو مفتاح OpenRouter');
     }
 
-    // ─── OpenAI (GPT) — مباشر أولاً ثم OpenRouter كبديل ───
-    if (!model.includes('/')) {
+    // ─── OpenAI (GPT) — يدعم 'gpt-4o' و 'openai/gpt-4o' كلاهما ───
+    const isOpenAIModel = !model.includes('/') || model.startsWith('openai/');
+    if (isOpenAIModel) {
+      const actualModel = model.replace(/^openai\//, ''); // اجرد الـ prefix للاستدعاء المباشر
       const openaiKey = c.openaiApiKey?.trim();
       const orKey = c.openrouterApiKey?.trim();
-      // المفتاح المباشر من OpenAI
       if (openaiKey && openaiKey.length > 20) {
-        return { openai: new OpenAI({ apiKey: openaiKey }), model };
+        return { openai: new OpenAI({ apiKey: openaiKey }), model: actualModel };
       }
-      // بديل: عبر OpenRouter (يدعم GPT-4o بدون حساب OpenAI مباشر)
       if (orKey && orKey.length > 20) {
-        return {
-          openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }),
-          model: 'openai/' + model, // OpenRouter يحتاج prefix openai/
-        };
+        const orModel = model.startsWith('openai/') ? model : 'openai/' + model;
+        return { openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }), model: orModel };
       }
       throw new Error('أضف مفتاح OpenAI (من platform.openai.com) أو مفتاح OpenRouter كبديل');
     }
 
-    // ─── OpenRouter احتياطي لأي موديل آخر ───
-    const orKey = c.openrouterApiKey?.trim() || c.openaiApiKey?.trim();
+    // ─── OpenRouter احتياطي لأي موديل آخر (Llama, Mistral, Qwen...) ───
+    // ملاحظة: لا نستخدم openaiApiKey هنا — مفاتيح OpenAI لا تعمل مع OpenRouter
+    const orKey = c.openrouterApiKey?.trim();
     if (orKey && orKey.length > 20) {
       return { openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }), model };
     }
 
     // ─── آخر ملاذ: استخدم أي مفتاح متوفر (Google / Anthropic) ───
-    // يضمن أن البوت لا يصمت أبداً حتى لو اختار المستخدم موديلاً ما عنده مفتاحه
     const googleKey = c.googleApiKey?.trim();
     if (googleKey && googleKey.length > 10) {
-      this.log(`⚠️ مو في مفتاح لـ ${model} — يستخدم Gemini 2.5 Pro كبديل تلقائي`);
-      return { openai: new OpenAI({ apiKey: googleKey, baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/' }), model: 'gemini-2.5-pro' };
+      this.log(`⚠️ مو في مفتاح لـ ${model} — يستخدم Gemini Flash كبديل تلقائي`);
+      return { openai: new OpenAI({ apiKey: googleKey, baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/' }), model: 'gemini-2.0-flash' };
     }
     const anthropicKey = c.anthropicApiKey?.trim();
     if (anthropicKey && anthropicKey.length > 10) {
@@ -1436,8 +1434,12 @@ app.post('/api/health-check', async (req, res) => {
     const direct = bot.config.anthropicApiKey?.trim();
     if (direct?.length > 10) { keyName = 'Anthropic'; apiKey = direct; }
     else { keyName = 'OpenRouter (Claude)'; apiKey = bot.config.openrouterApiKey; }
+  } else if (!model.includes('/') || model.startsWith('openai/')) {
+    const direct = bot.config.openaiApiKey?.trim();
+    if (direct?.length > 20) { keyName = 'OpenAI'; apiKey = direct; }
+    else { keyName = 'OpenRouter (GPT)'; apiKey = bot.config.openrouterApiKey; }
   } else {
-    keyName = 'OpenAI'; apiKey = bot.config.openaiApiKey;
+    keyName = 'OpenRouter'; apiKey = bot.config.openrouterApiKey;
   }
   add('مفتاح ' + keyName, !!(apiKey && apiKey.length > 10), apiKey ? 'موجود (' + apiKey.substring(0, 8) + '...)' : 'غير موجود', 'أضف المفتاح في قسم "الذكاء الاصطناعي"');
 
