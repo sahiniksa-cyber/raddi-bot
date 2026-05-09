@@ -254,7 +254,7 @@ label{display:flex;align-items:center}
 .train-apply:hover{opacity:.88}
 
 @media(max-width:640px){
-  .g2,.stats-row{grid-template-columns:1fr 1fr}
+  .g2{grid-template-columns:1fr 1fr}.stats-row{grid-template-columns:repeat(3,1fr)!important}
   .models-row{grid-template-columns:1fr 1fr}
   .nav-tabs .tab{padding:6px 10px;font-size:12px}
   .logo{font-size:20px}
@@ -379,10 +379,10 @@ label{display:flex;align-items:center}
   </div>
 
   <div class="stats-row" style="grid-template-columns:repeat(5,1fr)">
-    <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات</div></div>
+    <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
+    <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:#a78bfa">0</div><div class="l">ردود AI 🤖</div></div>
     <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
     <div class="stat"><div class="v" id="stMdl">—</div><div class="l">النموذج</div></div>
-    <div class="stat"><div class="v" id="stStatus">⏹</div><div class="l">الحالة</div></div>
     <div class="stat" style="cursor:pointer" onclick="document.querySelector('.panel:has(#costTotal)').scrollIntoView({behavior:'smooth'})" title="اضغط لعرض تفاصيل التكلفة">
       <div class="v" id="stCost" style="font-size:13px;color:#f59e0b">0 ر.س</div>
       <div class="l">تكلفة AI <span style="font-size:9px;color:#475569" id="stCostCalls"></span></div>
@@ -457,7 +457,7 @@ label{display:flex;align-items:center}
             <input type="password" id="openaiKeyInput" placeholder="sk-..." dir="ltr">
             <button class="key-get-btn" onclick="window.open('https://platform.openai.com/api-keys','_blank')">احصل عليه ↗</button>
           </div>
-          <div class="hint">من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a></div>
+          <div class="hint">من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a> — أو افتح OpenRouter أسفله كبديل</div>
         </div>
         <!-- OpenRouter fallback (always visible, smaller) -->
         <details style="margin-top:10px">
@@ -724,17 +724,12 @@ label{display:flex;align-items:center}
     <div class="phdr">⏱️ تأخير الرد — مهم لتجنب حظر الواتس</div>
     <div class="pbdy">
       <p class="hint" style="margin:0 0 12px;background:rgba(245,158,11,.06);border-right:3px solid #f59e0b;padding:10px 12px;border-radius:8px;color:#fcd34d">
-        ⚠️ ربط الواتس بالباركود غير رسمي. الرد الفوري يكشف البوت ويسبب حظر الحساب. الأنسب: 30 ثانية - دقيقتين.
+        ⚠️ الرد الفوري يكشف البوت ويسبب حظر الحساب — اختر وقتاً مناسباً.
       </p>
-      <div class="delay-grid">
-        <label class="delay-opt"><input type="radio" name="delay" value="instant"><span><b>فوري</b><small>قد يسبب حظر ⚠️</small></span></label>
-        <label class="delay-opt"><input type="radio" name="delay" value="15s"><span><b>~15 ثانية</b><small>10-22 ث</small></span></label>
+      <div class="delay-grid" style="grid-template-columns:repeat(3,1fr)">
         <label class="delay-opt"><input type="radio" name="delay" value="30s"><span><b>~30 ثانية</b><small>22-40 ث</small></span></label>
         <label class="delay-opt"><input type="radio" name="delay" value="1min"><span><b>دقيقة</b><small>50-75 ث · موصى به ⭐</small></span></label>
         <label class="delay-opt"><input type="radio" name="delay" value="1.5min"><span><b>دقيقة ونصف</b><small>75-105 ث</small></span></label>
-        <label class="delay-opt"><input type="radio" name="delay" value="2min"><span><b>دقيقتين</b><small>100-145 ث · الأكثر أماناً</small></span></label>
-        <label class="delay-opt"><input type="radio" name="delay" value="3min"><span><b>3 دقائق</b><small>160-200 ث</small></span></label>
-        <label class="delay-opt"><input type="radio" name="delay" value="random"><span><b>عشوائي</b><small>30-120 ث متنوّع</small></span></label>
       </div>
       <div class="hint" style="margin-top:12px">سيظهر "يكتب الآن..." في الواتس قبل الرد ليبدو طبيعياً</div>
     </div>
@@ -927,6 +922,7 @@ async function poll(){
       if(d.logs){const el=document.getElementById('errLogs');if(el)el.innerHTML=d.logs.join('<br>')}
     }
     document.getElementById('stChats').textContent=d.activeChats||0;
+    document.getElementById('stReplies').textContent=d.totalChatsHandled||0;
     if(d.status==='qr_ready')loadQR();
   }catch(_){}
 }

@@ -534,6 +534,7 @@ class UserBot {
     this.botRunning = false;
     this.lastAIDebug = null;
     this.lastAICallAt = 0; // throttle: prevent > 1 call per 4s to avoid 429
+    this.totalChatsHandled = 0; // عدد الردود الكلي منذ بدء الجلسة
     this.costsData = { totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUSD: 0, byModel: {}, resetAt: new Date().toISOString() };
 
     this.config = this._loadConfig();
@@ -550,7 +551,7 @@ class UserBot {
     return {
       storeName: '', storeDescription: '', workingHours: '', welcomeMessage: '',
       botInstructions: '', welcomeMode: 'inline', model: 'google/gemini-2.0-flash', openaiApiKey: '',
-      openrouterApiKey: '', replyDelayPreset: '30s', memoryMessages: 50,
+      openrouterApiKey: '', replyDelayPreset: '1min', memoryMessages: 50,
       maxResponseLength: 300, products: [], autoReplyKeywords: {},
       replyStyle: { tone: 'ودي ومحترم', useDialect: true, dialect: 'السعودية الخفيفة', emojiLevel: 'medium', useShortReplies: false },
     };
@@ -632,8 +633,10 @@ class UserBot {
 
   // ── Reply Delay ──
   randomDelay() {
-    const preset = this.config.replyDelayPreset || '30s';
-    const presets = { instant:[0,0], '15s':[10,22], '30s':[22,40], '1min':[50,75], '1.5min':[75,105], '2min':[100,145], '3min':[160,200], 'random':[30,120] };
+    const preset = this.config.replyDelayPreset || '1min';
+    const presets = { '30s':[22,40], '1min':[50,75], '1.5min':[75,105],
+      // Legacy presets (kept for backward compat)
+      instant:[22,40], '15s':[22,40], '2min':[75,105], '3min':[75,105], 'random':[50,75] };
     if (this.config.replyDelayMin != null && this.config.replyDelayMax != null && !this.config.replyDelayPreset) {
       const min = Math.max(0, parseInt(this.config.replyDelayMin));
       const max = Math.max(min, parseInt(this.config.replyDelayMax));
@@ -731,11 +734,22 @@ class UserBot {
       throw new Error('أضف مفتاح Anthropic (من console.anthropic.com) أو مفتاح OpenRouter');
     }
 
-    // ─── OpenAI (GPT) مباشر ───
+    // ─── OpenAI (GPT) — مباشر أولاً ثم OpenRouter كبديل ───
     if (!model.includes('/')) {
       const openaiKey = c.openaiApiKey?.trim();
-      if (!openaiKey || openaiKey.length < 20) throw new Error('أضف مفتاح OpenAI (من platform.openai.com)');
-      return { openai: new OpenAI({ apiKey: openaiKey }), model };
+      const orKey = c.openrouterApiKey?.trim();
+      // المفتاح المباشر من OpenAI
+      if (openaiKey && openaiKey.length > 20) {
+        return { openai: new OpenAI({ apiKey: openaiKey }), model };
+      }
+      // بديل: عبر OpenRouter (يدعم GPT-4o بدون حساب OpenAI مباشر)
+      if (orKey && orKey.length > 20) {
+        return {
+          openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }),
+          model: 'openai/' + model, // OpenRouter يحتاج prefix openai/
+        };
+      }
+      throw new Error('أضف مفتاح OpenAI (من platform.openai.com) أو مفتاح OpenRouter كبديل');
     }
 
     // ─── OpenRouter احتياطي لأي موديل آخر ───
@@ -924,6 +938,7 @@ ${productsBlock}
       const reply = await this.getAIReply(history, { isFirstMsg });
       history.push({ role: 'assistant', content: reply });
       this.appState.activeChats = this.conversations.size;
+      this.totalChatsHandled++;
       this.saveConversations();
       this.log(`💬 الذاكرة: ${history.length}/${memSize} رسالة`);
       await this.humanLikeReply(msg, reply);
@@ -1273,7 +1288,7 @@ app.use('/api', apiLimiter, requireAuth);
 // ─── BOT STATUS ROUTES ────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
   const bot = getUserBot(req.session.userId);
-  res.json({ ...bot.appState, logs: bot.appState.logs.slice(0, 8) });
+  res.json({ ...bot.appState, totalChatsHandled: bot.totalChatsHandled, logs: bot.appState.logs.slice(0, 8) });
 });
 
 app.get('/api/debug-last', (req, res) => {
@@ -1451,7 +1466,8 @@ app.post('/api/health-check', async (req, res) => {
   add('تعليمات البوت', !!(bot.config.botInstructions?.trim()), bot.config.botInstructions ? bot.config.botInstructions.length + ' حرف' : 'فارغة', 'تعليمات أكثر = ردود أفضل');
   const prodCount = bot.config.products?.length || 0;
   add('المنتجات', prodCount > 0, prodCount + ' منتج', prodCount === 0 ? 'أضف منتجات أو افحص متجرك' : '');
-  add('تأخير الرد', !!bot.config.replyDelayPreset && bot.config.replyDelayPreset !== 'instant', bot.config.replyDelayPreset || 'فوري (غير موصى به)', bot.config.replyDelayPreset === 'instant' ? 'الرد الفوري قد يسبب حظر الواتس!' : '');
+  const delayOk = ['30s','1min','1.5min'].includes(bot.config.replyDelayPreset);
+  add('تأخير الرد', delayOk, bot.config.replyDelayPreset || 'غير محدد', !delayOk ? 'اختر: 30 ثانية، دقيقة، أو دقيقة ونصف' : '');
 
   res.json({ success: true, checks });
 });
