@@ -29,3 +29,5 @@ Thumbs.db
 
 # Bat files (Windows only)
 *.bat
+
+.vercel
