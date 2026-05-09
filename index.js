@@ -14,6 +14,7 @@ const bcrypt = require('bcryptjs');
 const session = require('express-session');
 const { v4: uuidv4 } = require('uuid');
 const rateLimit = require('express-rate-limit');
+let nodemailer; try { nodemailer = require('nodemailer'); } catch (_) {}
 
 // ─── GLOBAL HELPERS ──────────────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -55,8 +56,13 @@ function findChrome() {
   return null;
 }
 
+// ─── DATA PERSISTENCE ─────────────────────────────────────────────────
+// على Railway: أضف متغير DATA_DIR=/data وربط Volume على /data
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+if (DATA_DIR !== __dirname) { try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {} }
+
 // ─── USERS ───────────────────────────────────────────────────────────
-const USERS_PATH = path.join(__dirname, 'users.json');
+const USERS_PATH = path.join(DATA_DIR, 'users.json');
 
 function loadUsers() {
   try { return JSON.parse(fs.readFileSync(USERS_PATH, 'utf8')); } catch (_) { return { users: [] }; }
@@ -356,7 +362,7 @@ function extractFromHTML(html, url) {
 class UserBot {
   constructor(userId) {
     this.userId = userId;
-    this.dataDir = path.join(__dirname, 'data', userId);
+    this.dataDir = path.join(DATA_DIR, 'data', userId);
     fs.mkdirSync(this.dataDir, { recursive: true });
 
     this.configPath = path.join(this.dataDir, 'config.json');
@@ -800,6 +806,55 @@ ${productsBlock}
   }
 }
 
+// ─── EMAIL VERIFICATION ───────────────────────────────────────────────
+// Map: email → { code, user, expiresAt }  (in-memory, survives runtime but not restart)
+const pendingVerifications = new Map();
+
+function createMailTransport() {
+  if (!nodemailer) return null;
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) return null;
+  return nodemailer.createTransport({
+    host,
+    port: parseInt(process.env.SMTP_PORT || '587'),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: { user, pass },
+  });
+}
+
+async function sendVerificationEmail(email, name, code) {
+  const transport = createMailTransport();
+  if (!transport) {
+    console.log(`📧 [DEV] رمز التحقق لـ ${email}: ${code} (SMTP غير مضبوط)`);
+    return { ok: true, dev: true };
+  }
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  try {
+    await transport.sendMail({
+      from: `"ردّي" <${from}>`,
+      to: email,
+      subject: `${code} — رمز التحقق من ردّي`,
+      html: `
+        <div dir="rtl" style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:28px;background:#0a0e1a;color:#e2e8f0;border-radius:16px">
+          <h2 style="color:#25d366;margin-bottom:6px">ردّي 🤖</h2>
+          <p style="color:#94a3b8;margin-bottom:20px">مرحباً ${name}،</p>
+          <p style="margin-bottom:16px">رمز التحقق من حسابك:</p>
+          <div style="background:#1e293b;border:2px solid #25d366;border-radius:12px;padding:20px;text-align:center;margin-bottom:20px">
+            <span style="font-size:38px;font-weight:900;letter-spacing:10px;color:#25d366;font-family:monospace">${code}</span>
+          </div>
+          <p style="color:#64748b;font-size:13px">صالح لمدة 10 دقائق. إذا لم تطلبه، تجاهل هذه الرسالة.</p>
+        </div>
+      `,
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error('❌ فشل إرسال البريد:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 // ─── BOT REGISTRY ────────────────────────────────────────────────────
 const userBots = new Map();
 
@@ -817,7 +872,7 @@ function anyBotRunning() {
 const app = express();
 
 const SESSION_SECRET = (() => {
-  const f = path.join(__dirname, '.session-secret');
+  const f = path.join(DATA_DIR, '.session-secret');
   try { return fs.readFileSync(f, 'utf8').trim(); } catch (_) {
     const s = uuidv4() + uuidv4();
     fs.writeFileSync(f, s, 'utf8');
@@ -868,20 +923,83 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const { name, email, password } = req.body;
     if (!name || !email || !password) return res.json({ success: false, message: 'جميع الحقول مطلوبة' });
     if (password.length < 8) return res.json({ success: false, message: 'كلمة المرور يجب أن تكون 8 أحرف على الأقل' });
+    const emailLower = email.toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) return res.json({ success: false, message: 'صيغة الإيميل غير صحيحة' });
     const data = loadUsers();
-    if (data.users.find(u => u.email.toLowerCase() === email.toLowerCase()))
+    if (data.users.find(u => u.email.toLowerCase() === emailLower))
       return res.json({ success: false, message: 'هذا الإيميل مسجّل مسبقاً' });
+
     const hash = await bcrypt.hash(password, 12);
-    const user = { id: uuidv4(), name, email: email.toLowerCase(), password: hash, createdAt: new Date().toISOString(), role: data.users.length === 0 ? 'admin' : 'user' };
-    data.users.push(user);
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const pendingUser = {
+      id: uuidv4(), name: name.trim(), email: emailLower,
+      password: hash, createdAt: new Date().toISOString(),
+      role: data.users.length === 0 ? 'admin' : 'user',
+    };
+    pendingVerifications.set(emailLower, { code, user: pendingUser, expiresAt: Date.now() + 10 * 60 * 1000 });
+
+    const mailResult = await sendVerificationEmail(emailLower, name.trim(), code);
+    if (mailResult.dev) {
+      // SMTP not configured — auto-verify immediately (dev/self-hosted mode)
+      const data2 = loadUsers();
+      data2.users.push(pendingUser);
+      saveUsers(data2);
+      pendingVerifications.delete(emailLower);
+      const newBot = getUserBot(pendingUser.id);
+      newBot.saveConfig();
+      req.session.userId = pendingUser.id;
+      req.session.userName = pendingUser.name;
+      console.log(`👤 حساب جديد (بدون SMTP): ${name} (${emailLower})`);
+      return res.json({ success: true, verified: true, name: pendingUser.name, role: pendingUser.role });
+    }
+    if (!mailResult.ok) return res.json({ success: false, message: 'تعذّر إرسال رمز التحقق: ' + mailResult.error });
+    console.log(`📧 رمز إرسال لـ ${emailLower}`);
+    res.json({ success: true, verified: false, email: emailLower, message: 'تم إرسال رمز التحقق إلى إيميلك' });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+app.post('/api/auth/verify-email', authLimiter, async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    if (!email || !code) return res.json({ success: false, message: 'أدخل الإيميل والرمز' });
+    const emailLower = email.toLowerCase().trim();
+    const pending = pendingVerifications.get(emailLower);
+    if (!pending) return res.json({ success: false, message: 'لا يوجد طلب تسجيل لهذا الإيميل — أعد التسجيل' });
+    if (Date.now() > pending.expiresAt) {
+      pendingVerifications.delete(emailLower);
+      return res.json({ success: false, message: 'انتهت صلاحية الرمز — أعد التسجيل' });
+    }
+    if (code.trim() !== pending.code) return res.json({ success: false, message: 'الرمز غير صحيح — تأكد من الرمز المرسل' });
+
+    const data = loadUsers();
+    if (data.users.find(u => u.email === emailLower)) {
+      pendingVerifications.delete(emailLower);
+      return res.json({ success: false, message: 'هذا الإيميل مسجّل مسبقاً' });
+    }
+    data.users.push(pending.user);
     saveUsers(data);
-    // Create isolated data directory and save empty config immediately
-    const newBot = getUserBot(user.id);
+    pendingVerifications.delete(emailLower);
+    const newBot = getUserBot(pending.user.id);
     newBot.saveConfig();
-    req.session.userId = user.id;
-    req.session.userName = user.name;
-    console.log(`👤 حساب جديد: ${name} (${email})`);
-    res.json({ success: true, name: user.name, role: user.role });
+    req.session.userId = pending.user.id;
+    req.session.userName = pending.user.name;
+    console.log(`✅ تحقق ناجح وحساب جديد: ${pending.user.name} (${emailLower})`);
+    res.json({ success: true, name: pending.user.name, role: pending.user.role });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+app.post('/api/auth/resend-code', authLimiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.json({ success: false, message: 'أدخل الإيميل' });
+    const emailLower = email.toLowerCase().trim();
+    const pending = pendingVerifications.get(emailLower);
+    if (!pending) return res.json({ success: false, message: 'لا يوجد طلب تسجيل — أعد التسجيل' });
+    const newCode = String(Math.floor(100000 + Math.random() * 900000));
+    pending.code = newCode;
+    pending.expiresAt = Date.now() + 10 * 60 * 1000;
+    await sendVerificationEmail(emailLower, pending.user.name, newCode);
+    res.json({ success: true, message: 'تم إرسال رمز جديد' });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
@@ -1032,11 +1150,31 @@ app.post('/api/health-check', async (req, res) => {
     add('النموذج: ' + model, false, 'لا يمكن الفحص (لا يوجد مفتاح)', '');
   }
 
-  add('الواتس أب', bot.appState.status === 'connected',
-    bot.appState.status === 'connected' ? 'متصل (+' + bot.appState.phone + ')' :
-    bot.appState.status === 'qr_ready' ? 'في انتظار مسح الباركود' :
-    bot.appState.status === 'stopped' ? 'متوقف — اضغط تشغيل' : bot.appState.status,
-    bot.appState.status === 'stopped' ? 'اذهب لصفحة الربط واضغط تشغيل' : '');
+  // فحص الواتس أب الفعلي: نتحقق من حالة المكتبة وليس فقط الـ flag الداخلي
+  let waOk = false, waMsg = '', waHint = '';
+  if (bot.appState.status === 'stopped') {
+    waMsg = 'متوقف — اضغط تشغيل'; waHint = 'اذهب لصفحة الربط واضغط تشغيل';
+  } else if (bot.appState.status === 'qr_ready') {
+    waMsg = 'في انتظار مسح الباركود';
+  } else if (bot.appState.status === 'connected' && bot.client) {
+    try {
+      const state = await bot.client.getState().catch(() => null);
+      const info = bot.client.info;
+      if (state === 'CONNECTED' && info?.wid?.user) {
+        waOk = true; waMsg = `✅ متصل فعلاً (+${info.wid.user}) — الحالة: ${state}`;
+      } else if (state) {
+        waMsg = `⚠️ الحالة الداخلية: ${state} (مو CONNECTED) — رقم: ${info?.wid?.user || '—'}`;
+        waHint = 'قد تحتاج لإعادة تشغيل البوت';
+      } else {
+        waMsg = 'متصل (لم يتحقق getState)'; waOk = bot.appState.status === 'connected';
+      }
+    } catch (e) {
+      waMsg = `خطأ في التحقق: ${e.message.substring(0, 60)}`; waHint = 'جرب إعادة تشغيل البوت';
+    }
+  } else {
+    waMsg = bot.appState.status || 'غير معروف';
+  }
+  add('الواتس أب', waOk, waMsg, waHint);
 
   add('تعليمات البوت', !!(bot.config.botInstructions?.trim()), bot.config.botInstructions ? bot.config.botInstructions.length + ' حرف' : 'فارغة', 'تعليمات أكثر = ردود أفضل');
   const prodCount = bot.config.products?.length || 0;

@@ -115,6 +115,39 @@ input::placeholder{color:#334155}
       <span id="regBtnTxt">✅ إنشاء الحساب</span>
     </button>
   </div>
+
+  <!-- EMAIL VERIFICATION STEP -->
+  <div id="formVerify" style="display:none">
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:40px;margin-bottom:8px">📧</div>
+      <div style="font-size:15px;font-weight:700;color:#e2e8f0">تحقق من إيميلك</div>
+      <div style="font-size:13px;color:#64748b;margin-top:6px">أرسلنا رمز مكون من 6 أرقام إلى</div>
+      <div style="font-size:14px;font-weight:700;color:var(--green);margin-top:4px;direction:ltr" id="verifyEmailDisplay">—</div>
+    </div>
+    <div class="form-group">
+      <label>رمز التحقق</label>
+      <input type="text" id="verifyCode" placeholder="_ _ _ _ _ _" dir="ltr" maxlength="6"
+             style="text-align:center;font-size:28px;font-weight:900;letter-spacing:8px;font-family:monospace"
+             autocomplete="one-time-code"
+             oninput="this.value=this.value.replace(/\D/g,'')"
+             onkeydown="if(event.key==='Enter')doVerify()">
+    </div>
+    <button class="submit-btn" id="verifyBtn" onclick="doVerify()">
+      <span id="verifyBtnTxt">✅ تأكيد الرمز</span>
+    </button>
+    <div style="text-align:center;margin-top:14px">
+      <button onclick="doResendCode()" id="resendBtn"
+        style="background:transparent;border:none;color:#475569;font-family:var(--font);font-size:13px;cursor:pointer;text-decoration:underline">
+        لم يصلك الرمز؟ أعد الإرسال
+      </button>
+    </div>
+    <div style="text-align:center;margin-top:8px">
+      <button onclick="showTab('register')"
+        style="background:transparent;border:none;color:#334155;font-family:var(--font);font-size:12px;cursor:pointer">
+        ← العودة لإنشاء الحساب
+      </button>
+    </div>
+  </div>
 </div>
 
 <div class="features">
@@ -125,12 +158,19 @@ input::placeholder{color:#334155}
 </div>
 
 <script>
+let pendingEmail='';
+
 function showTab(t){
   document.getElementById('formLogin').style.display=t==='login'?'block':'none';
   document.getElementById('formRegister').style.display=t==='register'?'block':'none';
+  document.getElementById('formVerify').style.display=t==='verify'?'block':'none';
   document.getElementById('tabLogin').classList.toggle('active',t==='login');
-  document.getElementById('tabRegister').classList.toggle('active',t==='register');
+  document.getElementById('tabRegister').classList.toggle('active',t==='register'||t==='verify');
   hideMsg();
+  if(t==='verify'){
+    document.getElementById('verifyEmailDisplay').textContent=pendingEmail;
+    setTimeout(()=>document.getElementById('verifyCode').focus(),100);
+  }
 }
 
 function showErr(m){const b=document.getElementById('errBox');b.textContent=m;b.className='error-box show';document.getElementById('successBox').className='success-box';}
@@ -176,10 +216,47 @@ async function doRegister(){
   try{
     const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password:pass})});
     const d=await r.json();
-    if(d.success){showOk('✅ تم إنشاء الحساب! جاري الدخول...');setTimeout(()=>location.href='/',800);}
-    else showErr(d.message);
+    if(d.success){
+      if(d.verified){
+        // SMTP not configured — account created directly
+        showOk('✅ تم إنشاء الحساب! جاري الدخول...');
+        setTimeout(()=>location.href='/',800);
+      } else {
+        // Need email verification
+        pendingEmail=email;
+        showOk('📧 تم إرسال رمز التحقق إلى إيميلك');
+        setTimeout(()=>showTab('verify'),600);
+      }
+    } else showErr(d.message);
   }catch(_){showErr('تعذر الاتصال بالسيرفر');}
   finally{setLoading('registerBtn','regBtnTxt',false,'✅ إنشاء الحساب');}
+}
+
+async function doVerify(){
+  const code=document.getElementById('verifyCode').value.trim();
+  if(!code||code.length!==6){showErr('أدخل الرمز المكون من 6 أرقام');return;}
+  setLoading('verifyBtn','verifyBtnTxt',true,'');
+  try{
+    const r=await fetch('/api/auth/verify-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:pendingEmail,code})});
+    const d=await r.json();
+    if(d.success){showOk('✅ تم التحقق! جاري الدخول...');setTimeout(()=>location.href='/',800);}
+    else showErr(d.message);
+  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
+  finally{setLoading('verifyBtn','verifyBtnTxt',false,'✅ تأكيد الرمز');}
+}
+
+async function doResendCode(){
+  const btn=document.getElementById('resendBtn');
+  btn.disabled=true;btn.textContent='جاري الإرسال...';
+  try{
+    const r=await fetch('/api/auth/resend-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:pendingEmail})});
+    const d=await r.json();
+    if(d.success) showOk('📧 تم إرسال رمز جديد');
+    else showErr(d.message);
+  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
+  finally{
+    setTimeout(()=>{btn.disabled=false;btn.textContent='لم يصلك الرمز؟ أعد الإرسال';},30000);
+  }
 }
 </script>
 </body>

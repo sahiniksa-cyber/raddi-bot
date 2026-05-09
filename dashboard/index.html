@@ -383,9 +383,9 @@ label{display:flex;align-items:center}
     <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
     <div class="stat"><div class="v" id="stMdl">—</div><div class="l">النموذج</div></div>
     <div class="stat"><div class="v" id="stStatus">⏹</div><div class="l">الحالة</div></div>
-    <div class="stat" style="cursor:pointer" onclick="goTab('train')" title="اضغط لعرض التفاصيل">
+    <div class="stat" style="cursor:pointer" onclick="document.querySelector('.panel:has(#costTotal)').scrollIntoView({behavior:'smooth'})" title="اضغط لعرض تفاصيل التكلفة">
       <div class="v" id="stCost" style="font-size:13px;color:#f59e0b">0 ر.س</div>
-      <div class="l">تكلفة الخدمة <span style="font-size:9px;color:#475569" id="stCostCalls"></span></div>
+      <div class="l">تكلفة AI <span style="font-size:9px;color:#475569" id="stCostCalls"></span></div>
     </div>
   </div>
 
@@ -417,14 +417,18 @@ label{display:flex;align-items:center}
     <div class="phdr">🧠 الذكاء الاصطناعي</div>
     <div class="pbdy">
 
-      <div class="models-row" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+      <div class="models-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">
           <div class="mc sel" data-model="google/gemini-2.0-flash" data-prov="openrouter" onclick="selModel(this)">
             <div class="mcheck">✓</div><div class="mn">⚡ Flash 2.0</div><div class="md">سريع ومتوازن</div><span class="mp ch">رخيص</span>
           </div>
           <div class="mc" data-model="anthropic/claude-sonnet-4-5" data-prov="openrouter" onclick="selModel(this)">
             <div class="mcheck">✓</div><div class="mn">🎵 Sonnet 4.5</div><div class="md">توازن مثالي</div><span class="mp md2">موصى به</span>
           </div>
+          <div class="mc" data-model="gpt-4o-mini" data-prov="openai" onclick="selModel(this)">
+            <div class="mcheck">✓</div><div class="mn">🤖 GPT-4o mini</div><div class="md">ChatGPT سريع</div><span class="mp ch">رخيص</span>
+          </div>
       </div>
+      <input type="hidden" id="mdlSel" value="google/gemini-2.0-flash">
 
       <!-- Dynamic Key Input -->
       <div class="key-area">
@@ -736,16 +740,17 @@ label{display:flex;align-items:center}
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
         <div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.18);border-radius:12px;padding:12px;text-align:center">
           <div style="font-size:22px;font-weight:900;color:#f59e0b" id="costTotal">0.00 ر.س</div>
-          <div style="font-size:11px;color:#475569;margin-top:3px">تكلفة الخدمة على العميل</div>
-          <div style="font-size:10px;color:#34d399;margin-top:2px" id="costTotalSAR">شامل هامش الربح</div>
+          <div style="font-size:11px;color:#475569;margin-top:3px">إجمالي التكلفة</div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px" id="costTotalSAR">بالريال السعودي</div>
         </div>
         <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center">
           <div style="font-size:22px;font-weight:900;color:var(--green)" id="costCalls">0</div>
-          <div style="font-size:11px;color:#475569;margin-top:3px">طلب AI</div>
+          <div style="font-size:11px;color:#475569;margin-top:3px">عدد الرسائل</div>
         </div>
         <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center">
-          <div style="font-size:22px;font-weight:900;color:#818cf8" id="costTokens">0</div>
-          <div style="font-size:11px;color:#475569;margin-top:3px">توكن إجمالي</div>
+          <div style="font-size:18px;font-weight:900;color:#818cf8" id="costTokens">—</div>
+          <div style="font-size:11px;color:#475569;margin-top:3px">تكلفة الرسالة</div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px">متوسط لكل رسالة</div>
         </div>
       </div>
       <div id="costByModel" style="display:flex;flex-direction:column;gap:5px"></div>
@@ -1244,9 +1249,6 @@ function doImport(){
   }
 }
 
-// ── HIDDEN INPUT ──
-document.write('<input type="hidden" id="mdlSel" value="gpt-4o-mini">');
-
 function toast(m,e=false){const t=document.getElementById('toast');t.textContent=m;t.className='toast show'+(e?' err':'');setTimeout(()=>t.className='toast',3500);}
 
 // ── COSTS ──
@@ -1254,23 +1256,25 @@ async function loadCosts(){
   try{
     const d=await fetch('/api/costs').then(r=>r.json());
     const usd=d.totalCostUSD||0;
-    // تكلفة AI بالدولار → ريال (×3.75) → تكلفة الخدمة على العميل (×3 هامش ربح)
-    const sarBilled=(usd*3.75*3).toFixed(2);
-    document.getElementById('stCost').textContent=sarBilled+' ر.س';
-    document.getElementById('stCostCalls').textContent=d.totalCalls?`(${d.totalCalls})` :'';
-    document.getElementById('costTotal').textContent=sarBilled+' ر.س';
-    document.getElementById('costTotalSAR').textContent='شامل هامش الربح';
-    document.getElementById('costCalls').textContent=d.totalCalls||0;
-    const totalTok=(d.totalInputTokens||0)+(d.totalOutputTokens||0);
-    document.getElementById('costTokens').textContent=totalTok>1000?Math.round(totalTok/1000)+'K':totalTok;
-    if(d.resetAt) document.getElementById('costResetAt').textContent='منذ: '+new Date(d.resetAt).toLocaleString('ar');
+    const calls=d.totalCalls||0;
+    // تكلفة AI الحقيقية بالريال (دولار × 3.75 فقط — بدون هامش ربح)
+    const sarTotal=(usd*3.75).toFixed(4);
+    const sarPerMsg=calls>0?((usd/calls)*3.75).toFixed(4):'—';
+    document.getElementById('stCost').textContent=(usd*3.75).toFixed(3)+' ر.س';
+    document.getElementById('stCostCalls').textContent=calls?`(${calls})` :'';
+    document.getElementById('costTotal').textContent=sarTotal+' ر.س';
+    document.getElementById('costTotalSAR').textContent='بالريال السعودي';
+    document.getElementById('costCalls').textContent=calls;
+    document.getElementById('costTokens').textContent=sarPerMsg==='—'?'—':sarPerMsg+' ر.س';
+    if(d.resetAt) document.getElementById('costResetAt').textContent='منذ التصفير: '+new Date(d.resetAt).toLocaleString('ar');
     // by model
     const bm=document.getElementById('costByModel');bm.innerHTML='';
     for(const[m,v] of Object.entries(d.byModel||{})){
       const row=document.createElement('div');
       row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.03);border-radius:8px;padding:7px 12px;font-size:12px';
-      const mSar=((v.costUSD||0)*3.75*3).toFixed(2);
-      row.innerHTML=`<span style="color:#94a3b8;font-weight:700">${esc(m)}</span><span style="color:#64748b">${v.calls} طلب</span><span style="color:#f59e0b;font-weight:700">${mSar} ر.س</span>`;
+      const mSar=((v.costUSD||0)*3.75).toFixed(4);
+      const perMsg=v.calls>0?(((v.costUSD||0)/v.calls)*3.75).toFixed(4):'—';
+      row.innerHTML=`<span style="color:#94a3b8;font-weight:700">${esc(m)}</span><span style="color:#64748b">${v.calls} رسالة</span><span style="color:#818cf8;font-size:11px">${perMsg} ر.س/رسالة</span><span style="color:#f59e0b;font-weight:700">${mSar} ر.س</span>`;
       bm.appendChild(row);
     }
   }catch(_){}
