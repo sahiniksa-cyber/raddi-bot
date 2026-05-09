@@ -849,8 +849,18 @@ const SCRS=['stopped','waiting','qr','connecting','connected','disconnected','er
 function showSc(n){SCRS.forEach(s=>{const e=document.getElementById('sc-'+s);if(e)e.style.display=s===n?'flex':'none';})}
 
 // ── BOT ──
-async function botStart(){try{await fetch('/api/bot/start',{method:'POST'});}catch(_){}}
-async function botStop(){try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}}
+async function botStart(){
+  const btn=document.getElementById('ctrlStartBtn');
+  if(btn){btn.disabled=true;const orig=btn.textContent;btn.textContent='⏳';setTimeout(()=>{if(btn)btn.disabled=false;btn.textContent=orig;},6000);}
+  try{await fetch('/api/bot/start',{method:'POST'});}catch(_){}
+  setTimeout(poll,1000);
+}
+async function botStop(){
+  const btn=document.getElementById('ctrlStopBtn');
+  if(btn){btn.disabled=true;const orig=btn.textContent;btn.textContent='⏳';setTimeout(()=>{if(btn)btn.disabled=false;btn.textContent=orig;},4000);}
+  try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}
+  setTimeout(poll,800);
+}
 async function clearSession(){
   try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}
   toast('🗑 امسح مجلد session يدوياً ثم أعد التشغيل');
@@ -889,7 +899,9 @@ function setModel(m){
 // ── STATUS POLL ──
 async function poll(){
   try{
-    const d=await fetch('/api/status').then(r=>r.json());
+    const r=await fetch('/api/status');
+    if(r.status===401){window.location.href='/login';return;}
+    const d=await r.json();
     if(d.logs?.length){const lb=document.getElementById('logsBox');if(lb)lb.innerHTML=d.logs.join('<br>')}
     if(d.status===lastStatus&&d.status!=='qr_ready')return;
     lastStatus=d.status;
@@ -936,6 +948,7 @@ let confLoaded=false;
 async function loadConf(retry=0){
   try{
     const r=await fetch('/api/config');
+    if(r.status===401){window.location.href='/login';return;}
     if(!r.ok)throw new Error('HTTP '+r.status);
     config=await r.json();
     fillForm(config);
@@ -1196,6 +1209,7 @@ async function saveConf(){
   };
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(nc)});
+    if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
     if(d.success){config=nc;toast('✅ تم حفظ الإعدادات');}
     else toast('❌ '+d.message,true);

@@ -649,23 +649,25 @@ class UserBot {
   async humanLikeReply(msg, text) {
     const delaySec = this.randomDelay();
     this.log(`⏳ سيرد بعد ${delaySec} ثانية (محاكاة إنسان)...`);
-    let chat = null;
+
+    // Show typing indicator before the sleep
     try {
-      chat = await msg.getChat();
+      const chat = await msg.getChat();
       if (delaySec > 0) await chat.sendStateTyping().catch(() => {});
       if (delaySec > 0) await sleep(delaySec * 1000);
       await chat.clearState().catch(() => {});
-    } catch (_) {}
+    } catch (_) {
+      // If getChat fails, still respect the delay so the human-like timing holds
+      if (delaySec > 0) await sleep(delaySec * 1000);
+    }
 
     // Mark chat as "bot is replying" so message_create won't pause it
     this.botReplyingTo.add(msg.from);
     try {
-      // Use sendMessage (no quote) — more reliable than msg.reply() after a delay
-      if (chat) {
-        await chat.sendMessage(text);
-      } else {
-        await msg.reply(text); // fallback
-      }
+      if (!this.client || !this.botRunning) throw new Error('العميل غير متصل');
+      // client.sendMessage is more reliable than a stale chat object after a long delay
+      await this.client.sendMessage(msg.from, text);
+      this.log(`✅ أُرسلت إلى ${msg.from.replace('@c.us', '').replace('@lid', '')}`);
     } finally {
       // Clear the flag after 5s to handle any timing edge cases
       setTimeout(() => this.botReplyingTo.delete(msg.from), 5000);
@@ -1021,7 +1023,8 @@ ${productsBlock}
     this.appState.qrDataUrl = null;
     this.log('🛑 تم إيقاف البوت');
     if (this.client) {
-      try { await this.client.destroy(); } catch (_) {}
+      // 6s timeout — destroy can hang if Chrome is slow or has pending requests
+      try { await Promise.race([this.client.destroy(), new Promise(r => setTimeout(r, 6000))]); } catch (_) {}
       this.client = null;
     }
     // Note: do NOT call killChrome() here — would kill other users' Chrome instances
@@ -1364,9 +1367,9 @@ app.post('/api/bot/start', (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/bot/stop', async (req, res) => {
+app.post('/api/bot/stop', (req, res) => {
   const bot = getUserBot(req.session.userId);
-  await bot.stopBot();
+  bot.stopBot(); // fire-and-forget — respond immediately so the button never hangs
   res.json({ success: true });
 });
 
