@@ -173,10 +173,12 @@ async function fetchSallaProducts(storeUrl, token) {
   const products = [];
   if (!token) return products;
   const headers = { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
-  // جرّب API الرسمي أولاً
+  // جرّب جميع endpoints المعروفة لسلة (الـ SP_ key يعمل مع بعضها دون غيرها)
   const apiUrls = [
     'https://api.salla.dev/admin/v2/products?per_page=50',
     'https://api.salla.dev/admin/v2/products?page_size=50',
+    'https://api.salla.dev/store/v2/products?per_page=50',
+    'https://api.salla.dev/store/v1/products?per_page=50',
   ];
   for (const apiUrl of apiUrls) {
     try {
