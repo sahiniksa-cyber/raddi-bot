@@ -754,8 +754,24 @@ class UserBot {
 
     // ─── OpenRouter احتياطي لأي موديل آخر ───
     const orKey = c.openrouterApiKey?.trim() || c.openaiApiKey?.trim();
-    if (!orKey || orKey.length < 20) throw new Error('مفتاح API غير موجود — أضفه من الإعدادات');
-    return { openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }), model };
+    if (orKey && orKey.length > 20) {
+      return { openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }), model };
+    }
+
+    // ─── آخر ملاذ: استخدم أي مفتاح متوفر (Google / Anthropic) ───
+    // يضمن أن البوت لا يصمت أبداً حتى لو اختار المستخدم موديلاً ما عنده مفتاحه
+    const googleKey = c.googleApiKey?.trim();
+    if (googleKey && googleKey.length > 10) {
+      this.log(`⚠️ مو في مفتاح لـ ${model} — يستخدم Gemini 2.5 Pro كبديل تلقائي`);
+      return { openai: new OpenAI({ apiKey: googleKey, baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/' }), model: 'gemini-2.5-pro' };
+    }
+    const anthropicKey = c.anthropicApiKey?.trim();
+    if (anthropicKey && anthropicKey.length > 10) {
+      this.log(`⚠️ مو في مفتاح لـ ${model} — يستخدم Claude Sonnet كبديل تلقائي`);
+      return { openai: new OpenAI({ apiKey: anthropicKey, baseURL: 'https://api.anthropic.com/v1', defaultHeaders: { 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' } }), model: 'claude-sonnet-4-5' };
+    }
+
+    throw new Error('لا يوجد أي مفتاح API مضبوط — أضف مفتاحاً في الإعدادات');
   }
 
   buildSystemPrompt(history = [], opts = {}) {
@@ -945,8 +961,9 @@ ${productsBlock}
       this.log('✅ رد: ' + reply.substring(0, 70));
     } catch (err) {
       this.log('❌ خطأ في الرد على ' + sender.replace('@c.us', '').replace('@lid', '') + ': ' + err.message);
-      const fallback = this.config.errorMessage?.trim();
-      if (fallback) try { await this.humanLikeReply(msg, fallback); } catch (_) {}
+      // دائماً يرسل رسالة — لا يصمت أبداً
+      const fallback = this.config.errorMessage?.trim() || 'معذرة، حدث خطأ تقني مؤقت. حاول مجدداً بعد قليل.';
+      try { await this.humanLikeReply(msg, fallback); } catch (_) {}
     }
   }
 

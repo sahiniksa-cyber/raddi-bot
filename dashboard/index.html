@@ -424,8 +424,8 @@ label{display:flex;align-items:center}
           <div class="mc" data-model="anthropic/claude-sonnet-4-5" data-prov="openrouter" onclick="selModel(this)">
             <div class="mcheck">✓</div><div class="mn">🎵 Sonnet 4.5</div><div class="md">توازن مثالي</div><span class="mp md2">موصى به</span>
           </div>
-          <div class="mc" data-model="gpt-4o" data-prov="openai" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🤖 GPT-4o</div><div class="md">ChatGPT الأقوى</div><span class="mp md2">موصى به</span>
+          <div class="mc" data-model="openai/gpt-4o" data-prov="openrouter" onclick="selModel(this)">
+            <div class="mcheck">✓</div><div class="mn">🤖 GPT-4o</div><div class="md">عبر OpenRouter</div><span class="mp md2">قوي</span>
           </div>
       </div>
       <input type="hidden" id="mdlSel" value="google/gemini-2.0-flash">
@@ -459,17 +459,17 @@ label{display:flex;align-items:center}
           </div>
           <div class="hint">من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a> — أو افتح OpenRouter أسفله كبديل</div>
         </div>
-        <!-- OpenRouter fallback (always visible, smaller) -->
-        <details style="margin-top:10px">
-          <summary style="font-size:11px;color:#475569;cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px">
-            <span>⚪ أو استخدم OpenRouter (بديل لأي موديل)</span>
+        <!-- OpenRouter — مطلوب لـ GPT-4o -->
+        <details style="margin-top:10px" id="orDetails">
+          <summary style="font-size:12px;color:#94a3b8;cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:8px 0">
+            <span style="background:rgba(255,255,255,.06);border-radius:8px;padding:4px 10px">🔑 مفتاح OpenRouter <small style="color:#475569">(مطلوب لـ GPT-4o — وبديل لأي موديل آخر)</small></span>
           </summary>
           <div style="margin-top:8px">
             <div class="key-row">
               <input type="password" id="openrouterKeyInput" placeholder="sk-or-..." dir="ltr" style="margin-bottom:0">
               <button class="key-get-btn" onclick="window.open('https://openrouter.ai/keys','_blank')">احصل عليه ↗</button>
             </div>
-            <div class="hint" style="margin-top:4px">مفتاح واحد يشغّل الكل — من <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--green)">openrouter.ai</a></div>
+            <div class="hint" style="margin-top:4px">مفتاح واحد يشغّل الكل — من <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--green)">openrouter.ai</a> (مجاني في البداية)</div>
           </div>
         </details>
       </div>
@@ -872,8 +872,11 @@ function selModel(card){
     const el=document.getElementById('googleKeySection');if(el)el.style.display='block';
   } else if(m.startsWith('anthropic/')||m.startsWith('claude')){
     const el=document.getElementById('anthropicKeySection');if(el)el.style.display='block';
+  } else if(m.startsWith('openai/')){
+    // GPT عبر OpenRouter — افتح قسم OR تلقائياً
+    const orDetails=document.getElementById('orDetails');if(orDetails)orDetails.open=true;
   } else {
-    // OpenAI (gpt-*, o1-*, etc.)
+    // OpenAI مباشر (gpt-4o بدون prefix)
     const el=document.getElementById('openaiKeySection');if(el)el.style.display='block';
   }
 }
