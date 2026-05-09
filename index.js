@@ -172,21 +172,61 @@ function isValidProduct(name) {
 async function fetchSallaProducts(storeUrl, token) {
   const products = [];
   if (!token) return products;
-  try {
-    const { body } = await fetchURL('https://api.salla.dev/admin/v2/products?per_page=50', {
-      'Authorization': `Bearer ${token}`, 'Accept': 'application/json',
-    });
-    const data = JSON.parse(body);
-    if (data?.data?.length) {
-      for (const p of data.data) {
-        products.push({
-          name: p.name || '',
-          price: (p.price?.amount || p.regular_price?.amount || '') + ' ' + (p.price?.currency || 'SAR'),
-          description: (p.description || '').replace(/<[^>]+>/g, '').substring(0, 200),
-        });
+  const headers = { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
+  // جرّب API الرسمي أولاً
+  const apiUrls = [
+    'https://api.salla.dev/admin/v2/products?per_page=50',
+    'https://api.salla.dev/admin/v2/products?page_size=50',
+  ];
+  for (const apiUrl of apiUrls) {
+    try {
+      const { body, status } = await fetchURL(apiUrl, headers);
+      if (status === 200) {
+        const data = JSON.parse(body);
+        const items = data?.data || data?.products || [];
+        if (Array.isArray(items) && items.length > 0) {
+          for (const p of items) {
+            const name = p.name || p.title || '';
+            if (!name) continue;
+            products.push({
+              name,
+              price: (p.price?.amount || p.regular_price?.amount || p.price || '') + ' ' + (p.price?.currency || 'SAR'),
+              description: (p.description || p.short_description || '').replace(/<[^>]+>/g, '').substring(0, 200),
+            });
+          }
+          console.log(`✅ Salla API: ${products.length} منتج من ${apiUrl}`);
+          return products;
+        }
+      } else {
+        console.log(`⚠️ Salla API HTTP ${status} من ${apiUrl}: ${body.substring(0, 200)}`);
       }
-    }
-  } catch (e) { console.log('⚠️ Salla API: ' + e.message); }
+    } catch (e) { console.log('⚠️ Salla API خطأ: ' + e.message); }
+  }
+  // جرّب فحص صفحة المنتجات مباشرة من موقع المتجر
+  if (storeUrl) {
+    try {
+      const base = new URL(storeUrl);
+      const { body, status } = await fetchURL(base.origin + '/products', headers);
+      if (status === 200) {
+        // ابحث عن بيانات JSON في الصفحة
+        const jsonMatches = body.match(/["']products["']\s*:\s*(\[[\s\S]{10,15000}?\])/g) || [];
+        for (const match of jsonMatches) {
+          try {
+            const arr = JSON.parse(match.replace(/^["']products["']\s*:\s*/, ''));
+            if (Array.isArray(arr) && arr.length > 0) {
+              for (const p of arr.slice(0, 50)) {
+                const name = p.name || p.title || '';
+                if (name && name.length > 2) {
+                  products.push({ name, price: String(p.price?.amount || p.price || ''), description: (p.description || '').replace(/<[^>]+>/g, '').substring(0, 200) });
+                }
+              }
+              if (products.length > 0) { console.log(`✅ Salla صفحة: ${products.length} منتج`); return products; }
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
   return products;
 }
 
@@ -216,16 +256,49 @@ async function fetchWithPuppeteer(url) {
     try { puppeteer = require('puppeteer-core'); } catch (_) { return null; }
   }
   const chromePath = findChrome();
-  const opts = { headless: true, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'] };
+  const opts = { headless: true, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-extensions'] };
   if (chromePath) opts.executablePath = chromePath;
   let browser;
   try {
     browser = await puppeteer.launch(opts);
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1280, height: 900 });
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 4000));
+    // networkidle0 لانتظار اكتمال JS (سلة وزد JavaScript-heavy)
+    await page.goto(url, { waitUntil: 'networkidle0', timeout: 45000 }).catch(async () => {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+    });
+    await new Promise(r => setTimeout(r, 6000));
+
+    // استخراج مباشر من window objects لمتاجر سلة
+    const sallaProducts = await page.evaluate(() => {
+      try {
+        const sources = [
+          window?.salla?.store?.products,
+          window?.salla?.collection?.products,
+          window?.__STORE__?.products?.data,
+          window?.__NEXT_DATA__?.props?.pageProps?.products,
+          window?.__NUXT__?.data?.[0]?.products?.data,
+        ];
+        for (const src of sources) {
+          if (Array.isArray(src) && src.length > 0) return JSON.stringify(src.slice(0, 60));
+        }
+      } catch (_) {}
+      return null;
+    }).catch(() => null);
+
+    if (sallaProducts) {
+      try {
+        const prods = JSON.parse(sallaProducts);
+        if (prods.length > 0) {
+          const fakeHtml = prods.map(p =>
+            `<div class="s-product-card"><div class="s-product-card__title">${(p.name || p.title || '').replace(/</g, '&lt;')}</div><div class="s-product-card__price">${p.price?.amount || p.price || ''} SAR</div></div>`
+          ).join('');
+          return `<html><body>${fakeHtml}</body></html>`;
+        }
+      } catch (_) {}
+    }
+
     return await page.content();
   } finally {
     if (browser) await browser.close().catch(() => {});
@@ -660,21 +733,34 @@ ${productsBlock}
       historyPreview: history.slice(-8).map(m => ({ role: m.role, content: m.content.substring(0, 100) })),
     };
 
-    try {
-      const res = await openai.chat.completions.create({ model, max_tokens: 800, temperature: 0.7, messages });
-      const reply = res.choices[0]?.message?.content || '';
-      if (res.usage) this.recordUsage(model, res.usage.prompt_tokens || 0, res.usage.completion_tokens || 0);
-      if (!reply.trim()) { this.log('⚠️ الـ AI رد بنص فارغ!'); this.lastAIDebug.error = 'empty reply'; }
-      else { this.log(`📥 رد الـ AI: "${reply.substring(0, 80)}"`); }
-      this.lastAIDebug.reply = reply;
-      this.lastAIDebug.success = true;
-      return reply;
-    } catch (err) {
-      this.log(`❌ خطأ AI: ${err.message}`);
-      this.lastAIDebug.error = err.message;
-      this.lastAIDebug.success = false;
-      throw err;
+    // ── إعادة المحاولة تلقائياً عند خطأ 429 (حد الطلبات) ──
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await openai.chat.completions.create({ model, max_tokens: 800, temperature: 0.7, messages });
+        const reply = res.choices[0]?.message?.content || '';
+        if (res.usage) this.recordUsage(model, res.usage.prompt_tokens || 0, res.usage.completion_tokens || 0);
+        if (!reply.trim()) { this.log('⚠️ الـ AI رد بنص فارغ!'); this.lastAIDebug.error = 'empty reply'; }
+        else { this.log(`📥 رد الـ AI: "${reply.substring(0, 80)}"`); }
+        this.lastAIDebug.reply = reply;
+        this.lastAIDebug.success = true;
+        return reply;
+      } catch (err) {
+        lastErr = err;
+        const is429 = err.status === 429 || String(err.message).includes('429');
+        if (is429 && attempt < 2) {
+          const waitMs = (attempt + 1) * 4000; // 4ث ثم 8ث
+          this.log(`⏳ حد الطلبات (429) — إعادة المحاولة بعد ${waitMs / 1000}ث (${attempt + 1}/2)...`);
+          await sleep(waitMs);
+          continue;
+        }
+        break;
+      }
     }
+    this.log(`❌ خطأ AI: ${lastErr.message}`);
+    this.lastAIDebug.error = lastErr.message;
+    this.lastAIDebug.success = false;
+    throw lastErr;
   }
 
   // ── Message Handler ──
