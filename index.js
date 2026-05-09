@@ -523,13 +523,55 @@ class UserBot {
 
   // ── AI ──
   buildAIClient() {
-    const model = this.config.model || 'gpt-4o-mini';
-    const isOpenAI = !model.includes('/');
-    const apiKey = isOpenAI ? this.config.openaiApiKey : (this.config.openrouterApiKey || this.config.openaiApiKey);
-    if (!apiKey || apiKey.length < 20) throw new Error('مفتاح API غير موجود — أضفه من الإعدادات');
-    const clientOpts = { apiKey, baseURL: isOpenAI ? 'https://api.openai.com/v1' : 'https://openrouter.ai/api/v1' };
-    if (!isOpenAI) clientOpts.defaultHeaders = { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' };
-    return { openai: new OpenAI(clientOpts), model };
+    const model = this.config.model || 'google/gemini-2.0-flash';
+    const c = this.config;
+
+    // ─── Google Gemini (مباشر أو OpenRouter) ───
+    if (model.startsWith('google/') || model.startsWith('gemini')) {
+      const geminiDirect = c.googleApiKey?.trim();
+      const orKey = c.openrouterApiKey?.trim();
+      if (geminiDirect && geminiDirect.length > 10) {
+        const geminiModel = model.replace('google/', '');
+        return { openai: new OpenAI({ apiKey: geminiDirect, baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/' }), model: geminiModel };
+      }
+      if (orKey && orKey.length > 20) {
+        return { openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }), model };
+      }
+      throw new Error('أضف مفتاح Google AI (من aistudio.google.com) أو مفتاح OpenRouter');
+    }
+
+    // ─── Anthropic Claude (مباشر أو OpenRouter) ───
+    if (model.startsWith('anthropic/') || model.startsWith('claude')) {
+      const anthropicDirect = c.anthropicApiKey?.trim();
+      const orKey = c.openrouterApiKey?.trim();
+      if (anthropicDirect && anthropicDirect.length > 10) {
+        const claudeModel = model.replace('anthropic/', '');
+        return {
+          openai: new OpenAI({
+            apiKey: 'anthropic',
+            baseURL: 'https://api.anthropic.com/v1',
+            defaultHeaders: { 'x-api-key': anthropicDirect, 'anthropic-version': '2023-06-01' },
+          }),
+          model: claudeModel,
+        };
+      }
+      if (orKey && orKey.length > 20) {
+        return { openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }), model };
+      }
+      throw new Error('أضف مفتاح Anthropic (من console.anthropic.com) أو مفتاح OpenRouter');
+    }
+
+    // ─── OpenAI (GPT) مباشر ───
+    if (!model.includes('/')) {
+      const openaiKey = c.openaiApiKey?.trim();
+      if (!openaiKey || openaiKey.length < 20) throw new Error('أضف مفتاح OpenAI (من platform.openai.com)');
+      return { openai: new OpenAI({ apiKey: openaiKey }), model };
+    }
+
+    // ─── OpenRouter احتياطي لأي موديل آخر ───
+    const orKey = c.openrouterApiKey?.trim() || c.openaiApiKey?.trim();
+    if (!orKey || orKey.length < 20) throw new Error('مفتاح API غير موجود — أضفه من الإعدادات');
+    return { openai: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'HTTP-Referer': 'https://raddi.app', 'X-Title': 'ردّي' } }), model };
   }
 
   buildSystemPrompt(history = [], opts = {}) {
@@ -1067,6 +1109,10 @@ app.post('/api/config', (req, res) => {
       merged.openaiApiKey = bot.config.openaiApiKey;
     if (!incoming.openrouterApiKey?.trim() && bot.config.openrouterApiKey?.trim())
       merged.openrouterApiKey = bot.config.openrouterApiKey;
+    if (!incoming.googleApiKey?.trim() && bot.config.googleApiKey?.trim())
+      merged.googleApiKey = bot.config.googleApiKey;
+    if (!incoming.anthropicApiKey?.trim() && bot.config.anthropicApiKey?.trim())
+      merged.anthropicApiKey = bot.config.anthropicApiKey;
 
     bot.config = merged;
     bot.saveConfig();
@@ -1132,20 +1178,31 @@ app.post('/api/health-check', async (req, res) => {
   add('اسم المتجر', !!bot.config.storeName, bot.config.storeName || 'غير محدد', 'أضف اسم متجرك في "معلومات المتجر"');
   add('رسالة الترحيب', !!(bot.config.welcomeMessage?.trim()), bot.config.welcomeMessage ? '"' + bot.config.welcomeMessage.substring(0, 40) + '..."' : 'فارغة', 'أضف رسالة ترحيب');
 
-  const model = bot.config.model || 'gpt-4o-mini';
-  const isOpenAI = !model.includes('/');
-  const apiKey = isOpenAI ? bot.config.openaiApiKey : bot.config.openrouterApiKey;
-  add('مفتاح ' + (isOpenAI ? 'OpenAI' : 'OpenRouter'), !!(apiKey && apiKey.length > 20), apiKey ? 'موجود (' + apiKey.substring(0, 8) + '...)' : 'غير موجود', 'أضف المفتاح في قسم "الذكاء الاصطناعي"');
+  const model = bot.config.model || 'google/gemini-2.0-flash';
+  // تحديد المفتاح المطلوب حسب الموديل
+  let keyName, apiKey;
+  if (model.startsWith('google/') || model.startsWith('gemini')) {
+    const direct = bot.config.googleApiKey?.trim();
+    if (direct?.length > 10) { keyName = 'Google AI'; apiKey = direct; }
+    else { keyName = 'OpenRouter (Gemini)'; apiKey = bot.config.openrouterApiKey; }
+  } else if (model.startsWith('anthropic/') || model.startsWith('claude')) {
+    const direct = bot.config.anthropicApiKey?.trim();
+    if (direct?.length > 10) { keyName = 'Anthropic'; apiKey = direct; }
+    else { keyName = 'OpenRouter (Claude)'; apiKey = bot.config.openrouterApiKey; }
+  } else {
+    keyName = 'OpenAI'; apiKey = bot.config.openaiApiKey;
+  }
+  add('مفتاح ' + keyName, !!(apiKey && apiKey.length > 10), apiKey ? 'موجود (' + apiKey.substring(0, 8) + '...)' : 'غير موجود', 'أضف المفتاح في قسم "الذكاء الاصطناعي"');
 
-  if (apiKey && apiKey.length > 20) {
+  if (apiKey && apiKey.length > 10) {
     try {
-      const { openai } = bot.buildAIClient();
+      const { openai, model: usedModel } = bot.buildAIClient();
       const t0 = Date.now();
-      const test = await openai.chat.completions.create({ model, max_tokens: 8, messages: [{ role: 'user', content: 'قل: مرحبا' }] });
+      const test = await openai.chat.completions.create({ model: usedModel, max_tokens: 8, messages: [{ role: 'user', content: 'قل: مرحبا' }] });
       const ms = Date.now() - t0;
       const ok = !!test.choices?.[0]?.message?.content;
       add('النموذج: ' + model, ok, ok ? 'يعمل (' + ms + 'ms)' : 'لم يرد', '');
-    } catch (e) { add('النموذج: ' + model, false, e.message.substring(0, 80), 'تأكد أن النموذج صحيح والمفتاح يعمل'); }
+    } catch (e) { add('النموذج: ' + model, false, e.message.substring(0, 80), 'تأكد أن المفتاح صحيح ويعمل مع هذا النموذج'); }
   } else {
     add('النموذج: ' + model, false, 'لا يمكن الفحص (لا يوجد مفتاح)', '');
   }

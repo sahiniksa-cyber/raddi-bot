@@ -430,15 +430,38 @@ label{display:flex;align-items:center}
       </div>
       <input type="hidden" id="mdlSel" value="google/gemini-2.0-flash">
 
-      <!-- Dynamic Key Input -->
+      <!-- API Keys — كل مزود بمفتاحه -->
       <div class="key-area">
-        <label id="keyLabel">مفتاح OpenRouter API</label>
-        <div class="key-row">
-          <input type="password" id="apiKeyInput" placeholder="sk-or-..." dir="ltr">
-          <button class="key-get-btn" id="keyGetBtn" onclick="window.open(document.getElementById('keyLink').value,'_blank')">احصل عليه ↗</button>
-          <input type="hidden" id="keyLink" value="https://openrouter.ai/keys">
+        <div style="font-size:12px;color:#475569;margin-bottom:10px;background:rgba(37,211,102,.04);border-right:3px solid var(--green);padding:8px 12px;border-radius:8px">
+          💡 أضف مفتاح المزود اللي تريد استخدامه — ما تحتاج تملأ الكل
         </div>
-        <div class="hint" id="keyHint">سجّل مجاناً في <a href="https://openrouter.ai/keys" id="keyHintLink" target="_blank" style="color:var(--green)">openrouter.ai</a> للحصول على مفتاحك</div>
+
+        <label style="color:#f59e0b;margin-bottom:5px">🟡 OpenAI API Key — لـ GPT-4o mini</label>
+        <div class="key-row" style="margin-bottom:10px">
+          <input type="password" id="openaiKeyInput" placeholder="sk-..." dir="ltr">
+          <button class="key-get-btn" onclick="window.open('https://platform.openai.com/api-keys','_blank')">احصل عليه ↗</button>
+        </div>
+
+        <label style="color:#25d366;margin-bottom:5px">🟢 Google AI API Key — لـ Gemini Flash</label>
+        <div class="key-row" style="margin-bottom:4px">
+          <input type="password" id="googleKeyInput" placeholder="AIza..." dir="ltr">
+          <button class="key-get-btn" onclick="window.open('https://aistudio.google.com/app/apikey','_blank')">احصل عليه ↗</button>
+        </div>
+        <div class="hint" style="margin-bottom:10px">مجاني — من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--green)">Google AI Studio</a></div>
+
+        <label style="color:#818cf8;margin-bottom:5px">🟣 Anthropic API Key — لـ Claude Sonnet</label>
+        <div class="key-row" style="margin-bottom:4px">
+          <input type="password" id="anthropicKeyInput" placeholder="sk-ant-..." dir="ltr">
+          <button class="key-get-btn" onclick="window.open('https://console.anthropic.com/settings/keys','_blank')">احصل عليه ↗</button>
+        </div>
+        <div class="hint" style="margin-bottom:10px">من <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#818cf8">console.anthropic.com</a></div>
+
+        <label style="color:#64748b;margin-bottom:5px">⚪ OpenRouter API Key — بديل لأي موديل</label>
+        <div class="key-row">
+          <input type="password" id="openrouterKeyInput" placeholder="sk-or-..." dir="ltr">
+          <button class="key-get-btn" onclick="window.open('https://openrouter.ai/keys','_blank')">احصل عليه ↗</button>
+        </div>
+        <div class="hint">مفتاح واحد يشغّل كل الموديلات — من <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--green)">openrouter.ai</a></div>
       </div>
 
     </div>
@@ -807,9 +830,6 @@ label{display:flex;align-items:center}
 
 <script>
 let config = {}, lastStatus = '', scannedData = null;
-// Track both keys
-let savedOpenAIKey = '', savedRouterKey = '';
-let currentProv = 'openai';
 
 // ── NAV ──
 function goTab(t){
@@ -833,56 +853,30 @@ async function clearSession(){
 
 // ── MODEL SELECTION ──
 function selModel(card){
-  // Save current key before switching
-  if(currentProv==='openai') savedOpenAIKey=document.getElementById('apiKeyInput').value;
-  else savedRouterKey=document.getElementById('apiKeyInput').value;
-
   document.querySelectorAll('.mc').forEach(c=>c.classList.remove('sel'));
   card.classList.add('sel');
   const m=card.dataset.model;
-  const prov=card.dataset.prov;
-  currentProv=prov;
   document.getElementById('mdlSel').value=m;
-
-  // Update stat
   const short=m.split('/').pop().replace(/:free$/,'').split('-').slice(0,2).join('-');
   document.getElementById('stMdl').textContent=short.substring(0,10);
-
-  // Update key area
-  const lbl=document.getElementById('keyLabel');
-  const inp=document.getElementById('apiKeyInput');
-  const hint=document.getElementById('keyHint');
-  const hintLink=document.getElementById('keyHintLink');
-  const link=document.getElementById('keyLink');
-  const isFree=m.includes(':free');
-
-  if(prov==='openai'){
-    lbl.textContent='مفتاح OpenAI API';
-    inp.placeholder='sk-...';
-    inp.value=savedOpenAIKey;
-    link.value='https://platform.openai.com/api-keys';
-    hintLink.href='https://platform.openai.com/api-keys';
-    hintLink.textContent='platform.openai.com';
-    hint.innerHTML='مفتاح سري من <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>';
-  } else {
-    lbl.textContent='مفتاح OpenRouter API' + (isFree?' — النموذج مجاني':'');
-    inp.placeholder='sk-or-...';
-    inp.value=savedRouterKey;
-    link.value='https://openrouter.ai/keys';
-    hint.innerHTML=(isFree?'<span style="color:#34d399">🆓 هذا النموذج مجاني تماماً!</span> ':'')+'سجّل مجاناً في <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--green)">openrouter.ai</a> للحصول على مفتاح';
+  // Highlight the relevant key field
+  ['openaiKeyInput','googleKeyInput','anthropicKeyInput','openrouterKeyInput'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.borderColor='';
+  });
+  if(!m.includes('/')&&(m.startsWith('gpt')||m.startsWith('o1')||m.startsWith('o3'))){
+    const el=document.getElementById('openaiKeyInput');if(el)el.style.borderColor='#f59e0b';
+  } else if(m.startsWith('google/')||m.startsWith('gemini')){
+    const el=document.getElementById('googleKeyInput');if(el)el.style.borderColor='var(--green)';
+  } else if(m.startsWith('anthropic/')||m.startsWith('claude')){
+    const el=document.getElementById('anthropicKeyInput');if(el)el.style.borderColor='#818cf8';
   }
 }
 
-// Set model from saved config
 function setModel(m){
   document.getElementById('mdlSel').value=m;
   document.querySelectorAll('.mc').forEach(c=>{
-    if(c.dataset.model===m){
-      c.classList.add('sel');
-      selModel(c);
-    } else {
-      c.classList.remove('sel');
-    }
+    if(c.dataset.model===m){c.classList.add('sel');selModel(c);}
+    else c.classList.remove('sel');
   });
 }
 
@@ -937,8 +931,6 @@ async function loadConf(retry=0){
     const r=await fetch('/api/config');
     if(!r.ok)throw new Error('HTTP '+r.status);
     config=await r.json();
-    savedOpenAIKey=config.openaiApiKey||'';
-    savedRouterKey=config.openrouterApiKey||'';
     fillForm(config);
     confLoaded=true;
     // Enable save button after successful load
@@ -961,7 +953,12 @@ function fillForm(c){
   document.getElementById('respLang').value=c.responseLanguage||'العربية الفصحى السهلة';
   document.getElementById('maxLen').value=c.maxResponseLength||300;
   document.getElementById('errorMessage').value=c.errorMessage||'';
-  setModel(c.model||'gpt-4o-mini');
+  setModel(c.model||'google/gemini-2.0-flash');
+  // مفاتيح API
+  document.getElementById('openaiKeyInput').value=c.openaiApiKey||'';
+  document.getElementById('googleKeyInput').value=c.googleApiKey||'';
+  document.getElementById('anthropicKeyInput').value=c.anthropicApiKey||'';
+  document.getElementById('openrouterKeyInput').value=c.openrouterApiKey||'';
 
   // Reply style
   const r=c.replyStyle||{};
@@ -1142,11 +1139,6 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').re
 
 async function saveConf(){
   if(!confLoaded){toast('⏳ الإعدادات لم تُحمَّل بعد — انتظر لحظة',true);return;}
-  // Collect current key before saving
-  const curKey=document.getElementById('apiKeyInput').value.trim();
-  if(currentProv==='openai') savedOpenAIKey=curKey;
-  else savedRouterKey=curKey;
-
   const kws={};
   document.querySelectorAll('.kw-row').forEach(r=>{const k=r.querySelector('.kw-k')?.value?.trim(),v=r.querySelector('.kw-v')?.value?.trim();if(k&&v)kws[k]=v;});
   const prods=[];
@@ -1176,8 +1168,10 @@ async function saveConf(){
   const welcomeMode=document.getElementById('welcomeMode').value||'separate';
 
   const nc={...config,
-    openaiApiKey:savedOpenAIKey,
-    openrouterApiKey:savedRouterKey,
+    openaiApiKey:document.getElementById('openaiKeyInput').value.trim()||config.openaiApiKey||'',
+    googleApiKey:document.getElementById('googleKeyInput').value.trim()||config.googleApiKey||'',
+    anthropicApiKey:document.getElementById('anthropicKeyInput').value.trim()||config.anthropicApiKey||'',
+    openrouterApiKey:document.getElementById('openrouterKeyInput').value.trim()||config.openrouterApiKey||'',
     model:document.getElementById('mdlSel').value,
     storeName:document.getElementById('storeName').value.trim(),
     storeDescription:document.getElementById('storeDesc').value.trim(),
