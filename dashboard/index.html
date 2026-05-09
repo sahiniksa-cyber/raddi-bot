@@ -452,12 +452,12 @@ label{display:flex;align-items:center}
         </div>
         <!-- OpenAI Section -->
         <div class="key-section" id="openaiKeySection" style="display:none">
-          <label style="color:#f59e0b">🟡 OpenAI API Key</label>
+          <label style="color:#f59e0b">🟡 OpenAI API Key — مفتاح ChatGPT/GPT-4o</label>
           <div class="key-row">
-            <input type="password" id="openaiKeyInput" placeholder="sk-..." dir="ltr">
+            <input type="password" id="openaiKeyInput" placeholder="sk-proj-..." dir="ltr">
             <button class="key-get-btn" onclick="window.open('https://platform.openai.com/api-keys','_blank')">احصل عليه ↗</button>
           </div>
-          <div class="hint">من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a> — أو افتح OpenRouter أسفله كبديل</div>
+          <div class="hint">الصق مفتاحك هنا من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a> — أو استخدم OpenRouter أسفله كبديل</div>
         </div>
         <!-- OpenRouter — مطلوب لـ GPT-4o -->
         <details style="margin-top:10px" id="orDetails">
@@ -872,11 +872,8 @@ function selModel(card){
     const el=document.getElementById('googleKeySection');if(el)el.style.display='block';
   } else if(m.startsWith('anthropic/')||m.startsWith('claude')){
     const el=document.getElementById('anthropicKeySection');if(el)el.style.display='block';
-  } else if(m.startsWith('openai/')){
-    // GPT عبر OpenRouter — افتح قسم OR تلقائياً
-    const orDetails=document.getElementById('orDetails');if(orDetails)orDetails.open=true;
   } else {
-    // OpenAI مباشر (gpt-4o بدون prefix)
+    // openai/gpt-4o أو gpt-4o مباشر — كلاهما يحتاج OpenAI key
     const el=document.getElementById('openaiKeySection');if(el)el.style.display='block';
   }
 }
