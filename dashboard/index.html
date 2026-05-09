@@ -430,38 +430,48 @@ label{display:flex;align-items:center}
       </div>
       <input type="hidden" id="mdlSel" value="google/gemini-2.0-flash">
 
-      <!-- API Keys — كل مزود بمفتاحه -->
+      <!-- Dynamic Key Input — يتغير حسب الموديل المختار -->
       <div class="key-area">
-        <div style="font-size:12px;color:#475569;margin-bottom:10px;background:rgba(37,211,102,.04);border-right:3px solid var(--green);padding:8px 12px;border-radius:8px">
-          💡 أضف مفتاح المزود اللي تريد استخدامه — ما تحتاج تملأ الكل
+        <!-- Google AI Section -->
+        <div class="key-section" id="googleKeySection">
+          <label style="color:#25d366">🟢 Google AI API Key</label>
+          <div class="key-row">
+            <input type="password" id="googleKeyInput" placeholder="AIza..." dir="ltr">
+            <button class="key-get-btn" onclick="window.open('https://aistudio.google.com/app/apikey','_blank')">احصل عليه ↗</button>
+          </div>
+          <div class="hint">مجاني تماماً — من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--green)">aistudio.google.com</a></div>
         </div>
-
-        <label style="color:#f59e0b;margin-bottom:5px">🟡 OpenAI API Key — لـ GPT-4o mini</label>
-        <div class="key-row" style="margin-bottom:10px">
-          <input type="password" id="openaiKeyInput" placeholder="sk-..." dir="ltr">
-          <button class="key-get-btn" onclick="window.open('https://platform.openai.com/api-keys','_blank')">احصل عليه ↗</button>
+        <!-- Anthropic Section -->
+        <div class="key-section" id="anthropicKeySection" style="display:none">
+          <label style="color:#818cf8">🟣 Anthropic API Key</label>
+          <div class="key-row">
+            <input type="password" id="anthropicKeyInput" placeholder="sk-ant-..." dir="ltr">
+            <button class="key-get-btn" onclick="window.open('https://console.anthropic.com/settings/keys','_blank')">احصل عليه ↗</button>
+          </div>
+          <div class="hint">من <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#818cf8">console.anthropic.com</a></div>
         </div>
-
-        <label style="color:#25d366;margin-bottom:5px">🟢 Google AI API Key — لـ Gemini Flash</label>
-        <div class="key-row" style="margin-bottom:4px">
-          <input type="password" id="googleKeyInput" placeholder="AIza..." dir="ltr">
-          <button class="key-get-btn" onclick="window.open('https://aistudio.google.com/app/apikey','_blank')">احصل عليه ↗</button>
+        <!-- OpenAI Section -->
+        <div class="key-section" id="openaiKeySection" style="display:none">
+          <label style="color:#f59e0b">🟡 OpenAI API Key</label>
+          <div class="key-row">
+            <input type="password" id="openaiKeyInput" placeholder="sk-..." dir="ltr">
+            <button class="key-get-btn" onclick="window.open('https://platform.openai.com/api-keys','_blank')">احصل عليه ↗</button>
+          </div>
+          <div class="hint">من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a></div>
         </div>
-        <div class="hint" style="margin-bottom:10px">مجاني — من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--green)">Google AI Studio</a></div>
-
-        <label style="color:#818cf8;margin-bottom:5px">🟣 Anthropic API Key — لـ Claude Sonnet</label>
-        <div class="key-row" style="margin-bottom:4px">
-          <input type="password" id="anthropicKeyInput" placeholder="sk-ant-..." dir="ltr">
-          <button class="key-get-btn" onclick="window.open('https://console.anthropic.com/settings/keys','_blank')">احصل عليه ↗</button>
-        </div>
-        <div class="hint" style="margin-bottom:10px">من <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#818cf8">console.anthropic.com</a></div>
-
-        <label style="color:#64748b;margin-bottom:5px">⚪ OpenRouter API Key — بديل لأي موديل</label>
-        <div class="key-row">
-          <input type="password" id="openrouterKeyInput" placeholder="sk-or-..." dir="ltr">
-          <button class="key-get-btn" onclick="window.open('https://openrouter.ai/keys','_blank')">احصل عليه ↗</button>
-        </div>
-        <div class="hint">مفتاح واحد يشغّل كل الموديلات — من <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--green)">openrouter.ai</a></div>
+        <!-- OpenRouter fallback (always visible, smaller) -->
+        <details style="margin-top:10px">
+          <summary style="font-size:11px;color:#475569;cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px">
+            <span>⚪ أو استخدم OpenRouter (بديل لأي موديل)</span>
+          </summary>
+          <div style="margin-top:8px">
+            <div class="key-row">
+              <input type="password" id="openrouterKeyInput" placeholder="sk-or-..." dir="ltr" style="margin-bottom:0">
+              <button class="key-get-btn" onclick="window.open('https://openrouter.ai/keys','_blank')">احصل عليه ↗</button>
+            </div>
+            <div class="hint" style="margin-top:4px">مفتاح واحد يشغّل الكل — من <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--green)">openrouter.ai</a></div>
+          </div>
+        </details>
       </div>
 
     </div>
@@ -859,16 +869,17 @@ function selModel(card){
   document.getElementById('mdlSel').value=m;
   const short=m.split('/').pop().replace(/:free$/,'').split('-').slice(0,2).join('-');
   document.getElementById('stMdl').textContent=short.substring(0,10);
-  // Highlight the relevant key field
-  ['openaiKeyInput','googleKeyInput','anthropicKeyInput','openrouterKeyInput'].forEach(id=>{
-    const el=document.getElementById(id);if(el)el.style.borderColor='';
+  // Show only the relevant key section
+  ['googleKeySection','anthropicKeySection','openaiKeySection'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.display='none';
   });
-  if(!m.includes('/')&&(m.startsWith('gpt')||m.startsWith('o1')||m.startsWith('o3'))){
-    const el=document.getElementById('openaiKeyInput');if(el)el.style.borderColor='#f59e0b';
-  } else if(m.startsWith('google/')||m.startsWith('gemini')){
-    const el=document.getElementById('googleKeyInput');if(el)el.style.borderColor='var(--green)';
+  if(m.startsWith('google/')||m.startsWith('gemini')){
+    const el=document.getElementById('googleKeySection');if(el)el.style.display='block';
   } else if(m.startsWith('anthropic/')||m.startsWith('claude')){
-    const el=document.getElementById('anthropicKeyInput');if(el)el.style.borderColor='#818cf8';
+    const el=document.getElementById('anthropicKeySection');if(el)el.style.display='block';
+  } else {
+    // OpenAI (gpt-*, o1-*, etc.)
+    const el=document.getElementById('openaiKeySection');if(el)el.style.display='block';
   }
 }
 

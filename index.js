@@ -1150,13 +1150,32 @@ app.post('/api/test-token', async (req, res) => {
   if (!token || token.length < 10) return res.json({ success: false, message: 'التوكن قصير جداً' });
   try {
     if (type === 'salla') {
-      const { body, status } = await fetchURL('https://api.salla.dev/admin/v2/store/info', { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' });
-      if (status === 200) {
-        let storeName = '';
-        try { storeName = JSON.parse(body)?.data?.name || ''; } catch (_) {}
-        return res.json({ success: true, message: 'توكن سلة صحيح ✓', storeName });
+      // توكنات سلة: جرّب عدة endpoints لأن Personal Access Tokens تعمل مع بعضها دون غيرها
+      const sallaHeaders = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json', 'Content-Type': 'application/json' };
+      const endpoints = [
+        'https://api.salla.dev/admin/v2/store/info',
+        'https://api.salla.dev/admin/v2/products?per_page=1',
+        'https://api.salla.dev/admin/v2/categories?per_page=1',
+      ];
+      let lastStatus = 0, storeName = '';
+      for (const ep of endpoints) {
+        try {
+          const { body, status } = await fetchURL(ep, sallaHeaders);
+          lastStatus = status;
+          if (status === 200) {
+            try {
+              const parsed = JSON.parse(body);
+              storeName = parsed?.data?.name || '';
+            } catch (_) {}
+            return res.json({ success: true, message: 'توكن سلة صحيح ✓', storeName });
+          }
+        } catch (_) {}
       }
-      return res.json({ success: false, message: 'توكن سلة غير صحيح أو منتهي (HTTP ' + status + ')' });
+      let hint = '';
+      if (lastStatus === 401) hint = '\nتأكد أن التوكن من لوحة تحكم سلة → الإعدادات → المطورون → Personal Access Tokens';
+      if (lastStatus === 403) hint = '\nالتوكن لا يملك صلاحية كافية — تأكد من الـ Scopes';
+      if (lastStatus === 0)   hint = '\nتعذر الاتصال بـ Salla API';
+      return res.json({ success: false, message: `فشل التحقق من توكن سلة (HTTP ${lastStatus})${hint}` });
     }
     if (type === 'zid') {
       const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' };
@@ -1275,7 +1294,19 @@ app.post('/api/test-chat', async (req, res) => {
     const reply = await bot.getAIReply(hist, { isFirstMsg: isFirst });
     hist.push({ role: 'assistant', content: reply });
     res.json({ success: true, reply, source: 'ai', historyLength: hist.length, welcomeShown });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  } catch (e) {
+    const msg = e.message || '';
+    // رسائل خطأ واضحة بدل الرسائل التقنية
+    if (msg.includes('429') || msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('quota'))
+      return res.status(200).json({ success: false, message: '⏳ وصلت لحد الطلبات — انتظر دقيقة وحاول مجدداً (خطأ 429)' });
+    if (msg.includes('401') || msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('invalid api key'))
+      return res.status(200).json({ success: false, message: '🔑 المفتاح غير صحيح — تأكد من المفتاح في الإعدادات' });
+    if (msg.includes('مفتاح API غير موجود') || msg.includes('أضف مفتاح'))
+      return res.status(200).json({ success: false, message: '🔑 ' + msg });
+    if (msg.includes('403'))
+      return res.status(200).json({ success: false, message: '🚫 الوصول مرفوض — تأكد من صلاحيات المفتاح' });
+    res.status(200).json({ success: false, message: msg });
+  }
 });
 
 // ─── LEARN STYLE ──────────────────────────────────────────────────────
