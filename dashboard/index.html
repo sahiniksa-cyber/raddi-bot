@@ -1027,14 +1027,9 @@ async function poll(){
     document.getElementById('stReplies').textContent=d.totalChatsHandled||0;
     if(d.status==='qr_ready'){
       const img=document.getElementById('qrImg');
-      if(img&&d.qrDataUrl)img.src=d.qrDataUrl;
-      else if(img&&!d.qrDataUrl)loadQR();
+      if(img)img.src='/api/qr-image?v='+(d.qrVersion||Date.now());
     }
   }catch(_){}
-}
-
-async function loadQR(){
-  try{const d=await fetch('/api/qr').then(r=>r.json());if(d.qr)document.getElementById('qrImg').src=d.qr;}catch(_){}
 }
 
 // ── CONFIG ──

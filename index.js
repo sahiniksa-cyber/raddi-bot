@@ -549,7 +549,7 @@ class UserBot {
     this.testConversations = new Map();
     this.ownerPausedChats = new Map();
     this.botReplyingTo    = new Set(); // ← tracks chats where bot is actively sending a reply
-    this.appState = { status: 'stopped', qrDataUrl: null, phone: null, activeChats: 0, error: null, logs: [] };
+    this.appState = { status: 'stopped', qrString: null, qrVersion: 0, phone: null, activeChats: 0, error: null, logs: [] };
     this.client     = null;
     this.botRunning = false;
     this.lastAIDebug = null;
@@ -1024,7 +1024,7 @@ ${productsBlock}
     this.botRunning = true;
     this.appState.status = 'waiting_qr';
     this.appState.error = null;
-    this.appState.qrDataUrl = null;
+    this.appState.qrString = null;
     this.ownerPausedChats.clear();
     this.botReplyingTo.clear();
     this.log('🚀 جاري تشغيل البوت...');
@@ -1064,15 +1064,14 @@ ${productsBlock}
   async stopBot() {
     clearTimeout(this._retryTimer); // ألغِ أي إعادة محاولة مجدولة
     if (!this.botRunning) {
-      // حتى لو البوت كان متوقفاً، تأكد أن الحالة صحيحة
       this.appState.status = 'stopped';
-      this.appState.qrDataUrl = null;
+      this.appState.qrString = null;
       return;
     }
     this.botRunning = false;
     this.appState.status = 'stopped';
     this.appState.phone = null;
-    this.appState.qrDataUrl = null;
+    this.appState.qrString = null;
     this.log('🛑 تم إيقاف البوت');
     if (this.client) {
       // 6s timeout — destroy can hang if Chrome is slow or has pending requests
@@ -1082,32 +1081,30 @@ ${productsBlock}
   }
 
   attachEvents(c) {
-    c.on('qr', async (qr) => {
-      if (!this.botRunning) return; // تجاهل إذا أوقفه المستخدم أثناء تدمير Chrome
+    c.on('qr', (qr) => {
+      if (!this.botRunning) return;
       this.log('📱 ظهر الباركود!');
       qrcodeTerminal.generate(qr, { small: true });
-      try {
-        this.appState.qrDataUrl = await QRCode.toDataURL(qr, { width: 512, margin: 2, color: { dark: '#000000', light: '#ffffff' }, errorCorrectionLevel: 'H' });
-        if (!this.botRunning) return; // تحقق ثانٍ بعد await
-        this.appState.status = 'qr_ready';
-        this.appState.error = null;
-      } catch (e) { this.log('❌ خطأ QR: ' + e.message); }
+      this.appState.qrString = qr;
+      this.appState.qrVersion = (this.appState.qrVersion || 0) + 1;
+      this.appState.status = 'qr_ready';
+      this.appState.error = null;
     });
 
     c.on('loading_screen', (pct) => {
       if (!this.botRunning) return;
-      this.appState.status = 'connecting'; this.appState.qrDataUrl = null; this.log('⏳ ' + pct + '%');
+      this.appState.status = 'connecting'; this.appState.qrString = null; this.log('⏳ ' + pct + '%');
     });
     c.on('authenticated', () => {
       if (!this.botRunning) return;
-      this.appState.status = 'connecting'; this.appState.qrDataUrl = null; this.log('🔐 تم التحقق');
+      this.appState.status = 'connecting'; this.appState.qrString = null; this.log('🔐 تم التحقق');
     });
 
     c.on('ready', () => {
       if (!this.botRunning) return;
       this.appState.status = 'connected';
       this.appState.phone = c.info?.wid?.user || null;
-      this.appState.qrDataUrl = null;
+      this.appState.qrString = null;
       this.appState.error = null;
       this.log('✅ متصل! رقم: +' + this.appState.phone);
     });
@@ -1438,7 +1435,8 @@ app.post('/api/auth/change-password', async (req, res) => {
 // ─── BOT STATUS ROUTES ────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
   const bot = getUserBot(req.session.userId);
-  res.json({ ...bot.appState, totalChatsHandled: bot.totalChatsHandled, logs: bot.appState.logs.slice(0, 8) });
+  const { qrString, ...state } = bot.appState;
+  res.json({ ...state, totalChatsHandled: bot.totalChatsHandled, logs: bot.appState.logs.slice(0, 8) });
 });
 
 app.get('/api/debug-last', (req, res) => {
@@ -1446,9 +1444,24 @@ app.get('/api/debug-last', (req, res) => {
   res.json(bot.lastAIDebug || { message: 'لا يوجد استدعاء AI بعد' });
 });
 
+app.get('/api/qr-image', async (req, res) => {
+  const bot = getUserBot(req.session.userId);
+  if (!bot.appState.qrString) return res.status(404).end();
+  try {
+    const buf = await QRCode.toBuffer(bot.appState.qrString, {
+      width: 512, margin: 2,
+      color: { dark: '#000000', light: '#ffffff' },
+      errorCorrectionLevel: 'H',
+    });
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-cache, no-store');
+    res.send(buf);
+  } catch (e) { res.status(500).end(); }
+});
+
 app.get('/api/qr', (req, res) => {
   const bot = getUserBot(req.session.userId);
-  res.json({ qr: bot.appState.qrDataUrl || null });
+  res.json({ qr: bot.appState.qrString || null });
 });
 
 // ─── CONFIG ROUTES ────────────────────────────────────────────────────
