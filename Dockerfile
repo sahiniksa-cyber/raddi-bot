@@ -1,30 +1,22 @@
 FROM node:20-slim
 
+# chromium من apt يجلب كل dependencies تلقائياً — لا داعي لتعداد المكتبات يدوياً
 RUN apt-get update && apt-get install -y \
   chromium \
-  fonts-liberation \
-  libappindicator3-1 \
-  libasound2 \
-  libatk-bridge2.0-0 \
-  libatk1.0-0 \
-  libcups2 \
-  libdbus-1-3 \
-  libgbm1 \
-  libgtk-3-0 \
-  libnspr4 \
-  libnss3 \
-  libxcomposite1 \
-  libxdamage1 \
-  libxrandr2 \
-  xdg-utils \
+  fonts-freefont-ttf \
+  ca-certificates \
   --no-install-recommends \
+  && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
+# أخبر Puppeteer يستخدم chromium المثبّت — هذا هو المسار الفعلي على Debian
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV NODE_ENV=production
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm install --production --no-audit --no-fund
 COPY . .
 
 EXPOSE 3000
