@@ -21,9 +21,13 @@ let FileStore; try { FileStore = require('session-file-store')(session); } catch
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function killChrome() {
-  try { execSync('taskkill /F /IM chrome.exe /T 2>nul', { stdio: 'ignore' }); } catch (_) {}
-  try { execSync('taskkill /F /IM chromium.exe /T 2>nul', { stdio: 'ignore' }); } catch (_) {}
-  try { execSync('taskkill /F /IM msedge.exe /T 2>nul', { stdio: 'ignore' }); } catch (_) {}
+  if (process.platform === 'win32') {
+    try { execSync('taskkill /F /IM chrome.exe /T 2>nul', { stdio: 'ignore' }); } catch (_) {}
+    try { execSync('taskkill /F /IM chromium.exe /T 2>nul', { stdio: 'ignore' }); } catch (_) {}
+    try { execSync('taskkill /F /IM msedge.exe /T 2>nul', { stdio: 'ignore' }); } catch (_) {}
+  } else {
+    try { execSync('pkill -f "chromium|chrome|chromium-browser" 2>/dev/null || true', { stdio: 'ignore' }); } catch (_) {}
+  }
 }
 
 function isPrivateUrl(urlStr) {
@@ -1461,7 +1465,7 @@ app.get('/api/qr-image', async (req, res) => {
       errorCorrectionLevel: 'H',
     });
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-cache, no-store');
+    res.setHeader('Cache-Control', 'public, max-age=25');
     res.send(buf);
   } catch (e) { res.status(500).end(); }
 });

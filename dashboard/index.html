@@ -987,14 +987,16 @@ function setModel(m){
 }
 
 // ── STATUS POLL ──
+let lastQrVersion=0;
 async function poll(){
   try{
     const r=await fetch('/api/status');
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
     if(d.logs?.length){const lb=document.getElementById('logsBox');if(lb)lb.innerHTML=d.logs.join('<br>')}
-    if(d.status===lastStatus&&d.status!=='qr_ready')return;
-    lastStatus=d.status;
+    const qv=d.qrVersion||0;
+    if(d.status===lastStatus&&qv===lastQrVersion)return;
+    lastStatus=d.status;lastQrVersion=qv;
     const dot=document.getElementById('sDot'),txt=document.getElementById('sTxt');
     const ctrlTxt=document.getElementById('ctrlStatusTxt'),ctrlDot=document.getElementById('ctrlDot');
     const startBtn=document.getElementById('ctrlStartBtn'),stopBtn=document.getElementById('ctrlStopBtn');
@@ -1025,9 +1027,9 @@ async function poll(){
     }
     document.getElementById('stChats').textContent=d.activeChats||0;
     document.getElementById('stReplies').textContent=d.totalChatsHandled||0;
-    if(d.status==='qr_ready'){
+    if(d.status==='qr_ready'&&qv>0){
       const img=document.getElementById('qrImg');
-      if(img)img.src='/api/qr-image?v='+(d.qrVersion||Date.now());
+      if(img)img.src='/api/qr-image?v='+qv;
     }
   }catch(_){}
 }
