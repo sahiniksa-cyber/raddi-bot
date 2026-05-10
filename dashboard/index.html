@@ -325,6 +325,14 @@ details summary::-webkit-details-marker{display:none}
   </div>
 </div>
 
+<!-- Storage warning banner (shown only if filesystem is ephemeral on Railway) -->
+<div id="storageWarning" style="display:none;background:linear-gradient(135deg,#fef3c7,#fffbeb);border-bottom:1px solid var(--amber-border);padding:12px 24px;font-size:13.5px;color:#78350f;font-weight:600;text-align:center;line-height:1.6">
+  <span style="font-size:18px;margin-left:6px">⚠️</span>
+  <span id="storageWarningText"></span>
+  <a href="https://docs.railway.com/reference/volumes" target="_blank" style="color:#92400e;font-weight:800;text-decoration:underline;margin-right:8px">طريقة الإضافة ↗</a>
+  <button onclick="document.getElementById('storageWarning').style.display='none'" style="background:transparent;border:none;color:#92400e;cursor:pointer;font-size:18px;padding:0 6px;margin-right:6px;font-weight:900" title="إخفاء">×</button>
+</div>
+
 <!-- ══ CONNECT VIEW ══ -->
 <div class="view active" id="view-connect">
 
@@ -1709,8 +1717,20 @@ async function doChangePassword(){
   finally{btn.textContent='🔒 حفظ كلمة المرور الجديدة';}
 }
 
+// ── STORAGE STATUS ──
+async function checkStorageStatus(){
+  try{
+    const r=await fetch('/api/storage-status');
+    const d=await r.json();
+    if(d.warning){
+      document.getElementById('storageWarningText').textContent=d.warning;
+      document.getElementById('storageWarning').style.display='block';
+    }
+  }catch(_){}
+}
+
 // ── INIT ──
-loadConf();poll();loadCosts();loadUserInfo();loadPausedChats();
+loadConf();poll();loadCosts();loadUserInfo();loadPausedChats();checkStorageStatus();
 setInterval(loadPausedChats, 10000);
 setInterval(poll,2000);
 setInterval(loadCosts,15000);

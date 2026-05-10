@@ -78,19 +78,46 @@ function findChrome() {
 }
 
 // ─── DATA PERSISTENCE ─────────────────────────────────────────────────
-const DATA_DIR = process.env.DATA_DIR || __dirname;
-
 const _onRailway = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+
+// Resolve the data directory in this priority:
+//   1. DATA_DIR env var if set (user explicitly configured it)
+//   2. /data if it exists and is writable (Railway Volume convention — auto-detected)
+//   3. App folder (development / no Volume — sessions will be lost on restart)
+const DATA_DIR = (() => {
+  if (process.env.DATA_DIR) return process.env.DATA_DIR;
+  // Auto-detect a mounted Volume at the conventional /data path
+  try {
+    fs.accessSync('/data', fs.constants.W_OK);
+    if (_onRailway) console.log('✅ تم اكتشاف Volume على /data تلقائياً');
+    return '/data';
+  } catch (_) {}
+  return __dirname;
+})();
+
+// Storage health status — exposed via /api/storage-status so the dashboard can warn the user.
+// "ephemeral" means: data lives inside the container and will be lost on every redeploy.
+const storageStatus = {
+  path: DATA_DIR,
+  persistent: DATA_DIR !== __dirname,
+  onRailway: _onRailway,
+  // If we're on Railway but using __dirname, sessions will reset on every push — that's the
+  // exact symptom the user is hitting. Show this prominently in the UI.
+  warning: (_onRailway && DATA_DIR === __dirname)
+    ? 'البيانات تُحفظ داخل الـ container. كل deploy يمسح الجلسة وتحتاج لإعادة مسح الباركود. الحل: أضف Volume على /data في Railway.'
+    : null,
+};
 
 if (DATA_DIR === __dirname) {
   if (_onRailway) {
     console.error('');
     console.error('══════════════════════════════════════════════════════════');
-    console.error('❌  تحذير حرج: DATA_DIR غير مضبوط على Railway!');
-    console.error('   كل بيانات المستخدمين (حسابات، إعدادات، محادثات)');
+    console.error('❌  تحذير حرج: لا يوجد Volume على Railway!');
+    console.error('   كل بيانات المستخدمين (حسابات، إعدادات، جلسة الواتساب)');
     console.error('   ستُمحى عند كل deployment أو إعادة تشغيل.');
-    console.error('   الحل: أضف Volume في Railway على /data');
-    console.error('         ثم أضف متغير: DATA_DIR=/data');
+    console.error('   الحل: في Railway → Service → Settings → Volumes');
+    console.error('         أضف Volume بـ Mount path = /data');
+    console.error('         (لا حاجة لمتغير DATA_DIR — سيُكتشف تلقائياً)');
     console.error('══════════════════════════════════════════════════════════');
     console.error('');
   } else {
@@ -1400,6 +1427,9 @@ app.use(bodyParser.json({ limit: '2mb' }));
 
 // ─── PUBLIC HEALTH ENDPOINT (no auth — Railway uses this) ────────────
 app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// Storage status (also unauthenticated — purely system info, no user data leaks)
+app.get('/api/storage-status', (req, res) => res.json(storageStatus));
 
 // Public routes
 app.use('/fonts', express.static(path.join(__dirname, 'dashboard/fonts')));
