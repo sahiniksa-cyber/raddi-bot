@@ -40,6 +40,8 @@ function findChrome() {
     // Nixpacks / Railway
     '/nix/var/nix/profiles/default/bin/chromium',
     '/run/current-system/sw/bin/chromium',
+    '/usr/local/bin/chromium',
+    '/usr/local/bin/chromium-browser',
     // Linux
     '/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser', '/usr/bin/chromium',
@@ -993,6 +995,7 @@ ${productsBlock}
   // ── WhatsApp Client ──
   createClient() {
     const chromePath = findChrome();
+    this.log(chromePath ? `🌐 Chrome: ${chromePath}` : '⚠️ Chrome: مسار غير معروف — سيستخدم puppeteer الافتراضي');
     const cfg = {
       headless: true,
       args: [
@@ -1004,6 +1007,10 @@ ${productsBlock}
         '--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows',
         '--disable-background-timer-throttling','--disable-hang-monitor',
         '--disable-ipc-flooding-protection',
+        '--disable-software-rasterizer','--ignore-certificate-errors',
+        '--disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process',
+        '--window-size=1280,720',
+        '--shm-size=256mb',
       ],
     };
     if (chromePath) cfg.executablePath = chromePath;
@@ -1038,25 +1045,22 @@ ${productsBlock}
     this.client = this.createClient();
     this.attachEvents(this.client);
     this.client.initialize().catch(err => {
-      if (!this.botRunning) return; // أوقفه المستخدم أثناء التهيئة
-      const isAlreadyRunning = err.message && err.message.includes('already running');
-      if (isAlreadyRunning || retryCount < 1) {
-        // إعادة محاولة تلقائية — حتى مرة واحدة لأخطاء Chrome العشوائية
-        this.log('⚠️ ' + err.message + ' — إعادة المحاولة خلال 4 ثوانٍ...');
-        const stillOtherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
-        if (!stillOtherRunning) { try { killChrome(); } catch (_) {} }
-        this.botRunning = false;
-        this.client = null;
+      if (!this.botRunning) return;
+      const delay = retryCount < 3 ? [4000, 8000, 15000][retryCount] : 0;
+      this.log('⚠️ ' + err.message.substring(0, 120));
+      const stillOtherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
+      if (!stillOtherRunning) { try { killChrome(); } catch (_) {} }
+      this.botRunning = false;
+      this.client = null;
+      if (delay) {
+        this.log(`↩️ إعادة المحاولة ${retryCount + 1}/3 خلال ${delay / 1000}ث...`);
+        this.appState.status = 'waiting_qr';
         clearTimeout(this._retryTimer);
-        this._retryTimer = setTimeout(() => {
-          if (!this.botRunning) this.startBot(retryCount + 1);
-        }, 4000);
+        this._retryTimer = setTimeout(() => { if (!this.botRunning) this.startBot(retryCount + 1); }, delay);
       } else {
         this.appState.status = 'error';
-        this.appState.error = err.message;
-        this.log('❌ ' + err.message);
-        this.botRunning = false;
-        this.client = null;
+        this.appState.error = err.message.substring(0, 200);
+        this.log('❌ فشل التشغيل نهائياً — اضغط "إعادة التشغيل"');
       }
     });
   }
@@ -1244,6 +1248,9 @@ const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { su
 const apiLimiter  = rateLimit({ windowMs: 60 * 1000, max: 60,  message: { success: false, message: 'كثير طلبات — انتظر دقيقة' } });
 
 app.use(bodyParser.json({ limit: '2mb' }));
+
+// ─── PUBLIC HEALTH ENDPOINT (no auth — Railway uses this) ────────────
+app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // Public routes
 app.use('/fonts', express.static(path.join(__dirname, 'dashboard/fonts')));

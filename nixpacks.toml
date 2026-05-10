@@ -15,8 +15,18 @@ nixPkgs = [
   "cairo",
   "expat",
   "fontconfig",
-  "alsa-lib"
+  "alsa-lib",
+  "xorg.libX11",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "mesa"
 ]
+
+[phases.build]
+cmds = ["npm install --production"]
 
 [variables]
 PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
