@@ -1116,41 +1116,84 @@ ${productsBlock}
     this.ownerPausedChats.clear();
     this.botReplyingTo.clear();
     this.processingChats.clear();
-    this.log('🚀 جاري تشغيل البوت...');
+    this.log(`🚀 جاري تشغيل البوت${retryCount > 0 ? ` (محاولة ${retryCount + 1})` : ''}...`);
 
-    // أغلق أي Chrome قديم قبل البدء (فقط إذا لا يوجد مستخدم آخر يعمل)
+    // Always kill stale Chrome processes (only if no other bot is alive — multi-tenant safety)
     const otherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
     if (!otherRunning) {
       try { killChrome(); } catch (_) {}
     }
 
+    // After 2 failed retries the waweb-cache is the most likely culprit (corrupted cache file
+    // makes the WhatsApp Web bootstrap loop forever). Wipe it before this attempt.
+    if (retryCount >= 2) {
+      try {
+        const cachePath = path.join(DATA_DIR, '.waweb-cache');
+        if (fs.existsSync(cachePath)) {
+          fs.rmSync(cachePath, { recursive: true, force: true });
+          this.log('🗑 تم مسح cache التالف (تنظيف عميق بعد عدة محاولات فاشلة)');
+        }
+      } catch (_) {}
+    }
+
     this.client = this.createClient();
     this.attachEvents(this.client);
+
+    // ── Watchdog: if neither qr nor ready fires within 90s, the Chrome page is hung
+    //    silently (common on Railway cold-start). Force a restart instead of waiting forever.
+    clearTimeout(this._watchdogTimer);
+    this._watchdogTimer = setTimeout(() => {
+      if (!this.botRunning) return;
+      const s = this.appState.status;
+      // If we made it to QR or further, watchdog isn't needed anymore (it should have been cleared)
+      if (s === 'qr_ready' || s === 'connecting' || s === 'connected') return;
+      this.log('⏱ انتظرنا 90 ثانية بدون نشاط — Chrome متجمد، إعادة التشغيل تلقائياً');
+      this._scheduleRetry(retryCount, 'watchdog: no QR/ready in 90s');
+    }, 90000);
+
     this.client.initialize().catch(err => {
       if (!this.botRunning) return;
-      const delay = retryCount < 3 ? [4000, 8000, 15000][retryCount] : 0;
-      this.log('⚠️ ' + err.message.substring(0, 120));
-      const stillOtherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
-      if (!stillOtherRunning) { try { killChrome(); } catch (_) {} }
-      const failedClient = this.client;
-      this.botRunning = false;
-      this.client = null;
-      if (failedClient) failedClient.destroy().catch(() => {});
-      if (delay) {
-        this.log(`↩️ إعادة المحاولة ${retryCount + 1}/3 خلال ${delay / 1000}ث...`);
-        this.appState.status = 'waiting_qr';
-        clearTimeout(this._retryTimer);
-        this._retryTimer = setTimeout(() => { if (!this.botRunning) this.startBot(retryCount + 1); }, delay);
-      } else {
-        this.appState.status = 'error';
-        this.appState.error = err.message.substring(0, 200);
-        this.log('❌ فشل التشغيل نهائياً — اضغط "إعادة التشغيل"');
-      }
+      this.log('⚠️ فشل initialize: ' + err.message.substring(0, 120));
+      this._scheduleRetry(retryCount, err.message);
     });
+  }
+
+  _scheduleRetry(retryCount, reason) {
+    clearTimeout(this._watchdogTimer);
+    if (!this.botRunning) return;
+
+    const MAX_RETRIES = 4;
+    const delays = [3000, 6000, 12000, 20000]; // total ~41s spread
+    const delay = retryCount < MAX_RETRIES ? delays[retryCount] : 0;
+
+    // Tear down the failed client (with a destroy timeout so we don't hang here)
+    const failedClient = this.client;
+    this.botRunning = false;
+    this.botReady = false;
+    this.client = null;
+    if (failedClient) {
+      Promise.race([failedClient.destroy(), new Promise(r => setTimeout(r, 4000))]).catch(() => {});
+    }
+
+    // Force-kill Chrome before next attempt
+    const otherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
+    if (!otherRunning) { try { killChrome(); } catch (_) {} }
+
+    if (delay) {
+      this.log(`↩️ إعادة المحاولة ${retryCount + 1}/${MAX_RETRIES} خلال ${delay / 1000}ث (السبب: ${String(reason).substring(0, 70)})...`);
+      this.appState.status = 'waiting_qr';
+      clearTimeout(this._retryTimer);
+      this._retryTimer = setTimeout(() => { if (!this.botRunning) this.startBot(retryCount + 1); }, delay);
+    } else {
+      this.appState.status = 'error';
+      this.appState.error = `لم يتمكن البوت من التشغيل بعد ${MAX_RETRIES} محاولات. جرب: امسح الجلسة ثم اضغط تشغيل من جديد.`;
+      this.log(`❌ فشل التشغيل نهائياً بعد ${MAX_RETRIES} محاولات (آخر سبب: ${String(reason).substring(0, 80)})`);
+    }
   }
 
   async stopBot() {
     clearTimeout(this._retryTimer); // ألغِ أي إعادة محاولة مجدولة
+    clearTimeout(this._watchdogTimer); // ألغِ الـ watchdog إن كان نشطاً
     if (!this.botRunning) {
       this.appState.status = 'stopped';
       this.appState.qrString = null;
@@ -1173,6 +1216,7 @@ ${productsBlock}
   attachEvents(c) {
     c.on('qr', (qr) => {
       if (!this.botRunning) return;
+      clearTimeout(this._watchdogTimer); // QR fired — bot is responsive, no need to watchdog the boot
       this.log('📱 ظهر الباركود!');
       qrcodeTerminal.generate(qr, { small: true });
       this.appState.qrString = qr;
@@ -1200,6 +1244,7 @@ ${productsBlock}
 
     c.on('ready', () => {
       if (!this.botRunning) return;
+      clearTimeout(this._watchdogTimer); // ready event — clear any pending watchdog
       this.botReady = true;
       this.appState.status = 'connected';
       this.appState.phone = c.info?.wid?.user || null;
