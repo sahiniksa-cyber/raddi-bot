@@ -580,6 +580,10 @@ class UserBot {
     this.testConversations = new Map();
     this.ownerPausedChats = new Map();
     this.botReplyingTo    = new Set(); // ← tracks chats where bot is actively sending a reply
+    this.handledMessageIds = new Set(); // dedup: WhatsApp sometimes delivers the same msg twice
+    this.lastReplyByChat = new Map(); // sender → last reply text, prevents identical back-to-back replies
+    this.processingChats = new Set(); // prevents concurrent handleMessage races for same sender
+    this.botReady = false; // sticky flag set on `ready` — guards against late loading_screen flipping status back
     this.appState = { status: 'stopped', qrString: null, qrVersion: 0, phone: null, activeChats: 0, error: null, logs: [] };
     this.client     = null;
     this.botRunning = false;
@@ -963,13 +967,37 @@ ${productsBlock}
     const text = msg.body?.trim();
     if (!text) return;
 
-    if (this.appState.status === 'connecting' || this.appState.status === 'disconnected') {
-      this.appState.status = 'connected';
-      if (!this.appState.phone && this.client?.info?.wid?.user) this.appState.phone = this.client.info.wid.user;
-      this.log('✅ تم التأكد: البوت متصل ويستقبل الرسائل');
+    // ── Dedup: WhatsApp can re-deliver the same message after reconnect/sync ──
+    const msgId = msg.id?._serialized || msg.id?.id;
+    if (msgId) {
+      if (this.handledMessageIds.has(msgId)) {
+        this.log(`⏭ رسالة مكررة (نفس الـ ID) — تجاهل`);
+        return;
+      }
+      this.handledMessageIds.add(msgId);
+      // bound the set so it doesn't grow forever
+      if (this.handledMessageIds.size > 800) {
+        const arr = Array.from(this.handledMessageIds);
+        this.handledMessageIds = new Set(arr.slice(-400));
+      }
     }
 
     const sender = msg.from;
+
+    // ── Concurrency guard: if a previous reply for this sender is still being generated, queue here ──
+    if (this.processingChats.has(sender)) {
+      this.log(`⏳ ${sender.replace('@c.us', '').replace('@lid', '')} — رد آخر قيد المعالجة، تجاهل التكرار`);
+      return;
+    }
+
+    // If WhatsApp is sending us messages, we ARE connected — fix any stale flag
+    if (this.appState.status !== 'connected' && this.client?.info?.wid?.user) {
+      this.appState.status = 'connected';
+      this.botReady = true;
+      this.appState.phone = this.client.info.wid.user;
+      this.log('✅ تم التأكد: البوت متصل ويستقبل الرسائل');
+    }
+
     if (this.isChatPaused(sender)) {
       this.log(`⏸ ${sender.replace('@c.us', '').replace('@lid', '')} — البوت صامت (المالك يرد)`);
       return;
@@ -977,6 +1005,7 @@ ${productsBlock}
 
     this.log('📨 ' + sender.replace('@c.us', '').replace('@lid', '') + ': ' + text.substring(0, 60));
 
+    this.processingChats.add(sender);
     try {
       const kw = this.checkKeywords(text);
       if (kw) {
@@ -984,6 +1013,7 @@ ${productsBlock}
         const h = this.conversations.get(sender);
         h.push({ role: 'user', content: text });
         h.push({ role: 'assistant', content: kw });
+        this.lastReplyByChat.set(sender, kw);
         await this.humanLikeReply(msg, kw);
         return;
       }
@@ -1005,8 +1035,25 @@ ${productsBlock}
       const memSize = Math.max(2, parseInt(this.config.memoryMessages) || 50);
       if (history.length > memSize) history.splice(0, history.length - memSize);
 
-      const reply = await this.getAIReply(history, { isFirstMsg });
+      const reply = (await this.getAIReply(history, { isFirstMsg }) || '').trim();
+
+      // Empty reply: stay silent (don't send a blank message — that fails on WhatsApp anyway)
+      if (!reply) {
+        this.log('⚠️ الـ AI رد بنص فارغ — لن يُرسل شيء (سيُحاول مع الرسالة التالية)');
+        history.pop(); // remove the unanswered user msg so the next message gets a fresh attempt
+        return;
+      }
+
+      // Anti-repetition: if identical to the last reply we sent in this chat, skip
+      const lastReply = this.lastReplyByChat.get(sender);
+      if (lastReply && lastReply === reply) {
+        this.log('⚠️ الـ AI أعاد نفس الرد السابق — لن يُرسل لتجنب التكرار');
+        history.pop();
+        return;
+      }
+
       history.push({ role: 'assistant', content: reply });
+      this.lastReplyByChat.set(sender, reply);
       this.appState.activeChats = this.conversations.size;
       this.totalChatsHandled++;
       this.saveConversations();
@@ -1015,9 +1062,14 @@ ${productsBlock}
       this.log('✅ رد: ' + reply.substring(0, 70));
     } catch (err) {
       this.log('❌ خطأ في الرد على ' + sender.replace('@c.us', '').replace('@lid', '') + ': ' + err.message);
-      // دائماً يرسل رسالة — لا يصمت أبداً
-      const fallback = this.config.errorMessage?.trim() || 'معذرة، حدث خطأ تقني مؤقت. حاول مجدداً بعد قليل.';
-      try { await this.humanLikeReply(msg, fallback); } catch (_) {}
+      // Only send a fallback if the user explicitly configured one — silence is better than a confusing
+      // "حدث خطأ" that makes the bot feel broken to the customer.
+      const fallback = this.config.errorMessage?.trim();
+      if (fallback) {
+        try { await this.humanLikeReply(msg, fallback); } catch (_) {}
+      }
+    } finally {
+      this.processingChats.delete(sender);
     }
   }
 
@@ -1057,11 +1109,13 @@ ${productsBlock}
   startBot(retryCount = 0) {
     if (this.botRunning) { this.log('⚠️ البوت يعمل بالفعل'); return; }
     this.botRunning = true;
+    this.botReady = false;
     this.appState.status = 'waiting_qr';
     this.appState.error = null;
     this.appState.qrString = null;
     this.ownerPausedChats.clear();
     this.botReplyingTo.clear();
+    this.processingChats.clear();
     this.log('🚀 جاري تشغيل البوت...');
 
     // أغلق أي Chrome قديم قبل البدء (فقط إذا لا يوجد مستخدم آخر يعمل)
@@ -1103,9 +1157,11 @@ ${productsBlock}
       return;
     }
     this.botRunning = false;
+    this.botReady = false;
     this.appState.status = 'stopped';
     this.appState.phone = null;
     this.appState.qrString = null;
+    this.processingChats.clear();
     this.log('🛑 تم إيقاف البوت');
     if (this.client) {
       // 6s timeout — destroy can hang if Chrome is slow or has pending requests
@@ -1127,15 +1183,24 @@ ${productsBlock}
 
     c.on('loading_screen', (pct) => {
       if (!this.botRunning) return;
+      // Don't flip back to "connecting" once we've actually connected — WhatsApp Web
+      // sometimes emits loading_screen for background syncs after `ready`, which made
+      // the badge stuck on the hourglass even though the bot was working fine.
+      if (this.botReady && this.appState.status === 'connected') {
+        this.log('🔄 مزامنة في الخلفية ' + pct + '% (متصل)');
+        return;
+      }
       this.appState.status = 'connecting'; this.appState.qrString = null; this.log('⏳ ' + pct + '%');
     });
     c.on('authenticated', () => {
       if (!this.botRunning) return;
+      if (this.botReady && this.appState.status === 'connected') return; // already up
       this.appState.status = 'connecting'; this.appState.qrString = null; this.log('🔐 تم التحقق');
     });
 
     c.on('ready', () => {
       if (!this.botRunning) return;
+      this.botReady = true;
       this.appState.status = 'connected';
       this.appState.phone = c.info?.wid?.user || null;
       this.appState.qrString = null;
@@ -1144,6 +1209,7 @@ ${productsBlock}
     });
 
     c.on('auth_failure', (m) => {
+      this.botReady = false;
       this.appState.status = 'error'; this.appState.error = 'فشل التحقق: ' + m; this.botRunning = false;
       this.log('❌ فشل التحقق — امسح الجلسة وحاول مجدداً');
       try { fs.rmSync(this.sessionPath, { recursive: true, force: true }); } catch (_) {}
@@ -1151,6 +1217,7 @@ ${productsBlock}
 
     c.on('disconnected', (r) => {
       if (!this.botRunning) return;
+      this.botReady = false;
       this.appState.status = 'disconnected';
       this.appState.phone = null;
       this.log('⚠️ انقطع (' + r + ') — إعادة التشغيل خلال 5ث...');
@@ -1996,12 +2063,35 @@ app.listen(PORT, () => console.log('🌐 ردّي — لوحة التحكم: htt
 console.log('🚀 ردّي جاهز — اضغط "تشغيل البوت" للبدء');
 
 // ─── AUTO-FIX CONNECTING STATUS ───────────────────────────────────────
-setInterval(() => {
+// Runs every 4s. Cross-checks the WhatsApp Web internal state — if it reports CONNECTED
+// but our flag is still "connecting" or "disconnected" we sync up. This fixes the
+// "stuck on hourglass" issue where loading_screen events sometimes arrive after `ready`.
+setInterval(async () => {
   for (const bot of userBots.values()) {
-    if (bot.botRunning && bot.client && bot.appState.status === 'connecting' && bot.client.info?.wid?.user) {
+    if (!bot.botRunning || !bot.client) continue;
+    // Quick path: if client.info has user data, we're definitely connected
+    const phone = bot.client.info?.wid?.user;
+    if (phone && bot.appState.status !== 'connected' && bot.appState.status !== 'qr_ready') {
       bot.appState.status = 'connected';
-      bot.appState.phone = bot.client.info.wid.user;
+      bot.appState.phone = phone;
+      bot.botReady = true;
       bot.log('✅ تم تصحيح الحالة تلقائياً → متصل');
+      continue;
+    }
+    // Slower path: ask the client directly with a 2s timeout
+    if (bot.appState.status === 'connecting' || bot.appState.status === 'disconnected') {
+      try {
+        const state = await Promise.race([
+          bot.client.getState(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000)),
+        ]).catch(() => null);
+        if (state === 'CONNECTED') {
+          bot.appState.status = 'connected';
+          bot.appState.phone = bot.client.info?.wid?.user || bot.appState.phone;
+          bot.botReady = true;
+          bot.log('✅ تم تصحيح الحالة عبر getState → متصل');
+        }
+      } catch (_) {}
     }
   }
-}, 8000);
+}, 4000);
