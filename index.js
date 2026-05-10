@@ -1563,6 +1563,32 @@ app.post('/api/bot/stop', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/bot/clear-session', async (req, res) => {
+  const bot = getUserBot(req.session.userId);
+  try {
+    // Stop the bot first (with timeout to prevent hanging)
+    if (bot.botRunning) {
+      try { await Promise.race([bot.stopBot(), new Promise(r => setTimeout(r, 5000))]); } catch (_) {}
+    }
+    // Wipe the session folder
+    try { fs.rmSync(bot.sessionPath, { recursive: true, force: true }); } catch (e) { bot.log('⚠️ تعذر حذف مجلد الجلسة: ' + e.message); }
+    // Wipe the .waweb-cache folder if present
+    try {
+      const cachePath = path.join(DATA_DIR, '.waweb-cache');
+      if (fs.existsSync(cachePath)) fs.rmSync(cachePath, { recursive: true, force: true });
+    } catch (_) {}
+    bot.appState.qrString = null;
+    bot.appState.qrVersion = 0;
+    bot.appState.error = null;
+    bot.appState.status = 'stopped';
+    bot.log('🗑 تم مسح جلسة الواتس أب — ستحتاج لمسح الباركود من جديد');
+    res.json({ success: true });
+  } catch (e) {
+    bot.log('❌ فشل مسح الجلسة: ' + e.message);
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 // ─── TOKEN TEST ───────────────────────────────────────────────────────
 app.post('/api/test-token', async (req, res) => {
   const { type, token, managerToken } = req.body;

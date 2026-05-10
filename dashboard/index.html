@@ -12,252 +12,294 @@
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Balck.otf') format('opentype');font-weight:900}
 :root{
   --font:'Fatima','Cairo','Segoe UI',Tahoma,sans-serif;
-  --green:#25d366;--green2:#128c7e;
-  --bg:#0a0e1a;--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.08);
+  --green:#16a34a;--green2:#15803d;--green-light:#22c55e;
+  --green-bg:#f0fdf4;--green-border:#bbf7d0;
+  --bg:#f8fafc;--bg-soft:#f1f5f9;
+  --card:#ffffff;--card-soft:#fafbfc;
+  --border:#e5e7eb;--border-strong:#d1d5db;
+  --text:#0f172a;--text-2:#1e293b;
+  --text-muted:#475569;--text-soft:#64748b;--text-dim:#94a3b8;
+  --red:#dc2626;--red-soft:#ef4444;--red-bg:#fef2f2;--red-border:#fecaca;
+  --amber:#d97706;--amber-soft:#f59e0b;--amber-bg:#fffbeb;--amber-border:#fde68a;
+  --indigo:#4f46e5;--indigo-soft:#6366f1;--indigo-bg:#eef2ff;--indigo-border:#c7d2fe;
+  --purple:#7c3aed;--purple-bg:#f5f3ff;--purple-border:#ddd6fe;
+  --sky:#0284c7;--sky-soft:#0ea5e9;
+  --shadow-xs:0 1px 2px rgba(15,23,42,.04);
+  --shadow-sm:0 1px 3px rgba(15,23,42,.06),0 1px 2px rgba(15,23,42,.04);
+  --shadow:0 4px 6px -1px rgba(15,23,42,.05),0 2px 4px -2px rgba(15,23,42,.04);
+  --shadow-lg:0 10px 20px -5px rgba(15,23,42,.08),0 4px 8px -4px rgba(15,23,42,.04);
+  --shadow-xl:0 20px 30px -10px rgba(15,23,42,.1),0 8px 16px -8px rgba(15,23,42,.05);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:var(--font);background:var(--bg);color:#e2e8f0;min-height:100vh}
+html,body{background:var(--bg)}
+body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 
 /* TOP BAR */
-.topbar{background:rgba(10,14,26,.92);border-bottom:1px solid var(--border);padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;backdrop-filter:blur(20px)}
-.logo{font-size:24px;font-weight:900;background:linear-gradient(135deg,var(--green),#a3e635);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.02em}
-.nav-tabs{display:flex;gap:4px}
-.tab{padding:7px 16px;border-radius:10px;border:none;background:transparent;color:#64748b;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s}
-.tab.active{background:rgba(37,211,102,.12);color:var(--green)}
-.tab:hover:not(.active){background:rgba(255,255,255,.05);color:#e2e8f0}
-.conn-badge{display:flex;align-items:center;gap:7px;padding:6px 14px;border-radius:99px;background:var(--card);font-family:var(--font);font-size:13px;font-weight:700;border:1px solid var(--border)}
-.dot{width:9px;height:9px;border-radius:50%;background:#475569;flex-shrink:0;transition:background .3s}
-.dot.blink{animation:blink 1s infinite;background:#ef4444}
-.dot.green{background:var(--green);box-shadow:0 0 10px var(--green);animation:none}
-.dot.yellow{background:#f59e0b;animation:blink 1s infinite}
-.dot.gray{background:#475569;animation:none}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.topbar{background:#ffffff;border-bottom:1px solid var(--border);padding:0 28px;height:64px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;box-shadow:var(--shadow-xs)}
+.logo{font-size:26px;font-weight:900;background:linear-gradient(135deg,var(--green),var(--green-light));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.025em}
+.nav-tabs{display:flex;gap:2px;background:var(--bg-soft);padding:4px;border-radius:12px}
+.tab{padding:8px 18px;border-radius:9px;border:none;background:transparent;color:var(--text-soft);font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .18s}
+.tab.active{background:#ffffff;color:var(--green);box-shadow:var(--shadow-sm)}
+.tab:hover:not(.active){color:var(--text-2)}
+.conn-badge{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;background:var(--card);font-family:var(--font);font-size:13px;font-weight:700;color:var(--text-2);border:1px solid var(--border);box-shadow:var(--shadow-xs)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--text-dim);flex-shrink:0;transition:background .3s}
+.dot.blink{animation:blink 1s infinite;background:var(--red-soft)}
+.dot.green{background:var(--green-light);box-shadow:0 0 0 3px var(--green-bg);animation:none}
+.dot.yellow{background:var(--amber-soft);animation:blink 1s infinite}
+.dot.gray{background:var(--text-dim);animation:none}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
 
-.view{display:none;animation:fadeIn .3s ease}
+.user-pill{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;background:var(--card);border:1px solid var(--border);font-size:13px;font-weight:700;color:var(--text-muted);box-shadow:var(--shadow-xs)}
+.user-pill button{background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:14px;padding:0 2px;transition:color .2s}
+.user-pill button:hover{color:var(--red-soft) !important}
+
+.view{display:none;animation:fadeIn .25s ease}
 .view.active{display:block}
-@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 
 /* SCREENS */
-.cscreen{min-height:calc(100vh - 58px);display:flex;align-items:center;justify-content:center;padding:28px 20px}
-.ccard{background:var(--card);border:1px solid var(--border);border-radius:28px;padding:36px;max-width:440px;width:100%;text-align:center}
-.stop-card{background:rgba(30,41,59,.5);border:1.5px solid rgba(71,85,105,.25);border-radius:28px;padding:44px 36px;max-width:440px;width:100%;text-align:center}
-.conn-card{background:rgba(37,211,102,.05);border:1.5px solid rgba(37,211,102,.2);border-radius:28px;padding:36px;max-width:440px;width:100%;text-align:center}
-.err-card{background:rgba(239,68,68,.05);border:1.5px solid rgba(239,68,68,.22);border-radius:28px;padding:36px;max-width:480px;width:100%;text-align:center}
-.ctitle{font-size:22px;font-weight:900;color:#fff;margin-bottom:8px}
-.csub{font-size:14px;color:#64748b;line-height:1.7;margin-bottom:22px}
-.spin{width:52px;height:52px;border-radius:50%;border:3px solid rgba(37,211,102,.1);border-top-color:var(--green);animation:spin .85s linear infinite;margin:0 auto 16px}
+.cscreen{min-height:calc(100vh - 64px);display:flex;align-items:center;justify-content:center;padding:32px 20px}
+.ccard{background:var(--card);border:1px solid var(--border);border-radius:24px;padding:40px;max-width:460px;width:100%;text-align:center;box-shadow:var(--shadow-lg)}
+.stop-card{background:var(--card);border:1px solid var(--border);border-radius:24px;padding:48px 40px;max-width:460px;width:100%;text-align:center;box-shadow:var(--shadow-lg)}
+.conn-card{background:linear-gradient(135deg,var(--green-bg) 0%,#ffffff 100%);border:1px solid var(--green-border);border-radius:24px;padding:40px;max-width:460px;width:100%;text-align:center;box-shadow:var(--shadow-lg)}
+.err-card{background:linear-gradient(135deg,var(--red-bg) 0%,#ffffff 100%);border:1px solid var(--red-border);border-radius:24px;padding:40px;max-width:500px;width:100%;text-align:center;box-shadow:var(--shadow-lg)}
+.ctitle{font-size:23px;font-weight:900;color:var(--text);margin-bottom:8px;letter-spacing:-.01em}
+.csub{font-size:14.5px;color:var(--text-soft);line-height:1.7;margin-bottom:24px}
+.spin{width:54px;height:54px;border-radius:50%;border:3px solid var(--green-bg);border-top-color:var(--green);animation:spin .85s linear infinite;margin:0 auto 18px}
+.spin-sm{width:30px;height:30px;border-radius:50%;border:3px solid var(--green-bg);border-top-color:var(--green);animation:spin .85s linear infinite;margin:0 auto 8px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.big-icon{font-size:58px;margin-bottom:14px;display:block}
-.phone-pill{display:inline-flex;align-items:center;gap:8px;background:rgba(37,211,102,.1);border:1px solid rgba(37,211,102,.25);border-radius:99px;padding:10px 26px;font-size:18px;font-weight:900;color:var(--green);direction:ltr;margin-bottom:22px}
-.err-box{background:rgba(0,0,0,.45);border-radius:12px;padding:14px;font-size:12px;color:#fca5a5;text-align:right;font-family:monospace;line-height:1.8;margin-bottom:10px;direction:ltr;word-break:break-all}
-.logs-box{background:rgba(0,0,0,.35);border-radius:12px;padding:12px;font-size:11px;color:#64748b;text-align:right;font-family:monospace;line-height:1.9;max-height:120px;overflow-y:auto;white-space:pre-line}
+.big-icon{font-size:60px;margin-bottom:16px;display:block}
+.phone-pill{display:inline-flex;align-items:center;gap:8px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:99px;padding:11px 28px;font-size:18px;font-weight:900;color:var(--green2);direction:ltr;margin-bottom:24px}
+.err-box{background:#fff7f7;border:1px solid var(--red-border);border-radius:12px;padding:14px;font-size:12px;color:var(--red);text-align:right;font-family:'Consolas',monospace;line-height:1.8;margin-bottom:10px;direction:ltr;word-break:break-all}
+.logs-box{background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:12px;font-size:11px;color:var(--text-muted);text-align:right;font-family:'Consolas',monospace;line-height:1.9;max-height:130px;overflow-y:auto;white-space:pre-line}
 
 /* QR */
-.qr-wrap{width:280px;height:280px;background:#fff;border-radius:20px;margin:0 auto 22px;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 0 4px rgba(37,211,102,.15),0 12px 40px rgba(0,0,0,.4)}
-.qr-wrap img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
+.qr-wrap{width:300px;height:300px;background:#fff;border:2px solid var(--green-border);border-radius:20px;margin:0 auto 24px;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 0 6px var(--green-bg),var(--shadow-lg);position:relative}
+.qr-wrap img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated;transition:opacity .25s}
+.qr-fallback{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff;color:var(--text-soft);font-size:13px;font-weight:600;gap:6px}
 .steps{display:flex;flex-direction:column;gap:8px;text-align:right}
-.step{display:flex;align-items:center;gap:11px;background:rgba(255,255,255,.04);border-radius:12px;padding:10px 14px;font-size:13px;font-weight:600;color:#94a3b8;border:1px solid rgba(255,255,255,.05)}
-.stepn{width:24px;height:24px;border-radius:50%;flex-shrink:0;background:rgba(37,211,102,.15);color:var(--green);font-size:12px;font-weight:900;display:flex;align-items:center;justify-content:center}
+.step{display:flex;align-items:center;gap:12px;background:var(--bg-soft);border-radius:12px;padding:11px 14px;font-size:13px;font-weight:600;color:var(--text-muted);border:1px solid var(--border)}
+.stepn{width:26px;height:26px;border-radius:50%;flex-shrink:0;background:var(--green-bg);color:var(--green2);font-size:12px;font-weight:900;display:flex;align-items:center;justify-content:center;border:1.5px solid var(--green-border)}
 
 /* BUTTONS */
-.green-btn{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;border:none;border-radius:14px;padding:13px 28px;font-family:var(--font);font-size:15px;font-weight:900;cursor:pointer;transition:opacity .2s,transform .2s;margin:4px}
-.green-btn:hover{opacity:.9;transform:translateY(-2px)}
-.red-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(239,68,68,.09);color:#ef4444;border:1.5px solid rgba(239,68,68,.25);border-radius:14px;padding:13px 28px;font-family:var(--font);font-size:15px;font-weight:900;cursor:pointer;transition:all .2s;margin:4px}
-.red-btn:hover{background:rgba(239,68,68,.18)}
-.ghost-btn{display:inline-flex;align-items:center;gap:8px;background:transparent;color:#64748b;border:1.5px solid rgba(255,255,255,.1);border-radius:14px;padding:11px 22px;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;margin:4px}
-.ghost-btn:hover{background:rgba(255,255,255,.05);color:#e2e8f0}
+.green-btn{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;border:none;border-radius:12px;padding:13px 28px;font-family:var(--font);font-size:15px;font-weight:800;cursor:pointer;transition:all .18s;margin:4px;box-shadow:0 1px 3px rgba(22,163,74,.3),0 1px 2px rgba(22,163,74,.15)}
+.green-btn:hover{transform:translateY(-1px);box-shadow:0 4px 8px rgba(22,163,74,.25),0 2px 4px rgba(22,163,74,.15)}
+.green-btn:disabled{opacity:.6;cursor:wait;transform:none}
+.red-btn{display:inline-flex;align-items:center;gap:8px;background:#fff;color:var(--red);border:1px solid var(--red-border);border-radius:12px;padding:12px 26px;font-family:var(--font);font-size:15px;font-weight:800;cursor:pointer;transition:all .18s;margin:4px;box-shadow:var(--shadow-xs)}
+.red-btn:hover{background:var(--red-bg);border-color:var(--red-soft)}
+.ghost-btn{display:inline-flex;align-items:center;gap:8px;background:#fff;color:var(--text-muted);border:1px solid var(--border);border-radius:12px;padding:11px 22px;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .18s;margin:4px;box-shadow:var(--shadow-xs)}
+.ghost-btn:hover{background:var(--bg-soft);color:var(--text-2);border-color:var(--border-strong)}
 
 /* SETTINGS */
-.sw{max-width:880px;margin:0 auto;padding:22px 16px}
-.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
-.stat{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;text-align:center}
-.stat .v{font-size:20px;font-weight:900;color:var(--green)}
-.stat .l{font-size:11px;color:#475569;margin-top:3px}
-.bot-ctrl{display:flex;align-items:center;justify-content:space-between;background:rgba(37,211,102,.04);border:1px solid rgba(37,211,102,.13);border-radius:12px;padding:11px 16px;margin-bottom:14px}
-.bot-ctrl-info{display:flex;align-items:center;gap:9px}
-.bcdot{width:9px;height:9px;border-radius:50%;background:#475569;flex-shrink:0}
-.bcdot.on{background:var(--green);box-shadow:0 0 7px var(--green)}
-.bcdot.pulse{background:#f59e0b;animation:blink 1s infinite}
-.bc-label{font-size:13px;font-weight:700;color:#94a3b8}
+.sw{max-width:920px;margin:0 auto;padding:24px 18px}
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;text-align:center;box-shadow:var(--shadow-xs)}
+.stat .v{font-size:21px;font-weight:900;color:var(--green2);letter-spacing:-.01em}
+.stat .l{font-size:11px;color:var(--text-soft);margin-top:4px;font-weight:600}
+.bot-ctrl{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,var(--green-bg),#fff);border:1px solid var(--green-border);border-radius:14px;padding:13px 18px;margin-bottom:16px;box-shadow:var(--shadow-xs)}
+.bot-ctrl-info{display:flex;align-items:center;gap:10px}
+.bcdot{width:9px;height:9px;border-radius:50%;background:var(--text-dim);flex-shrink:0}
+.bcdot.on{background:var(--green-light);box-shadow:0 0 0 3px var(--green-bg)}
+.bcdot.pulse{background:var(--amber-soft);animation:blink 1s infinite}
+.bc-label{font-size:13.5px;font-weight:700;color:var(--text-2)}
 .ctrl-btns{display:flex;gap:8px}
-.ctrl-start{padding:8px 18px;border-radius:9px;border:none;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;transition:opacity .2s}
-.ctrl-start:hover{opacity:.85}
-.ctrl-stop{padding:8px 18px;border-radius:9px;background:rgba(239,68,68,.09);color:#ef4444;border:1px solid rgba(239,68,68,.22);font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;transition:background .2s}
-.ctrl-stop:hover{background:rgba(239,68,68,.2)}
+.ctrl-start{padding:9px 22px;border-radius:9px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;transition:all .18s;box-shadow:0 1px 2px rgba(22,163,74,.25)}
+.ctrl-start:hover{transform:translateY(-1px)}
+.ctrl-stop{padding:9px 22px;border-radius:9px;background:#fff;color:var(--red);border:1px solid var(--red-border);font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;transition:all .18s}
+.ctrl-stop:hover{background:var(--red-bg)}
 
-.panel{background:var(--card);border:1px solid var(--border);border-radius:18px;margin-bottom:14px;overflow:hidden}
-.phdr{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:15px;font-weight:800}
-.pbdy{padding:16px 18px}
-label{display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:5px;letter-spacing:.05em;text-transform:uppercase}
-input,textarea{width:100%;background:rgba(255,255,255,.05);border:1.5px solid rgba(255,255,255,.09);border-radius:11px;padding:10px 13px;color:#e2e8f0;font-size:14px;font-family:var(--font);outline:none;transition:border-color .2s;margin-bottom:11px}
-input:focus,textarea:focus{border-color:var(--green)}
-textarea{resize:vertical;min-height:80px;line-height:1.7}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:16px;margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow-xs)}
+.phdr{padding:15px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:15px;font-weight:800;color:var(--text-2);background:var(--card-soft)}
+.pbdy{padding:18px 20px}
+label{display:block;font-size:11.5px;font-weight:700;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;text-transform:uppercase}
+input,textarea,select{width:100%;background:#fff;border:1.5px solid var(--border);border-radius:10px;padding:11px 14px;color:var(--text);font-size:14px;font-family:var(--font);outline:none;transition:border-color .18s,box-shadow .18s;margin-bottom:12px}
+input::placeholder,textarea::placeholder{color:var(--text-dim)}
+input:focus,textarea:focus,select:focus{border-color:var(--green-light);box-shadow:0 0 0 3px var(--green-bg)}
+input:disabled,textarea:disabled{background:var(--bg-soft);color:var(--text-soft);cursor:default}
+textarea{resize:vertical;min-height:84px;line-height:1.7}
+select{appearance:none;-webkit-appearance:none;background:#fff url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3e%3cpath d='M6 9l6 6 6-6'/%3e%3c/svg%3e") no-repeat left 14px center/16px;padding-left:38px}
+html[dir="rtl"] select{background-position:left 14px center}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.hint{font-size:12px;color:#475569;margin:-7px 0 11px;line-height:1.6}
-.hint a{color:var(--green);text-decoration:none}
+.hint{font-size:12px;color:var(--text-soft);margin:-7px 0 11px;line-height:1.6}
+.hint a{color:var(--green2);text-decoration:none;font-weight:700}
+.hint a:hover{text-decoration:underline}
 
-/* ── AI MODELS ALL-IN-ONE ── */
+/* ── AI MODELS ── */
 .models-scroll{max-height:420px;overflow-y:auto;margin-bottom:16px;padding-left:4px}
-.models-scroll::-webkit-scrollbar{width:4px}
+.models-scroll::-webkit-scrollbar{width:5px}
 .models-scroll::-webkit-scrollbar-track{background:transparent}
-.models-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
-.prov-hdr{font-size:11px;font-weight:800;color:#475569;letter-spacing:.08em;text-transform:uppercase;padding:12px 4px 6px;display:flex;align-items:center;gap:6px}
-.prov-hdr span{display:inline-block;height:1px;flex:1;background:rgba(255,255,255,.06)}
-.models-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:2px}
-.mc{border:1.5px solid rgba(255,255,255,.08);border-radius:13px;padding:12px 10px;cursor:pointer;transition:all .18s;background:rgba(255,255,255,.02);text-align:center;position:relative}
-.mc:hover{border-color:rgba(37,211,102,.3);background:rgba(37,211,102,.04)}
-.mc.sel{border-color:var(--green);background:rgba(37,211,102,.08)}
-.mc .mcheck{position:absolute;top:7px;left:7px;width:16px;height:16px;border-radius:50%;background:var(--green);display:none;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:900}
+.models-scroll::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px}
+.prov-hdr{font-size:11px;font-weight:800;color:var(--text-soft);letter-spacing:.08em;text-transform:uppercase;padding:14px 4px 8px;display:flex;align-items:center;gap:6px}
+.prov-hdr span{display:inline-block;height:1px;flex:1;background:var(--border)}
+.models-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:4px}
+.mc{border:1.5px solid var(--border);border-radius:13px;padding:14px 11px;cursor:pointer;transition:all .18s;background:#fff;text-align:center;position:relative}
+.mc:hover{border-color:var(--green-light);background:var(--green-bg);transform:translateY(-1px)}
+.mc.sel{border-color:var(--green);background:var(--green-bg);box-shadow:0 0 0 3px rgba(34,197,94,.15)}
+.mc .mcheck{position:absolute;top:8px;left:8px;width:18px;height:18px;border-radius:50%;background:var(--green);display:none;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:900;box-shadow:0 1px 3px rgba(22,163,74,.4)}
 .mc.sel .mcheck{display:flex}
-.mc .mn{font-size:12px;font-weight:800;color:#e2e8f0;margin-bottom:3px;line-height:1.3}
-.mc .md{font-size:10px;color:#64748b;line-height:1.4}
-.mc .mp{font-size:10px;font-weight:700;margin-top:5px;padding:2px 6px;border-radius:5px;display:inline-block}
-.mp.ch{background:rgba(37,211,102,.12);color:var(--green)}
-.mp.md2{background:rgba(245,158,11,.1);color:#f59e0b}
-.mp.hi{background:rgba(99,102,241,.1);color:#818cf8}
-.mp.fr{background:rgba(52,211,153,.15);color:#34d399}
+.mc .mn{font-size:13px;font-weight:800;color:var(--text);margin-bottom:3px;line-height:1.3}
+.mc .md{font-size:11px;color:var(--text-soft);line-height:1.4}
+.mc .mp{font-size:10px;font-weight:700;margin-top:6px;padding:2px 8px;border-radius:6px;display:inline-block}
+.mp.ch{background:var(--green-bg);color:var(--green2);border:1px solid var(--green-border)}
+.mp.md2{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+.mp.hi{background:var(--indigo-bg);color:var(--indigo);border:1px solid var(--indigo-border)}
+.mp.fr{background:var(--green-bg);color:var(--green2);border:1px solid var(--green-border)}
 
 /* Dynamic Key Input */
-.key-area{border-top:1px solid var(--border);padding-top:14px;margin-top:2px}
+.key-area{border-top:1px solid var(--border);padding-top:16px;margin-top:6px}
 .key-area label{margin-bottom:6px}
 .key-row{display:flex;gap:8px;align-items:center}
 .key-row input{margin-bottom:0;flex:1}
-.key-get-btn{padding:10px 16px;border-radius:10px;border:none;background:rgba(37,211,102,.1);color:var(--green);font-family:var(--font);font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;transition:background .2s;flex-shrink:0}
-.key-get-btn:hover{background:rgba(37,211,102,.2)}
+.key-get-btn{padding:11px 16px;border-radius:10px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .18s;flex-shrink:0}
+.key-get-btn:hover{background:var(--green);color:#fff;border-color:var(--green)}
 
 /* Store Scanner */
 .scan-bar{display:flex;gap:8px}
 .scan-bar input{margin-bottom:0;flex:1}
-.scan-btn{padding:10px 18px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;transition:opacity .2s;flex-shrink:0}
-.scan-btn:hover{opacity:.86}
-.scan-btn:disabled{opacity:.45;cursor:not-allowed}
-.scan-result{background:rgba(37,211,102,.04);border:1px solid rgba(37,211,102,.13);border-radius:13px;padding:14px;margin-top:12px;display:none}
+.scan-btn{padding:11px 20px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .18s;flex-shrink:0;box-shadow:0 1px 2px rgba(22,163,74,.25)}
+.scan-btn:hover{transform:translateY(-1px)}
+.scan-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.scan-result{background:var(--green-bg);border:1px solid var(--green-border);border-radius:13px;padding:14px;margin-top:14px;display:none}
 .scan-result.show{display:block}
-.scan-result-hdr{font-size:13px;font-weight:800;color:var(--green);margin-bottom:10px}
-.scan-prods{display:flex;flex-direction:column;gap:5px;max-height:260px;overflow-y:auto}
-.sp{display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.04);border-radius:9px;padding:7px 12px;font-size:12px;gap:8px}
-.sp-name{font-weight:700;color:#e2e8f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sp-price{color:var(--green);font-weight:700;white-space:nowrap}
-.import-btn{width:100%;padding:10px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;margin-top:10px;transition:opacity .2s}
-.import-btn:hover{opacity:.86}
+.scan-result-hdr{font-size:13px;font-weight:800;color:var(--green2);margin-bottom:10px}
+.scan-prods{display:flex;flex-direction:column;gap:5px;max-height:280px;overflow-y:auto}
+.sp{display:flex;align-items:center;justify-content:space-between;background:#fff;border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:12px;gap:8px}
+.sp-name{font-weight:700;color:var(--text-2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-price{color:var(--green2);font-weight:800;white-space:nowrap}
+.import-btn{width:100%;padding:11px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;margin-top:12px;transition:all .18s;box-shadow:0 1px 2px rgba(22,163,74,.25)}
+.import-btn:hover{transform:translateY(-1px)}
 
 /* Keywords & Products */
 .kw-row{display:flex;gap:8px;margin-bottom:8px;align-items:flex-start}
 .kw-row input,.kw-row textarea{margin-bottom:0}
-.kw-row input{flex:1}.kw-row textarea{flex:2;min-height:40px}
-.del-btn{width:32px;height:32px;border-radius:8px;border:none;background:rgba(239,68,68,.1);color:#ef4444;font-size:15px;cursor:pointer;flex-shrink:0;transition:background .2s;display:flex;align-items:center;justify-content:center}
-.del-btn:hover{background:rgba(239,68,68,.2)}
-.add-btn{padding:7px 14px;border-radius:9px;border:none;background:rgba(37,211,102,.1);color:var(--green);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;transition:background .2s}
-.add-btn:hover{background:rgba(37,211,102,.2)}
-.prod-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:12px;margin-bottom:8px}
-.prod-del{background:rgba(239,68,68,.08);color:#ef4444;border:none;border-radius:7px;padding:4px 10px;font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer;margin-top:2px;transition:background .2s}
-.prod-del:hover{background:rgba(239,68,68,.17)}
-.save-btn{width:100%;padding:14px;border-radius:14px;border:none;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-family:var(--font);font-size:16px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .2s,transform .2s;margin-top:4px}
-.save-btn:hover{opacity:.9;transform:translateY(-1px)}
+.kw-row input{flex:1}.kw-row textarea{flex:2;min-height:42px}
+.del-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--red-border);background:var(--red-bg);color:var(--red);font-size:15px;cursor:pointer;flex-shrink:0;transition:all .18s;display:flex;align-items:center;justify-content:center}
+.del-btn:hover{background:var(--red);color:#fff;border-color:var(--red)}
+.add-btn{padding:8px 16px;border-radius:9px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;transition:all .18s}
+.add-btn:hover{background:var(--green);color:#fff;border-color:var(--green)}
+.prod-card{background:var(--card-soft);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:8px}
+.prod-del{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border);border-radius:7px;padding:5px 12px;font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer;margin-top:4px;transition:all .18s}
+.prod-del:hover{background:var(--red);color:#fff;border-color:var(--red)}
+.save-btn{width:100%;padding:15px;border-radius:13px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:16px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .18s;margin-top:6px;box-shadow:0 2px 4px rgba(22,163,74,.25),0 1px 2px rgba(22,163,74,.15)}
+.save-btn:hover{transform:translateY(-1px);box-shadow:0 4px 8px rgba(22,163,74,.3),0 2px 4px rgba(22,163,74,.2)}
+.save-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
 
 /* CHIPS */
-.chips{display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,.03);border:1.5px solid rgba(255,255,255,.07);border-radius:11px;padding:8px;margin-bottom:11px;align-items:center}
+.chips{display:flex;flex-wrap:wrap;gap:6px;background:#fff;border:1.5px solid var(--border);border-radius:11px;padding:8px;margin-bottom:11px;align-items:center}
+.chips:focus-within{border-color:var(--green-light);box-shadow:0 0 0 3px var(--green-bg)}
 .chips input{flex:1;min-width:140px;background:transparent;border:none;margin-bottom:0;padding:6px 8px;font-size:13px}
-.chips input:focus{border:none}
-.chip{display:inline-flex;align-items:center;gap:6px;background:rgba(37,211,102,.1);color:var(--green);border:1px solid rgba(37,211,102,.22);border-radius:8px;padding:5px 10px;font-size:12px;font-weight:700}
-.chip-x{background:transparent;border:none;color:var(--green);cursor:pointer;font-size:14px;padding:0;line-height:1;opacity:.7}
+.chips input:focus{border:none;box-shadow:none}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--green-bg);color:var(--green2);border:1px solid var(--green-border);border-radius:8px;padding:5px 11px;font-size:12px;font-weight:700}
+.chip-x{background:transparent;border:none;color:var(--green2);cursor:pointer;font-size:14px;padding:0;line-height:1;opacity:.7}
 .chip-x:hover{opacity:1}
-.chip-add{padding:5px 12px;border-radius:8px;border:none;background:rgba(37,211,102,.15);color:var(--green);font-family:var(--font);font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0}
-.chip-add:hover{background:rgba(37,211,102,.25)}
+.chip-add{padding:6px 13px;border-radius:8px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0;transition:all .18s}
+.chip-add:hover{background:var(--green);color:#fff}
 
 /* DELAY GRID */
-.delay-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.delay-opt{cursor:pointer;border:1.5px solid rgba(255,255,255,.08);border-radius:11px;padding:10px;background:rgba(255,255,255,.02);transition:all .18s;display:block}
+.delay-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.delay-opt{cursor:pointer;border:1.5px solid var(--border);border-radius:12px;padding:12px;background:#fff;transition:all .18s;display:block}
 .delay-opt input{display:none}
-.delay-opt:hover{border-color:rgba(37,211,102,.3);background:rgba(37,211,102,.04)}
-.delay-opt:has(input:checked){border-color:var(--green);background:rgba(37,211,102,.08)}
+.delay-opt:hover{border-color:var(--green-light);background:var(--green-bg)}
+.delay-opt:has(input:checked){border-color:var(--green);background:var(--green-bg);box-shadow:0 0 0 3px rgba(34,197,94,.15)}
 .delay-opt span{display:flex;flex-direction:column;align-items:center;gap:3px}
-.delay-opt b{font-size:13px;font-weight:800;color:#e2e8f0}
-.delay-opt small{font-size:10px;color:#64748b}
+.delay-opt b{font-size:13px;font-weight:800;color:var(--text)}
+.delay-opt small{font-size:10px;color:var(--text-soft)}
 
 /* ENHANCE BUTTON */
-.enhance-btn{margin-right:auto;padding:4px 10px;border-radius:7px;border:none;background:linear-gradient(135deg,#a855f7,#7c3aed);color:#fff;font-family:var(--font);font-size:11px;font-weight:800;cursor:pointer;transition:opacity .2s;float:left;margin-top:-2px}
-.enhance-btn:hover{opacity:.85}
+.enhance-btn{margin-right:auto;padding:5px 11px;border-radius:7px;border:none;background:linear-gradient(135deg,#a855f7,var(--purple));color:#fff;font-family:var(--font);font-size:11px;font-weight:800;cursor:pointer;transition:all .18s;float:left;margin-top:-2px;box-shadow:0 1px 2px rgba(124,58,237,.25)}
+.enhance-btn:hover{transform:translateY(-1px)}
 .enhance-btn:disabled{opacity:.5;cursor:wait}
 label{display:flex;align-items:center}
 
 /* TOKEN TEST BUTTON */
-.test-token-btn{padding:8px 14px;border-radius:9px;border:none;background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.25);font-family:var(--font);font-size:12px;font-weight:700;cursor:pointer;transition:background .2s;margin-top:-6px;margin-bottom:8px}
-.test-token-btn:hover{background:rgba(99,102,241,.22)}
+.test-token-btn{padding:9px 14px;border-radius:9px;border:1px solid var(--indigo-border);background:var(--indigo-bg);color:var(--indigo);font-family:var(--font);font-size:12px;font-weight:700;cursor:pointer;transition:all .18s;margin-top:-6px;margin-bottom:8px}
+.test-token-btn:hover{background:var(--indigo);color:#fff;border-color:var(--indigo)}
 .token-row{display:flex;gap:8px;align-items:flex-end}
 .token-row input{flex:1}
 
 /* HEALTH CHECK */
-.health-btn{display:flex;align-items:center;gap:8px;padding:11px 18px;border-radius:12px;border:none;background:linear-gradient(135deg,#0ea5e9,#0284c7);color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;transition:opacity .2s;width:100%;justify-content:center;margin-bottom:14px}
-.health-btn:hover{opacity:.9}
-.health-results{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:14px;display:none}
+.health-btn{display:flex;align-items:center;gap:8px;padding:13px 20px;border-radius:13px;border:none;background:linear-gradient(135deg,var(--sky-soft),var(--sky));color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;transition:all .18s;width:100%;justify-content:center;margin-bottom:16px;box-shadow:0 2px 4px rgba(2,132,199,.25)}
+.health-btn:hover{transform:translateY(-1px)}
+.health-btn:disabled{opacity:.65;cursor:wait;transform:none}
+.health-results{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:16px;display:none;box-shadow:var(--shadow-xs)}
 .health-results.show{display:block}
-.health-results-hdr{font-size:14px;font-weight:800;margin-bottom:10px;color:#e2e8f0;display:flex;align-items:center;gap:8px}
-.health-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid rgba(255,255,255,.04);font-size:13px}
+.health-results-hdr{font-size:14px;font-weight:800;margin-bottom:12px;color:var(--text-2);display:flex;align-items:center;gap:8px}
+.health-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--border);font-size:13px}
 .health-row:first-of-type{border-top:none}
-.health-icon{flex-shrink:0;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900}
-.health-icon.ok{background:rgba(37,211,102,.15);color:var(--green)}
-.health-icon.no{background:rgba(239,68,68,.15);color:#ef4444}
-.health-name{font-weight:700;color:#e2e8f0}
-.health-msg{color:#64748b;font-size:12px;margin-right:auto;text-align:left;direction:ltr}
-.health-hint{font-size:11px;color:#f59e0b;margin-top:2px}
+.health-icon{flex-shrink:0;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900}
+.health-icon.ok{background:var(--green-bg);color:var(--green2);border:1px solid var(--green-border)}
+.health-icon.no{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.health-name{font-weight:700;color:var(--text)}
+.health-msg{color:var(--text-soft);font-size:12px;margin-right:auto;text-align:left;direction:ltr}
+.health-hint{font-size:11px;color:var(--amber);margin-top:2px}
 
 /* TEST CHAT */
-.test-chat{background:rgba(0,0,0,.25);border-radius:12px;padding:12px;min-height:180px;max-height:380px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:7px}
-.test-chat:empty::before{content:'💬 ابدأ المحادثة بكتابة رسالة';color:#475569;font-size:13px;text-align:center;display:block;padding:50px 20px}
-.tm{max-width:75%;padding:9px 13px;border-radius:13px;font-size:14px;line-height:1.6;word-wrap:break-word;animation:tmIn .25s ease}
+.test-chat{background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:14px;min-height:180px;max-height:380px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
+.test-chat:empty::before{content:'💬 ابدأ المحادثة بكتابة رسالة';color:var(--text-dim);font-size:13px;text-align:center;display:block;padding:50px 20px}
+.tm{max-width:75%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.6;word-wrap:break-word;animation:tmIn .25s ease}
 @keyframes tmIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.tm.user{background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;align-self:flex-start;border-bottom-right-radius:4px}
-.tm.bot{background:rgba(255,255,255,.06);color:#e2e8f0;align-self:flex-end;border-bottom-left-radius:4px;border:1px solid rgba(255,255,255,.05)}
-.tm.bot.kw{border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.06)}
-.tm.typing{align-self:flex-end;background:rgba(255,255,255,.06);padding:11px 16px}
-.tm.typing::after{content:'• • •';animation:tdots 1.2s infinite;letter-spacing:3px;color:#64748b}
+.tm.user{background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;align-self:flex-start;border-bottom-right-radius:4px;box-shadow:0 1px 2px rgba(22,163,74,.2)}
+.tm.bot{background:#fff;color:var(--text);align-self:flex-end;border-bottom-left-radius:4px;border:1px solid var(--border);box-shadow:var(--shadow-xs)}
+.tm.bot.kw{border-color:var(--amber-border);background:var(--amber-bg)}
+.tm.typing{align-self:flex-end;background:#fff;padding:12px 16px;border:1px solid var(--border)}
+.tm.typing::after{content:'• • •';animation:tdots 1.2s infinite;letter-spacing:3px;color:var(--text-soft)}
 @keyframes tdots{0%,100%{opacity:.3}50%{opacity:1}}
-.tm-meta{font-size:10px;color:#475569;margin-top:3px;direction:ltr}
+.tm-meta{font-size:10px;color:var(--text-dim);margin-top:3px;direction:ltr}
 .test-input{display:flex;gap:8px}
 .test-input input{margin-bottom:0;flex:1}
-.test-send{padding:10px 22px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;transition:opacity .2s;flex-shrink:0}
-.test-send:hover{opacity:.9}
-.test-send:disabled{opacity:.5;cursor:wait}
+.test-send{padding:11px 24px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;transition:all .18s;flex-shrink:0;box-shadow:0 1px 2px rgba(22,163,74,.25)}
+.test-send:hover{transform:translateY(-1px)}
+.test-send:disabled{opacity:.5;cursor:wait;transform:none}
 
 /* TOAST */
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:#fff;padding:11px 22px;border-radius:13px;font-family:var(--font);font-weight:700;font-size:14px;opacity:0;transition:all .3s;pointer-events:none;z-index:9999;white-space:nowrap}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:#fff;padding:12px 24px;border-radius:12px;font-family:var(--font);font-weight:700;font-size:14px;opacity:0;transition:all .3s;pointer-events:none;z-index:9999;white-space:nowrap;box-shadow:0 8px 16px rgba(15,23,42,.15),0 4px 8px rgba(15,23,42,.1)}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-.toast.err{background:#ef4444}
+.toast.err{background:var(--red)}
 
 /* COSTS */
-.cost-pill{display:inline-flex;align-items:center;gap:5px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:3px 10px;font-size:11px;font-weight:700;color:#f59e0b}
+.cost-pill{display:inline-flex;align-items:center;gap:5px;background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:8px;padding:3px 10px;font-size:11px;font-weight:700;color:var(--amber)}
 
 /* TRAIN */
-.train-wrap{max-width:680px;margin:0 auto;padding:22px 16px}
-.train-hero{text-align:center;padding:32px 20px 24px;background:var(--card);border:1px solid var(--border);border-radius:24px;margin-bottom:16px}
-.train-hero h2{font-size:24px;font-weight:900;color:#fff;margin-bottom:8px}
-.train-hero p{font-size:14px;color:#64748b;line-height:1.7;max-width:460px;margin:0 auto 20px}
-.train-start-btn{padding:13px 36px;border-radius:14px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-family:var(--font);font-size:16px;font-weight:900;cursor:pointer;transition:opacity .2s}
-.train-start-btn:hover{opacity:.88}
-.train-progress{height:5px;background:rgba(255,255,255,.06);border-radius:99px;margin-bottom:14px;overflow:hidden}
-.train-progress-bar{height:100%;background:linear-gradient(90deg,#7c3aed,#a855f7);border-radius:99px;transition:width .4s ease}
-.train-step-lbl{font-size:12px;color:#64748b;margin-bottom:10px;text-align:center}
-.train-chat{background:rgba(0,0,0,.2);border-radius:16px;padding:14px;min-height:200px;max-height:440px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
-.train-q{align-self:flex-end;background:rgba(124,58,237,.15);border:1px solid rgba(124,58,237,.25);color:#c4b5fd;border-radius:14px 14px 4px 14px;padding:12px 16px;max-width:85%;font-size:14px;line-height:1.7}
-.train-q .train-hint{font-size:11px;color:#7c3aed;margin-top:6px;opacity:.8}
-.train-a{align-self:flex-start;background:rgba(37,211,102,.1);border:1px solid rgba(37,211,102,.18);color:#86efac;border-radius:14px 14px 14px 4px;padding:10px 14px;max-width:80%;font-size:14px;line-height:1.6}
+.train-wrap{max-width:700px;margin:0 auto;padding:24px 18px}
+.train-hero{text-align:center;padding:36px 22px 28px;background:linear-gradient(135deg,var(--purple-bg) 0%,#fff 100%);border:1px solid var(--purple-border);border-radius:20px;margin-bottom:18px;box-shadow:var(--shadow-sm)}
+.train-hero h2{font-size:25px;font-weight:900;color:var(--text);margin-bottom:10px;letter-spacing:-.01em}
+.train-hero p{font-size:14px;color:var(--text-soft);line-height:1.7;max-width:480px;margin:0 auto 22px}
+.train-start-btn{padding:14px 38px;border-radius:13px;border:none;background:linear-gradient(135deg,#a855f7,var(--purple));color:#fff;font-family:var(--font);font-size:16px;font-weight:900;cursor:pointer;transition:all .18s;box-shadow:0 4px 8px rgba(124,58,237,.3)}
+.train-start-btn:hover{transform:translateY(-1px);box-shadow:0 6px 12px rgba(124,58,237,.35)}
+.train-progress{height:6px;background:var(--bg-soft);border:1px solid var(--border);border-radius:99px;margin-bottom:14px;overflow:hidden}
+.train-progress-bar{height:100%;background:linear-gradient(90deg,var(--purple),#a855f7);border-radius:99px;transition:width .4s ease}
+.train-step-lbl{font-size:12.5px;color:var(--text-soft);margin-bottom:12px;text-align:center;font-weight:600}
+.train-chat{background:var(--bg-soft);border:1px solid var(--border);border-radius:16px;padding:16px;min-height:220px;max-height:460px;overflow-y:auto;margin-bottom:12px;display:flex;flex-direction:column;gap:10px}
+.train-q{align-self:flex-end;background:var(--purple-bg);border:1px solid var(--purple-border);color:var(--purple);border-radius:14px 14px 4px 14px;padding:13px 16px;max-width:85%;font-size:14px;line-height:1.7}
+.train-q .train-hint{font-size:11.5px;color:var(--purple);margin-top:7px;opacity:.85}
+.train-a{align-self:flex-start;background:var(--green-bg);border:1px solid var(--green-border);color:var(--green2);border-radius:14px 14px 14px 4px;padding:11px 14px;max-width:80%;font-size:14px;line-height:1.6}
 .train-input-row{display:flex;gap:8px}
-.train-input-row textarea{flex:1;margin-bottom:0;min-height:60px;max-height:120px;resize:vertical}
-.train-send{padding:12px 20px;border-radius:12px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;align-self:flex-end;transition:opacity .2s;flex-shrink:0}
-.train-send:hover{opacity:.88}
-.train-send:disabled{opacity:.45;cursor:not-allowed}
-.train-result{background:rgba(124,58,237,.06);border:1.5px solid rgba(124,58,237,.22);border-radius:16px;padding:18px;margin-top:10px}
-.train-result-hdr{font-size:15px;font-weight:800;color:#c4b5fd;margin-bottom:8px}
-.train-result textarea{font-size:12px;line-height:1.7;min-height:200px;border-color:rgba(124,58,237,.3);color:#c4b5fd;background:rgba(0,0,0,.3)}
-.train-apply{width:100%;padding:12px;border-radius:11px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-family:var(--font);font-size:15px;font-weight:900;cursor:pointer;margin-top:10px;transition:opacity .2s}
-.train-apply:hover{opacity:.88}
+.train-input-row textarea{flex:1;margin-bottom:0;min-height:62px;max-height:120px;resize:vertical}
+.train-send{padding:13px 22px;border-radius:12px;border:none;background:linear-gradient(135deg,#a855f7,var(--purple));color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;align-self:flex-end;transition:all .18s;flex-shrink:0;box-shadow:0 2px 4px rgba(124,58,237,.25)}
+.train-send:hover{transform:translateY(-1px)}
+.train-send:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.train-result{background:linear-gradient(135deg,var(--purple-bg),#fff);border:1px solid var(--purple-border);border-radius:16px;padding:20px;margin-top:12px;box-shadow:var(--shadow-sm)}
+.train-result-hdr{font-size:15px;font-weight:800;color:var(--purple);margin-bottom:8px}
+.train-result textarea{font-size:12.5px;line-height:1.7;min-height:200px;border-color:var(--purple-border);color:var(--text-2);background:#fff}
+.train-apply{width:100%;padding:13px;border-radius:12px;border:none;background:linear-gradient(135deg,#a855f7,var(--purple));color:#fff;font-family:var(--font);font-size:15px;font-weight:900;cursor:pointer;margin-top:12px;transition:all .18s;box-shadow:0 2px 4px rgba(124,58,237,.25)}
+.train-apply:hover{transform:translateY(-1px)}
+
+/* DETAILS / SUMMARY */
+details{border-radius:11px}
+details summary{cursor:pointer;outline:none;list-style:none}
+details summary::-webkit-details-marker{display:none}
 
 @media(max-width:640px){
-  .g2{grid-template-columns:1fr 1fr}.stats-row{grid-template-columns:repeat(3,1fr)!important}
+  .topbar{padding:0 14px;height:60px}
+  .nav-tabs{gap:1px;padding:3px}
+  .tab{padding:7px 11px;font-size:12px}
+  .logo{font-size:21px}
+  .g2{grid-template-columns:1fr 1fr}
+  .stats-row{grid-template-columns:repeat(2,1fr) !important}
   .models-row{grid-template-columns:1fr 1fr}
-  .nav-tabs .tab{padding:6px 10px;font-size:12px}
-  .logo{font-size:20px}
+  .delay-grid{grid-template-columns:repeat(3,1fr) !important}
+  .ccard,.stop-card,.conn-card,.err-card{padding:28px 22px}
+  .qr-wrap{width:260px;height:260px}
 }
 </style>
 </head>
@@ -276,9 +318,9 @@ label{display:flex;align-items:center}
       <div class="dot gray" id="sDot"></div>
       <span id="sTxt">متوقف</span>
     </div>
-    <div style="display:flex;align-items:center;gap:7px;padding:6px 14px;border-radius:99px;background:var(--card);border:1px solid var(--border);font-size:13px;font-weight:700;color:#64748b">
+    <div class="user-pill">
       <span id="userNameBadge">—</span>
-      <button onclick="doLogout()" title="تسجيل الخروج" style="background:transparent;border:none;color:#475569;cursor:pointer;font-size:14px;padding:0 2px;transition:color .2s" onmouseenter="this.style.color='#ef4444'" onmouseleave="this.style.color='#475569'">⏏</button>
+      <button onclick="doLogout()" title="تسجيل الخروج">⏏</button>
     </div>
   </div>
 </div>
@@ -308,9 +350,15 @@ label{display:flex;align-items:center}
   <div class="cscreen" id="sc-qr" style="display:none">
     <div class="ccard" style="max-width:480px">
       <div class="ctitle">📱 امسح الباركود</div>
-      <div class="csub" style="margin-bottom:8px">افتح واتس أب ← الأجهزة المرتبطة ← ربط جهاز</div>
-      <div style="font-size:12px;color:#f59e0b;margin-bottom:14px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.18);border-radius:9px;padding:7px 14px">⏱ الباركود يتجدد تلقائياً كل 30 ثانية — امسحه بسرعة</div>
-      <div class="qr-wrap"><img id="qrImg" src="" alt="QR Code" style="width:100%;max-width:300px;border-radius:12px;border:3px solid rgba(37,211,102,.3)"></div>
+      <div class="csub" style="margin-bottom:10px">افتح واتس أب ← الأجهزة المرتبطة ← ربط جهاز</div>
+      <div style="font-size:12.5px;color:var(--amber);margin-bottom:16px;background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:10px;padding:8px 14px;font-weight:600">⏱ الباركود يتجدد تلقائياً كل 30 ثانية — امسحه بسرعة</div>
+      <div class="qr-wrap">
+        <img id="qrImg" src="" alt="QR Code" onerror="qrImgError()" onload="qrImgLoaded()">
+        <div id="qrFallback" class="qr-fallback" style="display:none">
+          <div class="spin-sm"></div>
+          <div>جاري توليد الباركود...</div>
+        </div>
+      </div>
       <div class="steps" style="margin-bottom:16px">
         <div class="step"><div class="stepn">1</div><span>افتح واتس أب على جوالك</span></div>
         <div class="step"><div class="stepn">2</div><span>اضغط <strong>⋮</strong> ثم <strong>الأجهزة المرتبطة</strong></span></div>
@@ -331,7 +379,7 @@ label{display:flex;align-items:center}
   <div class="cscreen" id="sc-connected" style="display:none">
     <div class="conn-card">
       <span class="big-icon">✅</span>
-      <div class="ctitle" style="color:var(--green)">ردّي متصل ويعمل!</div>
+      <div class="ctitle" style="color:var(--green2)">ردّي متصل ويعمل!</div>
       <div class="csub">البوت يرد الآن على عملاء متجرك تلقائياً</div>
       <div class="phone-pill" id="phonePill">—</div><br>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">
@@ -344,19 +392,19 @@ label{display:flex;align-items:center}
   <div class="cscreen" id="sc-disconnected" style="display:none">
     <div class="ccard">
       <span class="big-icon">🔌</span>
-      <div class="ctitle" style="color:#f59e0b">انقطع الاتصال</div>
+      <div class="ctitle" style="color:var(--amber)">انقطع الاتصال</div>
       <div class="csub">جاري إعادة الاتصال تلقائياً...</div>
-      <div class="spin" style="margin-top:16px"></div>
+      <div class="spin" style="margin-top:18px"></div>
     </div>
   </div>
 
   <div class="cscreen" id="sc-error" style="display:none">
     <div class="err-card">
-      <span class="big-icon">❌</span>
-      <div class="ctitle" style="color:#ef4444">حدث خطأ</div>
+      <span class="big-icon">⚠️</span>
+      <div class="ctitle" style="color:var(--red)">حدث خطأ</div>
       <div class="err-box" id="errBox">—</div>
       <div class="logs-box" id="errLogs" style="max-height:200px;margin-bottom:10px"></div>
-      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px">
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px">
         <button class="green-btn" onclick="botStart(this)">▶ إعادة التشغيل</button>
         <button class="ghost-btn" onclick="clearSession()">🗑 مسح الجلسة</button>
         <button class="ghost-btn" id="copyErrBtn" onclick="copyErrReport()">📋 نسخ التقرير</button>
@@ -383,12 +431,12 @@ label{display:flex;align-items:center}
 
   <div class="stats-row" style="grid-template-columns:repeat(5,1fr)">
     <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
-    <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:#a78bfa">0</div><div class="l">ردود AI 🤖</div></div>
+    <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
     <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
     <div class="stat"><div class="v" id="stMdl">—</div><div class="l">النموذج</div></div>
     <div class="stat" style="cursor:pointer" onclick="document.querySelector('.panel:has(#costTotal)').scrollIntoView({behavior:'smooth'})" title="اضغط لعرض تفاصيل التكلفة">
-      <div class="v" id="stCost" style="font-size:13px;color:#f59e0b">0 ر.س</div>
-      <div class="l">تكلفة AI <span style="font-size:9px;color:#475569" id="stCostCalls"></span></div>
+      <div class="v" id="stCost" style="font-size:14px;color:var(--amber)">0 ر.س</div>
+      <div class="l">تكلفة AI <span style="font-size:9px;color:var(--text-soft)" id="stCostCalls"></span></div>
     </div>
   </div>
 
@@ -463,9 +511,9 @@ label{display:flex;align-items:center}
           <div class="hint">الصق مفتاحك هنا من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a> — أو استخدم OpenRouter أسفله كبديل</div>
         </div>
         <!-- OpenRouter — مطلوب لـ GPT-4o -->
-        <details style="margin-top:10px" id="orDetails">
-          <summary style="font-size:12px;color:#94a3b8;cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:8px 0">
-            <span style="background:rgba(255,255,255,.06);border-radius:8px;padding:4px 10px">🔑 مفتاح OpenRouter <small style="color:#475569">(مطلوب لـ GPT-4o — وبديل لأي موديل آخر)</small></span>
+        <details style="margin-top:12px" id="orDetails">
+          <summary style="font-size:12.5px;color:var(--text-soft);cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:8px 0">
+            <span style="background:var(--bg-soft);border:1px solid var(--border);border-radius:8px;padding:5px 11px">🔑 مفتاح OpenRouter <small style="color:var(--text-dim)">(مطلوب لـ GPT-4o — وبديل لأي موديل آخر)</small></span>
           </summary>
           <div style="margin-top:8px">
             <div class="key-row">
@@ -509,10 +557,10 @@ label{display:flex;align-items:center}
       </div>
 
       <!-- Advanced API tokens (collapsible) -->
-      <details style="margin-top:10px;background:rgba(255,255,255,.02);border-radius:11px;padding:10px 14px;border:1px solid var(--border)">
-        <summary style="cursor:pointer;font-size:13px;font-weight:700;color:#94a3b8;list-style:none;display:flex;align-items:center;gap:6px">
+      <details style="margin-top:12px;background:var(--card-soft);border-radius:11px;padding:12px 14px;border:1px solid var(--border)">
+        <summary style="cursor:pointer;font-size:13px;font-weight:700;color:var(--text-muted);list-style:none;display:flex;align-items:center;gap:6px">
           <span>⚙️ توكن API (للنتائج الدقيقة من سلة/زد)</span>
-          <span style="margin-right:auto;font-size:11px;color:#475569">اختياري</span>
+          <span style="margin-right:auto;font-size:11px;color:var(--text-dim)">اختياري</span>
         </summary>
         <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
           <p class="hint" style="margin-bottom:10px">إذا عندك تطبيق في سلة أو زد، الصق توكن الوصول هنا للحصول على بيانات أدق</p>
@@ -648,22 +696,22 @@ label{display:flex;align-items:center}
       <textarea id="botInstr" rows="5" placeholder="مثال: ركز على بيع منتج X، إذا سُئلت عن المرتجعات وضّح السياسة، لا تعطي خصومات أكثر من 10% بدون إذن..."></textarea>
 
       <!-- Learn Style from Conversations -->
-      <div style="background:rgba(99,102,241,.06);border:1.5px solid rgba(99,102,241,.2);border-radius:13px;padding:14px 16px;margin-bottom:11px">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <div style="background:var(--indigo-bg);border:1px solid var(--indigo-border);border-radius:13px;padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:8px">
           <div>
-            <div style="font-size:14px;font-weight:800;color:#c4b5fd">🎓 تعلم أسلوبي من محادثاتي</div>
-            <div style="font-size:12px;color:#64748b;margin-top:2px">الذكاء الاصطناعي يحلل ردودك السابقة للعملاء ويطبق نفس أسلوبك بالضبط</div>
+            <div style="font-size:14px;font-weight:800;color:var(--indigo)">🎓 تعلم أسلوبي من محادثاتي</div>
+            <div style="font-size:12px;color:var(--text-soft);margin-top:3px">الذكاء الاصطناعي يحلل ردودك السابقة للعملاء ويطبق نفس أسلوبك بالضبط</div>
           </div>
-          <button id="learnStyleBtn" onclick="learnStyle()" style="padding:9px 18px;border-radius:10px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;transition:opacity .2s;flex-shrink:0">
+          <button id="learnStyleBtn" onclick="learnStyle()" style="padding:10px 18px;border-radius:10px;border:none;background:linear-gradient(135deg,var(--indigo-soft),var(--indigo));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;transition:transform .18s;flex-shrink:0;box-shadow:0 1px 3px rgba(79,70,229,.3)">
             🔍 تحليل أسلوبي
           </button>
         </div>
         <div id="learnStyleResult" style="display:none">
-          <div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:6px" id="learnStyleMeta"></div>
-          <textarea id="learnStyleText" rows="6" style="background:rgba(0,0,0,.3);border-color:rgba(99,102,241,.3);font-size:12px;line-height:1.7;color:#c4b5fd;margin-bottom:8px"></textarea>
+          <div style="font-size:11.5px;font-weight:700;color:var(--text-muted);margin-bottom:6px" id="learnStyleMeta"></div>
+          <textarea id="learnStyleText" rows="6" style="background:#fff;border-color:var(--indigo-border);font-size:12.5px;line-height:1.7;color:var(--text-2);margin-bottom:8px"></textarea>
           <div style="display:flex;gap:8px">
-            <button onclick="applyLearnedStyle()" style="flex:1;padding:9px;border-radius:9px;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer">✅ تطبيق كتعليمات البوت</button>
-            <button onclick="document.getElementById('learnStyleResult').style.display='none'" style="padding:9px 16px;border-radius:9px;border:1.5px solid rgba(255,255,255,.1);background:transparent;color:#64748b;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer">إلغاء</button>
+            <button onclick="applyLearnedStyle()" style="flex:1;padding:10px;border-radius:9px;border:none;background:linear-gradient(135deg,var(--indigo-soft),var(--indigo));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer">✅ تطبيق كتعليمات البوت</button>
+            <button onclick="document.getElementById('learnStyleResult').style.display='none'" style="padding:10px 16px;border-radius:9px;border:1px solid var(--border);background:#fff;color:var(--text-soft);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer">إلغاء</button>
           </div>
         </div>
       </div>
@@ -682,7 +730,7 @@ label{display:flex;align-items:center}
       <button class="add-btn" onclick="resumeAll()" style="background:rgba(37,211,102,.1);color:var(--green)">▶ استئناف الكل</button>
     </div>
     <div class="pbdy">
-      <p class="hint" style="margin:0 0 10px;color:#f59e0b">البوت لا يرد على هذه المحادثات لأنك رديت عليها مباشرة. يرجع تلقائياً بعد 3 ساعات.</p>
+      <p class="hint" style="margin:0 0 10px;color:var(--amber);background:var(--amber-bg);border:1px solid var(--amber-border);padding:10px 13px;border-radius:8px;font-weight:600">البوت لا يرد على هذه المحادثات لأنك رديت عليها مباشرة. يرجع تلقائياً بعد 30 دقيقة.</p>
       <div id="pausedList" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
   </div>
@@ -691,7 +739,7 @@ label{display:flex;align-items:center}
   <div class="panel">
     <div class="phdr">🧠 ذاكرة المحادثة — يفهم العميل ويكمل معاه</div>
     <div class="pbdy">
-      <p class="hint" style="margin:0 0 12px;background:rgba(37,211,102,.05);border-right:3px solid var(--green);padding:10px 12px;border-radius:8px;color:#86efac">
+      <p class="hint" style="margin:0 0 14px;background:var(--green-bg);border-right:3px solid var(--green);padding:11px 13px;border-radius:8px;color:var(--green2);font-weight:600">
         ✨ كل ما زادت الذاكرة، فهم البوت العميل أكثر — يتذكر منتجات سألها قبل، أسئلته السابقة، وتفاصيل محادثته.
       </p>
 
@@ -726,7 +774,7 @@ label{display:flex;align-items:center}
   <div class="panel">
     <div class="phdr">⏱️ تأخير الرد — مهم لتجنب حظر الواتس</div>
     <div class="pbdy">
-      <p class="hint" style="margin:0 0 12px;background:rgba(245,158,11,.06);border-right:3px solid #f59e0b;padding:10px 12px;border-radius:8px;color:#fcd34d">
+      <p class="hint" style="margin:0 0 14px;background:var(--amber-bg);border-right:3px solid var(--amber-soft);padding:11px 13px;border-radius:8px;color:var(--amber);font-weight:600">
         ⚠️ الرد الفوري يكشف البوت ويسبب حظر الحساب — اختر وقتاً مناسباً.
       </p>
       <div class="delay-grid" style="grid-template-columns:repeat(3,1fr)">
@@ -765,27 +813,27 @@ label{display:flex;align-items:center}
   <div class="panel">
     <div class="phdr">
       <span>💰 تكلفة الذكاء الاصطناعي</span>
-      <button class="add-btn" onclick="resetCosts()" style="background:rgba(239,68,68,.1);color:#ef4444">🗑 تصفير</button>
+      <button class="add-btn" onclick="resetCosts()" style="background:var(--red-bg);color:var(--red);border-color:var(--red-border)">🗑 تصفير</button>
     </div>
     <div class="pbdy">
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
-        <div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.18);border-radius:12px;padding:12px;text-align:center">
-          <div style="font-size:22px;font-weight:900;color:#f59e0b" id="costTotal">0.00 ر.س</div>
-          <div style="font-size:11px;color:#475569;margin-top:3px">إجمالي التكلفة</div>
-          <div style="font-size:10px;color:#64748b;margin-top:2px" id="costTotalSAR">بالريال السعودي</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px">
+        <div style="background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:12px;padding:14px;text-align:center">
+          <div style="font-size:22px;font-weight:900;color:var(--amber)" id="costTotal">0.00 ر.س</div>
+          <div style="font-size:11.5px;color:var(--text-soft);margin-top:4px;font-weight:600">إجمالي التكلفة</div>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:2px" id="costTotalSAR">بالريال السعودي</div>
         </div>
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center">
-          <div style="font-size:22px;font-weight:900;color:var(--green)" id="costCalls">0</div>
-          <div style="font-size:11px;color:#475569;margin-top:3px">عدد الرسائل</div>
+        <div style="background:var(--green-bg);border:1px solid var(--green-border);border-radius:12px;padding:14px;text-align:center">
+          <div style="font-size:22px;font-weight:900;color:var(--green2)" id="costCalls">0</div>
+          <div style="font-size:11.5px;color:var(--text-soft);margin-top:4px;font-weight:600">عدد الرسائل</div>
         </div>
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center">
-          <div style="font-size:18px;font-weight:900;color:#818cf8" id="costTokens">—</div>
-          <div style="font-size:11px;color:#475569;margin-top:3px">تكلفة الرسالة</div>
-          <div style="font-size:10px;color:#64748b;margin-top:2px">متوسط لكل رسالة</div>
+        <div style="background:var(--indigo-bg);border:1px solid var(--indigo-border);border-radius:12px;padding:14px;text-align:center">
+          <div style="font-size:18px;font-weight:900;color:var(--indigo)" id="costTokens">—</div>
+          <div style="font-size:11.5px;color:var(--text-soft);margin-top:4px;font-weight:600">تكلفة الرسالة</div>
+          <div style="font-size:10px;color:var(--text-dim);margin-top:2px">متوسط لكل رسالة</div>
         </div>
       </div>
-      <div id="costByModel" style="display:flex;flex-direction:column;gap:5px"></div>
-      <div style="font-size:11px;color:#475569;margin-top:10px" id="costResetAt"></div>
+      <div id="costByModel" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:12px" id="costResetAt"></div>
     </div>
   </div>
 
@@ -800,9 +848,9 @@ label{display:flex;align-items:center}
 
   <!-- Hero (before start) -->
   <div id="trainHero" class="train-hero">
-    <div style="font-size:52px;margin-bottom:10px">🎓</div>
+    <div style="font-size:54px;margin-bottom:12px">🎓</div>
     <h2>دربني — أنا أعلّم البوت أسلوبك</h2>
-    <p>سأسألك <strong>15 سؤالاً</strong> عن طريقة ردّك مع العملاء.<br>من إجاباتك فقط، سأبني للبوت برومنت كامل يحاكي أسلوبك بالضبط — بدون أي إعدادات يدوية.</p>
+    <p>سأسألك <strong>25 سؤالاً</strong> عن طريقة ردّك مع العملاء.<br>من إجاباتك فقط، سأبني للبوت برومنت كامل يحاكي أسلوبك بالضبط — بدون أي إعدادات يدوية.</p>
     <button class="train-start-btn" onclick="startTraining()">▶ ابدأ التدريب</button>
   </div>
 
@@ -815,18 +863,18 @@ label{display:flex;align-items:center}
       <textarea id="trainInput" placeholder="اكتب إجابتك هنا..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitTrainAnswer()}"></textarea>
       <button class="train-send" id="trainSendBtn" onclick="submitTrainAnswer()">إرسال ↵</button>
     </div>
-    <div style="margin-top:8px;text-align:center">
-      <button onclick="resetTraining()" style="background:transparent;border:none;color:#475569;font-family:var(--font);font-size:12px;cursor:pointer">↩ إعادة البدء</button>
+    <div style="margin-top:10px;text-align:center">
+      <button onclick="resetTraining()" style="background:transparent;border:none;color:var(--text-soft);font-family:var(--font);font-size:12.5px;cursor:pointer;text-decoration:underline">↩ إعادة البدء</button>
     </div>
   </div>
 
   <!-- Result -->
   <div id="trainResult" class="train-result" style="display:none">
     <div class="train-result-hdr">✅ البرومنت الجديد — مبني على إجاباتك بالكامل</div>
-    <div style="font-size:12px;color:#64748b;margin-bottom:10px">راجعه وعدّل عليه إذا أردت، ثم اضغط تطبيق</div>
+    <div style="font-size:12.5px;color:var(--text-soft);margin-bottom:10px">راجعه وعدّل عليه إذا أردت، ثم اضغط تطبيق</div>
     <textarea id="trainResultText" rows="12"></textarea>
     <button class="train-apply" onclick="applyTrainResult()">✅ تطبيق كتعليمات البوت والحفظ</button>
-    <button onclick="resetTraining()" style="width:100%;margin-top:8px;padding:10px;border-radius:10px;border:1.5px solid rgba(255,255,255,.1);background:transparent;color:#64748b;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer">↩ إعادة التدريب</button>
+    <button onclick="resetTraining()" style="width:100%;margin-top:10px;padding:11px;border-radius:11px;border:1px solid var(--border);background:#fff;color:var(--text-soft);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer">↩ إعادة التدريب</button>
   </div>
 
 </div>
@@ -843,14 +891,14 @@ label{display:flex;align-items:center}
       <div class="g2">
         <div>
           <label>الاسم</label>
-          <input type="text" id="accName" disabled style="color:#94a3b8;cursor:default">
+          <input type="text" id="accName" disabled>
         </div>
         <div>
           <label>الإيميل</label>
-          <input type="email" id="accEmail" disabled dir="ltr" style="color:#94a3b8;cursor:default">
+          <input type="email" id="accEmail" disabled dir="ltr">
         </div>
       </div>
-      <div style="margin-top:8px;padding:10px 14px;background:rgba(37,211,102,.05);border:1px solid rgba(37,211,102,.12);border-radius:11px;font-size:13px;color:#64748b">
+      <div style="margin-top:8px;padding:11px 14px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:11px;font-size:13px;color:var(--green2);font-weight:600">
         🔒 بياناتك مشفرة ومحفوظة بأمان — لا يمكن لأحد رؤية كلمة مرورك
       </div>
     </div>
@@ -865,19 +913,19 @@ label{display:flex;align-items:center}
         <div style="position:relative">
           <input type="password" id="currPass" placeholder="••••••••" dir="ltr" autocomplete="current-password">
           <button onclick="togglePassDash('currPass',this)" type="button"
-            style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#475569;cursor:pointer;font-size:15px">👁</button>
+            style="position:absolute;left:14px;top:32px;background:transparent;border:none;color:var(--text-soft);cursor:pointer;font-size:15px">👁</button>
         </div>
       </div>
-      <div style="margin-top:14px">
+      <div style="margin-top:8px">
         <label>كلمة المرور الجديدة</label>
         <div style="position:relative">
           <input type="password" id="newPassDash" placeholder="8 أحرف على الأقل" dir="ltr"
                  autocomplete="new-password" oninput="checkPassDash(this.value)">
           <button onclick="togglePassDash('newPassDash',this)" type="button"
-            style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#475569;cursor:pointer;font-size:15px">👁</button>
+            style="position:absolute;left:14px;top:32px;background:transparent;border:none;color:var(--text-soft);cursor:pointer;font-size:15px">👁</button>
         </div>
-        <div id="dashPassBar" style="height:3px;border-radius:3px;margin-top:6px;background:#1e293b;transition:all .3s"></div>
-        <div id="dashPassLbl" style="font-size:10px;color:#475569;margin-top:3px"></div>
+        <div id="dashPassBar" style="height:4px;border-radius:3px;margin-top:6px;background:var(--bg-soft);transition:all .3s"></div>
+        <div id="dashPassLbl" style="font-size:11px;color:var(--text-soft);margin-top:4px;font-weight:600"></div>
       </div>
       <div style="margin-top:14px">
         <label>تأكيد كلمة المرور الجديدة</label>
@@ -885,10 +933,10 @@ label{display:flex;align-items:center}
           <input type="password" id="confPassDash" placeholder="أعد كتابة كلمة المرور" dir="ltr"
                  autocomplete="new-password">
           <button onclick="togglePassDash('confPassDash',this)" type="button"
-            style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#475569;cursor:pointer;font-size:15px">👁</button>
+            style="position:absolute;left:14px;top:32px;background:transparent;border:none;color:var(--text-soft);cursor:pointer;font-size:15px">👁</button>
         </div>
       </div>
-      <button class="save-btn" style="margin-top:18px" onclick="doChangePassword()">
+      <button class="save-btn" style="margin-top:14px" onclick="doChangePassword()">
         <span id="changePassBtnTxt">🔒 حفظ كلمة المرور الجديدة</span>
       </button>
     </div>
@@ -900,11 +948,11 @@ label{display:flex;align-items:center}
     <div class="pbdy">
       <p class="hint" style="margin-bottom:14px">لن يتأثر البوت عند تسجيل الخروج — سيستمر في العمل بشكل طبيعي</p>
       <button onclick="doLogout()"
-        style="width:100%;padding:13px;border-radius:13px;border:1.5px solid rgba(239,68,68,.3);
-               background:rgba(239,68,68,.06);color:#f87171;font-family:var(--font);
-               font-size:15px;font-weight:800;cursor:pointer;transition:all .2s"
-        onmouseenter="this.style.background='rgba(239,68,68,.12)'"
-        onmouseleave="this.style.background='rgba(239,68,68,.06)'">
+        style="width:100%;padding:13px;border-radius:12px;border:1px solid var(--red-border);
+               background:#fff;color:var(--red);font-family:var(--font);
+               font-size:15px;font-weight:800;cursor:pointer;transition:all .18s;box-shadow:var(--shadow-xs)"
+        onmouseenter="this.style.background='var(--red-bg)'"
+        onmouseleave="this.style.background='#fff'">
         🚪 تسجيل الخروج
       </button>
     </div>
@@ -953,8 +1001,16 @@ async function botStop(src){
   setTimeout(poll,800);
 }
 async function clearSession(){
-  try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}
-  toast('🗑 امسح مجلد session يدوياً ثم أعد التشغيل');
+  if(!confirm('سيتم حذف جلسة الواتس أب الحالية وستحتاج لمسح الباركود من جديد. متابعة؟'))return;
+  const btn=event?.target;
+  if(btn){btn.disabled=true;btn.textContent='⏳ جاري المسح...';}
+  try{
+    const r=await fetch('/api/bot/clear-session',{method:'POST'});
+    const d=await r.json();
+    if(d.success){toast('✅ تم مسح الجلسة — اضغط إعادة التشغيل');}
+    else{toast('❌ '+(d.message||'تعذر المسح'),true);}
+  }catch(_){toast('❌ تعذر الاتصال بالسيرفر',true);}
+  finally{if(btn){btn.disabled=false;btn.textContent='🗑 مسح الجلسة';}}
 }
 function copyErrReport(){
   const err=document.getElementById('errBox')?.textContent||'';
@@ -1023,7 +1079,6 @@ async function poll(){
     if(ctrlDot)ctrlDot.className='bcdot '+(s.cd||'');
     if(startBtn)startBtn.style.display=s.showS?'':'none';
     if(stopBtn)stopBtn.style.display=s.showX?'':'none';
-    document.getElementById('stStatus').textContent=s.ctrl;
     if(d.status==='connected'){
       const ph=d.phone?'+'+d.phone:'—';
       ['phonePill','stPhone'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=ph;});
@@ -1036,9 +1091,31 @@ async function poll(){
     document.getElementById('stReplies').textContent=d.totalChatsHandled||0;
     if(d.status==='qr_ready'&&qv>0){
       const img=document.getElementById('qrImg');
-      if(img)img.src='/api/qr-image?v='+qv;
+      const fb=document.getElementById('qrFallback');
+      if(img){
+        if(fb)fb.style.display='flex';
+        img.style.opacity='0';
+        img.src='/api/qr-image?v='+qv+'&t='+Date.now();
+      }
     }
-  }catch(_){}
+  }catch(e){console.error('poll error:',e);}
+}
+
+let _qrRetry=0;
+function qrImgError(){
+  if(_qrRetry>=3)return;
+  _qrRetry++;
+  setTimeout(()=>{
+    const img=document.getElementById('qrImg');
+    if(img&&lastQrVersion>0)img.src='/api/qr-image?v='+lastQrVersion+'&r='+_qrRetry+'&t='+Date.now();
+  },1000*_qrRetry);
+}
+function qrImgLoaded(){
+  _qrRetry=0;
+  const img=document.getElementById('qrImg');
+  const fb=document.getElementById('qrFallback');
+  if(img)img.style.opacity='1';
+  if(fb)fb.style.display='none';
 }
 
 // ── CONFIG ──
@@ -1384,10 +1461,10 @@ async function loadCosts(){
     const bm=document.getElementById('costByModel');bm.innerHTML='';
     for(const[m,v] of Object.entries(d.byModel||{})){
       const row=document.createElement('div');
-      row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.03);border-radius:8px;padding:7px 12px;font-size:12px';
+      row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:var(--card-soft);border:1px solid var(--border);border-radius:9px;padding:9px 13px;font-size:12px;gap:10px;flex-wrap:wrap';
       const mSar=((v.costUSD||0)*3.75).toFixed(4);
       const perMsg=v.calls>0?(((v.costUSD||0)/v.calls)*3.75).toFixed(4):'—';
-      row.innerHTML=`<span style="color:#94a3b8;font-weight:700">${esc(m)}</span><span style="color:#64748b">${v.calls} رسالة</span><span style="color:#818cf8;font-size:11px">${perMsg} ر.س/رسالة</span><span style="color:#f59e0b;font-weight:700">${mSar} ر.س</span>`;
+      row.innerHTML=`<span style="color:var(--text);font-weight:700">${esc(m)}</span><span style="color:var(--text-soft)">${v.calls} رسالة</span><span style="color:var(--indigo);font-size:11px;font-weight:600">${perMsg} ر.س/رسالة</span><span style="color:var(--amber);font-weight:800">${mSar} ر.س</span>`;
       bm.appendChild(row);
     }
   }catch(_){}
@@ -1471,7 +1548,7 @@ function showTrainQuestion(){
   const isFirstInPhase = trainStep===0 || TRAIN_QS[trainStep-1].phase !== q.phase;
   if(isFirstInPhase){
     const hdr=document.createElement('div');
-    hdr.style.cssText=`align-self:center;padding:6px 18px;border-radius:99px;background:${ph.color}22;border:1px solid ${ph.color}44;color:${ph.color};font-size:12px;font-weight:800;margin:4px 0`;
+    hdr.style.cssText=`align-self:center;padding:7px 20px;border-radius:99px;background:${ph.color}1A;border:1px solid ${ph.color}55;color:${ph.color};font-size:12.5px;font-weight:800;margin:6px 0`;
     hdr.textContent=`${ph.icon} ${ph.title}`;
     chat.appendChild(hdr);
   }
@@ -1562,8 +1639,8 @@ async function loadPausedChats(){
     list.innerHTML='';
     d.paused.forEach(p=>{
       const row=document.createElement('div');
-      row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:9px;padding:9px 13px;font-size:13px';
-      row.innerHTML=`<span style="font-weight:700;color:#fcd34d">+${esc(p.sender)}</span><span style="color:#64748b;font-size:11px">يستأنف بعد ${p.remainingMin} دقيقة</span><button onclick="resumeChat('${esc(p.sender)}')" style="padding:4px 10px;border-radius:7px;border:none;background:rgba(37,211,102,.1);color:var(--green);font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer">▶ استئناف</button>`;
+      row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:9px;padding:10px 14px;font-size:13px;gap:8px;flex-wrap:wrap';
+      row.innerHTML=`<span style="font-weight:700;color:var(--amber);direction:ltr">+${esc(p.sender)}</span><span style="color:var(--text-soft);font-size:11px">يستأنف بعد ${p.remainingMin} دقيقة</span><button onclick="resumeChat('${esc(p.sender)}')" style="padding:5px 12px;border-radius:7px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer">▶ استئناف</button>`;
       list.appendChild(row);
     });
   }catch(_){}
@@ -1601,10 +1678,10 @@ function togglePassDash(id,btn){
 }
 function checkPassDash(v){
   const bar=document.getElementById('dashPassBar'),lbl=document.getElementById('dashPassLbl');
-  if(!v){bar.style.background='#1e293b';lbl.textContent='';return;}
+  if(!v){bar.style.background='var(--bg-soft)';lbl.textContent='';return;}
   const strong=v.length>=10&&/[A-Z]/.test(v)&&/[0-9]/.test(v);
   const ok=v.length>=8;
-  bar.style.background=strong?'#25d366':ok?'#f59e0b':'#ef4444';
+  bar.style.background=strong?'var(--green-light)':ok?'var(--amber-soft)':'var(--red-soft)';
   lbl.textContent=strong?'✅ قوية جداً':ok?'⚠️ مقبولة':'❌ ضعيفة — 8 أحرف على الأقل';
 }
 async function doChangePassword(){
@@ -1625,7 +1702,7 @@ async function doChangePassword(){
       document.getElementById('currPass').value='';
       document.getElementById('newPassDash').value='';
       document.getElementById('confPassDash').value='';
-      document.getElementById('dashPassBar').style.background='#1e293b';
+      document.getElementById('dashPassBar').style.background='var(--bg-soft)';
       document.getElementById('dashPassLbl').textContent='';
     } else toast('❌ '+d.message,true);
   }catch(_){toast('❌ تعذر الاتصال بالسيرفر',true);}
