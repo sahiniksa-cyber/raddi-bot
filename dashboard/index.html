@@ -50,7 +50,7 @@ body{font-family:var(--font);background:var(--bg);color:#e2e8f0;min-height:100vh
 .big-icon{font-size:58px;margin-bottom:14px;display:block}
 .phone-pill{display:inline-flex;align-items:center;gap:8px;background:rgba(37,211,102,.1);border:1px solid rgba(37,211,102,.25);border-radius:99px;padding:10px 26px;font-size:18px;font-weight:900;color:var(--green);direction:ltr;margin-bottom:22px}
 .err-box{background:rgba(0,0,0,.45);border-radius:12px;padding:14px;font-size:12px;color:#fca5a5;text-align:right;font-family:monospace;line-height:1.8;margin-bottom:10px;direction:ltr;word-break:break-all}
-.logs-box{background:rgba(0,0,0,.35);border-radius:12px;padding:12px;font-size:11px;color:#64748b;text-align:right;font-family:monospace;line-height:1.9;max-height:120px;overflow-y:auto}
+.logs-box{background:rgba(0,0,0,.35);border-radius:12px;padding:12px;font-size:11px;color:#64748b;text-align:right;font-family:monospace;line-height:1.9;max-height:120px;overflow-y:auto;white-space:pre-line}
 
 /* QR */
 .qr-wrap{width:280px;height:280px;background:#fff;border-radius:20px;margin:0 auto 22px;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 0 4px rgba(37,211,102,.15),0 12px 40px rgba(0,0,0,.4)}
@@ -1000,7 +1000,7 @@ async function poll(){
     const r=await fetch('/api/status');
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
-    if(d.logs?.length){const lb=document.getElementById('logsBox');if(lb)lb.innerHTML=d.logs.join('<br>')}
+    if(d.logs?.length){const lb=document.getElementById('logsBox');if(lb)lb.textContent=d.logs.join('\n')}
     const qv=d.qrVersion||0;
     if(d.status===lastStatus&&qv===lastQrVersion)return;
     lastStatus=d.status;lastQrVersion=qv;
@@ -1030,7 +1030,7 @@ async function poll(){
     }
     if(d.status==='error'){
       const eb=document.getElementById('errBox');if(eb)eb.textContent=d.error||'خطأ غير معروف';
-      if(d.logs){const el=document.getElementById('errLogs');if(el)el.innerHTML=d.logs.join('<br>')}
+      if(d.logs){const el=document.getElementById('errLogs');if(el){el.textContent=d.logs.join('\n');el.scrollTop=0;}}
     }
     document.getElementById('stChats').textContent=d.activeChats||0;
     document.getElementById('stReplies').textContent=d.totalChatsHandled||0;

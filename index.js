@@ -38,15 +38,29 @@ function isPrivateUrl(urlStr) {
 }
 
 function findChrome() {
-  // env var takes priority (Railway, Docker, CI)
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
+  // env var takes priority (Railway, Docker, CI) — but validate the path actually exists
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    const p = process.env.PUPPETEER_EXECUTABLE_PATH;
+    try { if (fs.existsSync(p)) return p; } catch (_) {}
+    console.error(`❌ PUPPETEER_EXECUTABLE_PATH="${p}" — المسار غير موجود! يتم البحث تلقائياً...`);
+  }
+  // On Linux: try 'which' first — faster & catches PATH-based installs (Nixpacks adds to PATH)
+  if (process.platform !== 'win32') {
+    try {
+      const found = execSync(
+        'which chromium-browser chromium google-chrome google-chrome-stable 2>/dev/null | head -1',
+        { stdio: 'pipe', timeout: 5000 }
+      ).toString().trim();
+      if (found) return found;
+    } catch (_) {}
+  }
   const paths = [
-    // Nixpacks / Railway
+    // Nixpacks / Railway — common Nix store symlinks
     '/nix/var/nix/profiles/default/bin/chromium',
     '/run/current-system/sw/bin/chromium',
     '/usr/local/bin/chromium',
     '/usr/local/bin/chromium-browser',
-    // Linux
+    // Linux standard
     '/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser', '/usr/bin/chromium',
     '/snap/bin/chromium',
@@ -85,6 +99,17 @@ if (DATA_DIR === __dirname) {
 } else {
   try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {}
   console.log(`✅ DATA_DIR = ${DATA_DIR}`);
+}
+
+// ─── STARTUP CHROME CHECK ─────────────────────────────────────────────
+{
+  const _cp = findChrome();
+  if (_cp) {
+    console.log(`✅ Chromium: ${_cp}`);
+  } else {
+    console.error('❌ Chromium غير موجود في أي مسار معروف!');
+    console.error('   على Railway: تأكد من nixpacks.toml وأن PUPPETEER_EXECUTABLE_PATH صحيح');
+  }
 }
 
 // ─── USERS ───────────────────────────────────────────────────────────
@@ -1053,8 +1078,10 @@ ${productsBlock}
       this.log('⚠️ ' + err.message.substring(0, 120));
       const stillOtherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
       if (!stillOtherRunning) { try { killChrome(); } catch (_) {} }
+      const failedClient = this.client;
       this.botRunning = false;
       this.client = null;
+      if (failedClient) failedClient.destroy().catch(() => {});
       if (delay) {
         this.log(`↩️ إعادة المحاولة ${retryCount + 1}/3 خلال ${delay / 1000}ث...`);
         this.appState.status = 'waiting_qr';
@@ -1123,10 +1150,17 @@ ${productsBlock}
     });
 
     c.on('disconnected', (r) => {
-      if (!this.botRunning) return; // أوقفه المستخدم — لا داعي لإعادة الاتصال
-      this.appState.status = 'disconnected'; this.appState.phone = null;
-      this.log('⚠️ انقطع (' + r + ') — إعادة الاتصال...');
-      setTimeout(() => { try { if (this.client && this.botRunning) this.client.initialize(); } catch (_) {} }, 5000);
+      if (!this.botRunning) return;
+      this.appState.status = 'disconnected';
+      this.appState.phone = null;
+      this.log('⚠️ انقطع (' + r + ') — إعادة التشغيل خلال 5ث...');
+      // Full restart: نوقف الـ client القديم ونعيد التشغيل من الصفر
+      // (استدعاء initialize() على client منقطع لا يعمل بشكل موثوق)
+      const dyingClient = this.client;
+      this.botRunning = false;
+      this.client = null;
+      if (dyingClient) dyingClient.destroy().catch(() => {});
+      setTimeout(() => { if (!this.botRunning) this.startBot(); }, 5000);
     });
 
     c.on('message', (msg) => this.handleMessage(msg));
