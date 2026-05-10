@@ -305,14 +305,15 @@ label{display:flex;align-items:center}
   </div>
 
   <div class="cscreen" id="sc-qr" style="display:none">
-    <div class="ccard" style="max-width:460px">
+    <div class="ccard" style="max-width:480px">
       <div class="ctitle">📱 امسح الباركود</div>
-      <div class="csub" style="margin-bottom:16px">افتح واتس أب ← الأجهزة المرتبطة ← ربط جهاز</div>
-      <div class="qr-wrap"><img id="qrImg" src="" alt="QR Code"></div>
+      <div class="csub" style="margin-bottom:8px">افتح واتس أب ← الأجهزة المرتبطة ← ربط جهاز</div>
+      <div style="font-size:12px;color:#f59e0b;margin-bottom:14px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.18);border-radius:9px;padding:7px 14px">⏱ الباركود يتجدد تلقائياً كل 30 ثانية — امسحه بسرعة</div>
+      <div class="qr-wrap"><img id="qrImg" src="" alt="QR Code" style="width:100%;max-width:300px;border-radius:12px;border:3px solid rgba(37,211,102,.3)"></div>
       <div class="steps" style="margin-bottom:16px">
         <div class="step"><div class="stepn">1</div><span>افتح واتس أب على جوالك</span></div>
         <div class="step"><div class="stepn">2</div><span>اضغط <strong>⋮</strong> ثم <strong>الأجهزة المرتبطة</strong></span></div>
-        <div class="step"><div class="stepn">3</div><span>اضغط <strong>ربط جهاز</strong> ثم وجّه الكاميرا</span></div>
+        <div class="step"><div class="stepn">3</div><span>اضغط <strong>ربط جهاز</strong> ثم وجّه الكاميرا للباركود</span></div>
       </div>
       <button class="ghost-btn" style="width:100%" onclick="botStop()">⏹ إلغاء وإيقاف</button>
     </div>
@@ -1497,7 +1498,6 @@ loadConf();poll();loadCosts();loadUserInfo();loadPausedChats();
 setInterval(loadPausedChats, 10000);
 setInterval(poll,2000);
 setInterval(loadCosts,15000);
-setInterval(()=>{if(lastStatus==='qr_ready')loadQR();},15000);
 </script>
 </body>
 </html>

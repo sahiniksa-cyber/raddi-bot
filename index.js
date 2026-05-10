@@ -75,7 +75,7 @@ function findUser(email) {
 }
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────
-const OWNER_PAUSE_MS = 3 * 60 * 60 * 1000;
+const OWNER_PAUSE_MS = 30 * 60 * 1000; // 30 دقيقة
 
 const MODEL_PRICES = {
   'gpt-4o-mini':   { in: 0.15,  out: 0.60  },
@@ -650,14 +650,17 @@ class UserBot {
     const delaySec = this.randomDelay();
     this.log(`⏳ سيرد بعد ${delaySec} ثانية (محاكاة إنسان)...`);
 
-    // Show typing indicator before the sleep
+    // Show typing indicator before the sleep — with 5s timeout so it never hangs
     try {
-      const chat = await msg.getChat();
+      const chat = await Promise.race([
+        msg.getChat(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('getChat timeout')), 5000)),
+      ]);
       if (delaySec > 0) await chat.sendStateTyping().catch(() => {});
       if (delaySec > 0) await sleep(delaySec * 1000);
       await chat.clearState().catch(() => {});
     } catch (_) {
-      // If getChat fails, still respect the delay so the human-like timing holds
+      // If getChat fails or times out, still respect the delay
       if (delaySec > 0) await sleep(delaySec * 1000);
     }
 
@@ -875,7 +878,7 @@ ${productsBlock}
     let lastErr;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const res = await openai.chat.completions.create({ model, max_tokens: 800, temperature: 0.7, messages });
+        const res = await openai.chat.completions.create({ model, max_tokens: 800, temperature: 0.7, messages }, { timeout: 30000 });
         const reply = res.choices[0]?.message?.content || '';
         if (res.usage) this.recordUsage(model, res.usage.prompt_tokens || 0, res.usage.completion_tokens || 0);
         if (!reply.trim()) { this.log('⚠️ الـ AI رد بنص فارغ!'); this.lastAIDebug.error = 'empty reply'; }
@@ -972,51 +975,80 @@ ${productsBlock}
     const chromePath = findChrome();
     const cfg = {
       headless: true,
-      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-accelerated-2d-canvas','--no-first-run','--no-zygote','--disable-gpu','--disable-extensions'],
+      args: [
+        '--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas','--no-first-run','--no-zygote',
+        '--disable-gpu','--disable-extensions',
+        '--disable-background-networking','--disable-sync','--disable-translate',
+        '--metrics-recording-only','--safebrowsing-disable-auto-update',
+        '--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows',
+        '--disable-background-timer-throttling','--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+      ],
     };
     if (chromePath) cfg.executablePath = chromePath;
     return new Client({
       authStrategy: new LocalAuth({ dataPath: this.sessionPath }),
       puppeteer: cfg,
       webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1023223821.html',
+        type: 'local',
+        path: path.join(DATA_DIR, '.waweb-cache'),
       },
-      qrMaxRetries: 5,
-      takeoverOnConflict: false,
+      qrMaxRetries: 10,
+      takeoverOnConflict: true,
     });
   }
 
-  startBot() {
+  startBot(retryCount = 0) {
     if (this.botRunning) { this.log('⚠️ البوت يعمل بالفعل'); return; }
     this.botRunning = true;
     this.appState.status = 'waiting_qr';
     this.appState.error = null;
     this.appState.qrDataUrl = null;
-    // Clear any stale paused chats from previous session
     this.ownerPausedChats.clear();
     this.botReplyingTo.clear();
     this.log('🚀 جاري تشغيل البوت...');
+
+    // أغلق أي Chrome قديم قبل البدء (فقط إذا لا يوجد مستخدم آخر يعمل)
+    const otherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
+    if (!otherRunning) {
+      try { killChrome(); } catch (_) {}
+    }
+
     this.client = this.createClient();
     this.attachEvents(this.client);
     this.client.initialize().catch(err => {
-      if (err.message && err.message.includes('already running')) {
-        this.log('⚠️ Chrome قديم — يتم إغلاقه وإعادة المحاولة...');
-        if (!anyBotRunning()) killChrome();
+      if (!this.botRunning) return; // أوقفه المستخدم أثناء التهيئة
+      const isAlreadyRunning = err.message && err.message.includes('already running');
+      if (isAlreadyRunning || retryCount < 1) {
+        // إعادة محاولة تلقائية — حتى مرة واحدة لأخطاء Chrome العشوائية
+        this.log('⚠️ ' + err.message + ' — إعادة المحاولة خلال 4 ثوانٍ...');
+        const stillOtherRunning = [...userBots.values()].some(b => b !== this && b.botRunning);
+        if (!stillOtherRunning) { try { killChrome(); } catch (_) {} }
         this.botRunning = false;
         this.client = null;
-        setTimeout(() => this.startBot(), 3000);
+        clearTimeout(this._retryTimer);
+        this._retryTimer = setTimeout(() => {
+          if (!this.botRunning) this.startBot(retryCount + 1);
+        }, 4000);
       } else {
         this.appState.status = 'error';
         this.appState.error = err.message;
         this.log('❌ ' + err.message);
         this.botRunning = false;
+        this.client = null;
       }
     });
   }
 
   async stopBot() {
-    if (!this.botRunning) return;
+    clearTimeout(this._retryTimer); // ألغِ أي إعادة محاولة مجدولة
+    if (!this.botRunning) {
+      // حتى لو البوت كان متوقفاً، تأكد أن الحالة صحيحة
+      this.appState.status = 'stopped';
+      this.appState.qrDataUrl = null;
+      return;
+    }
     this.botRunning = false;
     this.appState.status = 'stopped';
     this.appState.phone = null;
@@ -1027,7 +1059,6 @@ ${productsBlock}
       try { await Promise.race([this.client.destroy(), new Promise(r => setTimeout(r, 6000))]); } catch (_) {}
       this.client = null;
     }
-    // Note: do NOT call killChrome() here — would kill other users' Chrome instances
   }
 
   attachEvents(c) {
@@ -1035,7 +1066,7 @@ ${productsBlock}
       this.log('📱 ظهر الباركود!');
       qrcodeTerminal.generate(qr, { small: true });
       try {
-        this.appState.qrDataUrl = await QRCode.toDataURL(qr, { width: 320, margin: 2, color: { dark: '#000000', light: '#ffffff' }, errorCorrectionLevel: 'M' });
+        this.appState.qrDataUrl = await QRCode.toDataURL(qr, { width: 512, margin: 2, color: { dark: '#000000', light: '#ffffff' }, errorCorrectionLevel: 'H' });
         this.appState.status = 'qr_ready';
         this.appState.error = null;
       } catch (e) { this.log('❌ خطأ QR: ' + e.message); }
@@ -1059,6 +1090,7 @@ ${productsBlock}
     });
 
     c.on('disconnected', (r) => {
+      if (!this.botRunning) return; // أوقفه المستخدم — لا داعي لإعادة الاتصال
       this.appState.status = 'disconnected'; this.appState.phone = null;
       this.log('⚠️ انقطع (' + r + ') — إعادة الاتصال...');
       setTimeout(() => { try { if (this.client && this.botRunning) this.client.initialize(); } catch (_) {} }, 5000);
