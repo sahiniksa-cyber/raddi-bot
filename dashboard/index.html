@@ -291,7 +291,7 @@ label{display:flex;align-items:center}
       <span class="big-icon">🤖</span>
       <div class="ctitle">ردّي — بوت الواتس أب</div>
       <div class="csub">اضغط تشغيل لبدء البوت وربطه بواتس أب متجرك</div>
-      <button class="green-btn" style="font-size:17px;padding:15px 44px;margin-top:4px" onclick="botStart()">▶ تشغيل البوت</button>
+      <button class="green-btn" style="font-size:17px;padding:15px 44px;margin-top:4px" onclick="botStart(this)">▶ تشغيل البوت</button>
     </div>
   </div>
 
@@ -301,7 +301,7 @@ label{display:flex;align-items:center}
       <div class="ctitle">جاري تشغيل ردّي...</div>
       <div class="csub">انتظر ثوانٍ حتى يظهر الباركود</div>
       <div class="logs-box" id="logsBox"></div>
-      <button class="ghost-btn" style="margin-top:14px;width:100%" onclick="botStop()">⏹ إيقاف</button>
+      <button class="ghost-btn" style="margin-top:14px;width:100%" onclick="botStop(this)">⏹ إيقاف</button>
     </div>
   </div>
 
@@ -316,7 +316,7 @@ label{display:flex;align-items:center}
         <div class="step"><div class="stepn">2</div><span>اضغط <strong>⋮</strong> ثم <strong>الأجهزة المرتبطة</strong></span></div>
         <div class="step"><div class="stepn">3</div><span>اضغط <strong>ربط جهاز</strong> ثم وجّه الكاميرا للباركود</span></div>
       </div>
-      <button class="ghost-btn" style="width:100%" onclick="botStop()">⏹ إلغاء وإيقاف</button>
+      <button class="ghost-btn" style="width:100%" onclick="botStop(this)">⏹ إلغاء وإيقاف</button>
     </div>
   </div>
 
@@ -336,7 +336,7 @@ label{display:flex;align-items:center}
       <div class="phone-pill" id="phonePill">—</div><br>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">
         <button class="green-btn" onclick="goTab('settings')">⚙️ إعداد البوت</button>
-        <button class="red-btn" onclick="botStop()">⏹ إيقاف البوت</button>
+        <button class="red-btn" onclick="botStop(this)">⏹ إيقاف البوت</button>
       </div>
     </div>
   </div>
@@ -357,7 +357,7 @@ label{display:flex;align-items:center}
       <div class="err-box" id="errBox">—</div>
       <div class="logs-box" id="errLogs"></div>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px">
-        <button class="green-btn" onclick="botStart()">▶ إعادة التشغيل</button>
+        <button class="green-btn" onclick="botStart(this)">▶ إعادة التشغيل</button>
         <button class="ghost-btn" onclick="clearSession()">🗑 مسح الجلسة</button>
       </div>
     </div>
@@ -375,8 +375,8 @@ label{display:flex;align-items:center}
       <span class="bc-label" id="ctrlStatusTxt">⏹ متوقف</span>
     </div>
     <div class="ctrl-btns">
-      <button class="ctrl-start" id="ctrlStartBtn" onclick="botStart()">▶ تشغيل</button>
-      <button class="ctrl-stop" id="ctrlStopBtn" onclick="botStop()" style="display:none">⏹ إيقاف</button>
+      <button class="ctrl-start" id="ctrlStartBtn" onclick="botStart(this)">▶ تشغيل</button>
+      <button class="ctrl-stop" id="ctrlStopBtn" onclick="botStop(this)" style="display:none">⏹ إيقاف</button>
     </div>
   </div>
 
@@ -932,15 +932,22 @@ const SCRS=['stopped','waiting','qr','connecting','connected','disconnected','er
 function showSc(n){SCRS.forEach(s=>{const e=document.getElementById('sc-'+s);if(e)e.style.display=s===n?'flex':'none';})}
 
 // ── BOT ──
-async function botStart(){
-  const btn=document.getElementById('ctrlStartBtn');
-  if(btn){btn.disabled=true;const orig=btn.textContent;btn.textContent='⏳';setTimeout(()=>{if(btn)btn.disabled=false;btn.textContent=orig;},6000);}
+function _disableBtn(btn, ms){
+  if(!btn)return;
+  btn.disabled=true;
+  const orig=btn.textContent;
+  btn.textContent='⏳';
+  setTimeout(()=>{btn.disabled=false;btn.textContent=orig;},ms);
+}
+async function botStart(src){
+  _disableBtn(src,7000);
+  _disableBtn(document.getElementById('ctrlStartBtn'),7000);
   try{await fetch('/api/bot/start',{method:'POST'});}catch(_){}
   setTimeout(poll,1000);
 }
-async function botStop(){
-  const btn=document.getElementById('ctrlStopBtn');
-  if(btn){btn.disabled=true;const orig=btn.textContent;btn.textContent='⏳';setTimeout(()=>{if(btn)btn.disabled=false;btn.textContent=orig;},4000);}
+async function botStop(src){
+  _disableBtn(src,5000);
+  _disableBtn(document.getElementById('ctrlStopBtn'),5000);
   try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}
   setTimeout(poll,800);
 }
@@ -1018,7 +1025,11 @@ async function poll(){
     }
     document.getElementById('stChats').textContent=d.activeChats||0;
     document.getElementById('stReplies').textContent=d.totalChatsHandled||0;
-    if(d.status==='qr_ready')loadQR();
+    if(d.status==='qr_ready'){
+      const img=document.getElementById('qrImg');
+      if(img&&d.qrDataUrl)img.src=d.qrDataUrl;
+      else if(img&&!d.qrDataUrl)loadQR();
+    }
   }catch(_){}
 }
 

@@ -1064,19 +1064,28 @@ ${productsBlock}
 
   attachEvents(c) {
     c.on('qr', async (qr) => {
+      if (!this.botRunning) return; // تجاهل إذا أوقفه المستخدم أثناء تدمير Chrome
       this.log('📱 ظهر الباركود!');
       qrcodeTerminal.generate(qr, { small: true });
       try {
         this.appState.qrDataUrl = await QRCode.toDataURL(qr, { width: 512, margin: 2, color: { dark: '#000000', light: '#ffffff' }, errorCorrectionLevel: 'H' });
+        if (!this.botRunning) return; // تحقق ثانٍ بعد await
         this.appState.status = 'qr_ready';
         this.appState.error = null;
       } catch (e) { this.log('❌ خطأ QR: ' + e.message); }
     });
 
-    c.on('loading_screen', (pct) => { this.appState.status = 'connecting'; this.appState.qrDataUrl = null; this.log('⏳ ' + pct + '%'); });
-    c.on('authenticated', () => { this.appState.status = 'connecting'; this.appState.qrDataUrl = null; this.log('🔐 تم التحقق'); });
+    c.on('loading_screen', (pct) => {
+      if (!this.botRunning) return;
+      this.appState.status = 'connecting'; this.appState.qrDataUrl = null; this.log('⏳ ' + pct + '%');
+    });
+    c.on('authenticated', () => {
+      if (!this.botRunning) return;
+      this.appState.status = 'connecting'; this.appState.qrDataUrl = null; this.log('🔐 تم التحقق');
+    });
 
     c.on('ready', () => {
+      if (!this.botRunning) return;
       this.appState.status = 'connected';
       this.appState.phone = c.info?.wid?.user || null;
       this.appState.qrDataUrl = null;
