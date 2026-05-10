@@ -1014,7 +1014,6 @@ ${productsBlock}
         '--disable-software-rasterizer','--ignore-certificate-errors',
         '--disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process',
         '--window-size=1280,720',
-        '--shm-size=256mb',
       ],
     };
     if (chromePath) cfg.executablePath = chromePath;
@@ -1240,7 +1239,7 @@ if (FileStore) {
   try { fs.mkdirSync(sessDir, { recursive: true }); } catch (_) {}
   sessionConfig.store = new FileStore({
     path: sessDir,
-    ttl: SESSION_TTL_DEFAULT / 1000,
+    ttl: SESSION_TTL_REMEMBER / 1000, // 30 يوم — يكفي لـ "تذكرني" (cookie هو الذي يتحكم بالانتهاء الفعلي)
     retries: 1,
     logFn: () => {},
   });
@@ -1447,7 +1446,8 @@ app.post('/api/auth/change-password', async (req, res) => {
 app.get('/api/status', (req, res) => {
   const bot = getUserBot(req.session.userId);
   const { qrString, ...state } = bot.appState;
-  res.json({ ...state, totalChatsHandled: bot.totalChatsHandled, logs: bot.appState.logs.slice(0, 8) });
+  const logCount = state.status === 'error' ? 20 : 8;
+  res.json({ ...state, totalChatsHandled: bot.totalChatsHandled, logs: bot.appState.logs.slice(0, logCount) });
 });
 
 app.get('/api/debug-last', (req, res) => {

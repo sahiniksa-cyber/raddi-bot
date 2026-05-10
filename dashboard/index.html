@@ -355,10 +355,11 @@ label{display:flex;align-items:center}
       <span class="big-icon">❌</span>
       <div class="ctitle" style="color:#ef4444">حدث خطأ</div>
       <div class="err-box" id="errBox">—</div>
-      <div class="logs-box" id="errLogs"></div>
+      <div class="logs-box" id="errLogs" style="max-height:200px;margin-bottom:10px"></div>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px">
         <button class="green-btn" onclick="botStart(this)">▶ إعادة التشغيل</button>
         <button class="ghost-btn" onclick="clearSession()">🗑 مسح الجلسة</button>
+        <button class="ghost-btn" id="copyErrBtn" onclick="copyErrReport()">📋 نسخ التقرير</button>
       </div>
     </div>
   </div>
@@ -954,6 +955,12 @@ async function botStop(src){
 async function clearSession(){
   try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}
   toast('🗑 امسح مجلد session يدوياً ثم أعد التشغيل');
+}
+function copyErrReport(){
+  const err=document.getElementById('errBox')?.textContent||'';
+  const logs=document.getElementById('errLogs')?.innerText||'';
+  const txt='=== خطأ ===\n'+err+'\n\n=== اللوق ===\n'+logs;
+  navigator.clipboard?.writeText(txt).then(()=>toast('✅ تم نسخ التقرير')).catch(()=>{});
 }
 
 // ── MODEL SELECTION ──
