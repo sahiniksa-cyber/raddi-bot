@@ -58,9 +58,28 @@ function findChrome() {
 }
 
 // ─── DATA PERSISTENCE ─────────────────────────────────────────────────
-// على Railway: أضف متغير DATA_DIR=/data وربط Volume على /data
 const DATA_DIR = process.env.DATA_DIR || __dirname;
-if (DATA_DIR !== __dirname) { try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {} }
+
+const _onRailway = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+
+if (DATA_DIR === __dirname) {
+  if (_onRailway) {
+    console.error('');
+    console.error('══════════════════════════════════════════════════════════');
+    console.error('❌  تحذير حرج: DATA_DIR غير مضبوط على Railway!');
+    console.error('   كل بيانات المستخدمين (حسابات، إعدادات، محادثات)');
+    console.error('   ستُمحى عند كل deployment أو إعادة تشغيل.');
+    console.error('   الحل: أضف Volume في Railway على /data');
+    console.error('         ثم أضف متغير: DATA_DIR=/data');
+    console.error('══════════════════════════════════════════════════════════');
+    console.error('');
+  } else {
+    console.warn('⚠️  DATA_DIR غير مضبوط — البيانات ستُحفظ داخل مجلد التطبيق (للتطوير فقط)');
+  }
+} else {
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) {}
+  console.log(`✅ DATA_DIR = ${DATA_DIR}`);
+}
 
 // ─── USERS ───────────────────────────────────────────────────────────
 const USERS_PATH = path.join(DATA_DIR, 'users.json');
