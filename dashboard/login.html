@@ -10,55 +10,118 @@
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Medium.otf') format('opentype');font-weight:500}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Bold.otf') format('opentype');font-weight:700}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Balck.otf') format('opentype');font-weight:900}
-:root{--font:'Fatima','Cairo','Segoe UI',Tahoma,sans-serif;--green:#25d366;--green2:#128c7e;--bg:#0a0e1a;--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.08)}
+:root{
+  --font:'Fatima','Cairo','Segoe UI',Tahoma,sans-serif;
+  --green:#25d366;--green2:#128c7e;
+  --bg:#0a0e1a;--card:rgba(255,255,255,.04);--border:rgba(255,255,255,.08)
+}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:var(--font);background:var(--bg);color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;position:relative;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:#e2e8f0;min-height:100vh;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:20px;position:relative;overflow:hidden}
 
-/* Background glow */
-body::before{content:'';position:fixed;top:-40%;left:50%;transform:translateX(-50%);width:700px;height:700px;background:radial-gradient(circle,rgba(37,211,102,.06) 0%,transparent 70%);pointer-events:none}
-body::after{content:'';position:fixed;bottom:-30%;right:-10%;width:500px;height:500px;background:radial-gradient(circle,rgba(124,58,237,.05) 0%,transparent 70%);pointer-events:none}
+body::before{content:'';position:fixed;top:-40%;left:50%;transform:translateX(-50%);
+  width:700px;height:700px;
+  background:radial-gradient(circle,rgba(37,211,102,.07) 0%,transparent 70%);pointer-events:none}
+body::after{content:'';position:fixed;bottom:-30%;right:-10%;width:500px;height:500px;
+  background:radial-gradient(circle,rgba(124,58,237,.05) 0%,transparent 70%);pointer-events:none}
 
-.logo-wrap{text-align:center;margin-bottom:28px}
-.logo{font-size:38px;font-weight:900;background:linear-gradient(135deg,var(--green),#a3e635);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.02em;display:block}
+.logo-wrap{text-align:center;margin-bottom:24px}
+.logo{font-size:38px;font-weight:900;background:linear-gradient(135deg,var(--green),#a3e635);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.02em;display:block}
 .logo-sub{font-size:14px;color:#475569;margin-top:4px}
 
-.card{background:rgba(255,255,255,.03);border:1.5px solid rgba(255,255,255,.08);border-radius:28px;padding:36px;width:100%;max-width:420px;backdrop-filter:blur(20px);position:relative;z-index:1}
+.card{background:rgba(255,255,255,.03);border:1.5px solid rgba(255,255,255,.08);
+  border-radius:28px;padding:36px;width:100%;max-width:420px;
+  backdrop-filter:blur(20px);position:relative;z-index:1}
 
+/* ─── TABS ─── */
 .tabs{display:flex;background:rgba(255,255,255,.04);border-radius:14px;padding:4px;margin-bottom:28px;gap:4px}
-.tab-btn{flex:1;padding:10px;border:none;border-radius:11px;background:transparent;color:#64748b;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s}
+.tab-btn{flex:1;padding:10px;border:none;border-radius:11px;background:transparent;
+  color:#64748b;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s}
 .tab-btn.active{background:linear-gradient(135deg,var(--green),var(--green2));color:#fff}
 
-.form-group{margin-bottom:16px}
-label{display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;letter-spacing:.05em;text-transform:uppercase}
-input{width:100%;background:rgba(255,255,255,.05);border:1.5px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 16px;color:#e2e8f0;font-size:15px;font-family:var(--font);outline:none;transition:border-color .2s}
+/* ─── INPUTS ─── */
+.form-group{margin-bottom:16px;position:relative}
+label{display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;
+  letter-spacing:.05em;text-transform:uppercase}
+input[type=email],input[type=password],input[type=text]{
+  width:100%;background:rgba(255,255,255,.05);border:1.5px solid rgba(255,255,255,.09);
+  border-radius:12px;padding:13px 16px;color:#e2e8f0;font-size:15px;
+  font-family:var(--font);outline:none;transition:border-color .2s}
 input:focus{border-color:var(--green)}
 input::placeholder{color:#334155}
 
-.submit-btn{width:100%;padding:15px;border:none;border-radius:14px;background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;font-family:var(--font);font-size:16px;font-weight:900;cursor:pointer;transition:opacity .2s,transform .2s;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:8px}
+.pass-toggle{position:absolute;left:14px;top:38px;background:transparent;border:none;
+  color:#475569;cursor:pointer;font-size:16px;padding:0;transition:color .2s}
+.pass-toggle:hover{color:var(--green)}
+
+/* ─── REMEMBER ME ─── */
+.remember-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.remember-label{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#64748b;user-select:none}
+.remember-label input[type=checkbox]{width:16px;height:16px;accent-color:var(--green);cursor:pointer}
+.forgot-link{font-size:13px;color:#64748b;background:transparent;border:none;
+  font-family:var(--font);cursor:pointer;text-decoration:underline;transition:color .2s;padding:0}
+.forgot-link:hover{color:var(--green)}
+
+/* ─── BUTTON ─── */
+.submit-btn{width:100%;padding:15px;border:none;border-radius:14px;
+  background:linear-gradient(135deg,var(--green),var(--green2));
+  color:#fff;font-family:var(--font);font-size:16px;font-weight:900;
+  cursor:pointer;transition:opacity .2s,transform .2s;margin-top:6px;
+  display:flex;align-items:center;justify-content:center;gap:8px}
 .submit-btn:hover{opacity:.9;transform:translateY(-1px)}
 .submit-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
 
-.error-box{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);border-radius:12px;padding:12px 16px;font-size:13px;color:#fca5a5;margin-bottom:14px;display:none}
+/* ─── MESSAGES ─── */
+.error-box{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);
+  border-radius:12px;padding:12px 16px;font-size:13px;color:#fca5a5;margin-bottom:14px;display:none}
 .error-box.show{display:block}
-.success-box{background:rgba(37,211,102,.08);border:1px solid rgba(37,211,102,.22);border-radius:12px;padding:12px 16px;font-size:13px;color:#86efac;margin-bottom:14px;display:none}
+.success-box{background:rgba(37,211,102,.08);border:1px solid rgba(37,211,102,.22);
+  border-radius:12px;padding:12px 16px;font-size:13px;color:#86efac;margin-bottom:14px;display:none}
 .success-box.show{display:block}
 
-.divider{height:1px;background:var(--border);margin:20px 0;position:relative}
-.divider span{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg);padding:0 12px;color:#334155;font-size:12px}
-
-.features{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:28px}
-.feat{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:14px;padding:14px;text-align:center}
-.feat-icon{font-size:24px;margin-bottom:6px}
-.feat-label{font-size:11px;color:#475569;font-weight:600}
-
-.spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-
+/* ─── PASS STRENGTH ─── */
 .pass-strength{height:3px;border-radius:3px;margin-top:6px;transition:all .3s;background:#1e293b}
 .pass-strength.weak{background:linear-gradient(90deg,#ef4444 33%,#1e293b 33%)}
 .pass-strength.ok{background:linear-gradient(90deg,#f59e0b 66%,#1e293b 66%)}
 .pass-strength.strong{background:#25d366}
 .pass-label{font-size:10px;color:#475569;margin-top:3px}
+
+/* ─── BACK LINK ─── */
+.back-link{display:flex;align-items:center;gap:6px;background:transparent;border:none;
+  color:#64748b;font-family:var(--font);font-size:13px;cursor:pointer;
+  padding:0;margin-bottom:20px;transition:color .2s}
+.back-link:hover{color:var(--green)}
+
+/* ─── OTP INPUT ─── */
+.otp-input{text-align:center!important;font-size:28px!important;font-weight:900!important;
+  letter-spacing:8px!important;font-family:monospace!important}
+
+/* ─── FEATURES ─── */
+.features{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:24px;max-width:420px;width:100%}
+.feat{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);
+  border-radius:14px;padding:14px;text-align:center}
+.feat-icon{font-size:22px;margin-bottom:5px}
+.feat-label{font-size:11px;color:#475569;font-weight:600}
+
+/* ─── SPINNER ─── */
+.spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.3);
+  border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ─── DIVIDER ─── */
+.screen-title{font-size:17px;font-weight:900;color:#e2e8f0;margin-bottom:6px}
+.screen-sub{font-size:13px;color:#64748b;line-height:1.6;margin-bottom:20px}
+
+/* ─── ICON CENTER ─── */
+.icon-center{font-size:44px;text-align:center;margin-bottom:12px}
+
+/* ─── CODE BOX (dev mode) ─── */
+.dev-code{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.22);
+  border-radius:10px;padding:10px 14px;font-size:14px;color:#fcd34d;
+  text-align:center;font-weight:700;margin-bottom:14px;display:none}
+.dev-code.show{display:block}
 </style>
 </head>
 <body>
@@ -68,46 +131,60 @@ input::placeholder{color:#334155}
   <div class="logo-sub">بوت الواتس أب الذكي لمتجرك</div>
 </div>
 
-<div class="card">
-  <div class="tabs">
-    <button class="tab-btn active" id="tabLogin" onclick="showTab('login')">تسجيل الدخول</button>
-    <button class="tab-btn" id="tabRegister" onclick="showTab('register')">إنشاء حساب</button>
+<div class="card" id="mainCard">
+
+  <!-- TABS (login + register) -->
+  <div class="tabs" id="mainTabs">
+    <button class="tab-btn active" id="tabLogin" onclick="showScreen('login')">تسجيل الدخول</button>
+    <button class="tab-btn" id="tabRegister" onclick="showScreen('register')">إنشاء حساب</button>
   </div>
 
   <div class="error-box" id="errBox"></div>
   <div class="success-box" id="successBox"></div>
+  <div class="dev-code" id="devCode"></div>
 
-  <!-- LOGIN -->
-  <div id="formLogin">
+  <!-- ══ SCREEN: LOGIN ══ -->
+  <div id="scLogin">
     <div class="form-group">
       <label>الإيميل</label>
-      <input type="email" id="loginEmail" placeholder="example@email.com" dir="ltr" autocomplete="email">
+      <input type="email" id="loginEmail" placeholder="example@email.com" dir="ltr"
+             autocomplete="email" onkeydown="if(event.key==='Enter')document.getElementById('loginPass').focus()">
     </div>
     <div class="form-group">
       <label>كلمة المرور</label>
-      <input type="password" id="loginPass" placeholder="••••••••" dir="ltr" autocomplete="current-password"
-             onkeydown="if(event.key==='Enter')doLogin()">
+      <input type="password" id="loginPass" placeholder="••••••••" dir="ltr"
+             autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+      <button class="pass-toggle" onclick="togglePass('loginPass',this)" type="button" tabindex="-1">👁</button>
+    </div>
+    <div class="remember-row">
+      <label class="remember-label">
+        <input type="checkbox" id="rememberMe"> تذكرني لمدة 30 يوم
+      </label>
+      <button class="forgot-link" onclick="showScreen('forgot')">نسيت كلمة المرور؟</button>
     </div>
     <button class="submit-btn" id="loginBtn" onclick="doLogin()">
       <span id="loginBtnTxt">🔓 دخول</span>
     </button>
   </div>
 
-  <!-- REGISTER -->
-  <div id="formRegister" style="display:none">
+  <!-- ══ SCREEN: REGISTER ══ -->
+  <div id="scRegister" style="display:none">
     <div class="form-group">
       <label>الاسم</label>
-      <input type="text" id="regName" placeholder="اسمك">
+      <input type="text" id="regName" placeholder="اسمك" autocomplete="name"
+             onkeydown="if(event.key==='Enter')document.getElementById('regEmail').focus()">
     </div>
     <div class="form-group">
       <label>الإيميل</label>
-      <input type="email" id="regEmail" placeholder="example@email.com" dir="ltr" autocomplete="email">
+      <input type="email" id="regEmail" placeholder="example@email.com" dir="ltr"
+             autocomplete="email" onkeydown="if(event.key==='Enter')document.getElementById('regPass').focus()">
     </div>
     <div class="form-group">
       <label>كلمة المرور</label>
       <input type="password" id="regPass" placeholder="8 أحرف على الأقل" dir="ltr"
              autocomplete="new-password" oninput="checkStrength(this.value)"
              onkeydown="if(event.key==='Enter')doRegister()">
+      <button class="pass-toggle" onclick="togglePass('regPass',this)" type="button" tabindex="-1">👁</button>
       <div class="pass-strength" id="passStrength"></div>
       <div class="pass-label" id="passLabel"></div>
     </div>
@@ -116,19 +193,19 @@ input::placeholder{color:#334155}
     </button>
   </div>
 
-  <!-- EMAIL VERIFICATION STEP -->
-  <div id="formVerify" style="display:none">
-    <div style="text-align:center;margin-bottom:20px">
-      <div style="font-size:40px;margin-bottom:8px">📧</div>
-      <div style="font-size:15px;font-weight:700;color:#e2e8f0">تحقق من إيميلك</div>
-      <div style="font-size:13px;color:#64748b;margin-top:6px">أرسلنا رمز مكون من 6 أرقام إلى</div>
-      <div style="font-size:14px;font-weight:700;color:var(--green);margin-top:4px;direction:ltr" id="verifyEmailDisplay">—</div>
+  <!-- ══ SCREEN: VERIFY EMAIL (after register) ══ -->
+  <div id="scVerify" style="display:none">
+    <button class="back-link" onclick="showScreen('register')">← رجوع</button>
+    <div class="icon-center">📧</div>
+    <div class="screen-title" style="text-align:center">تحقق من إيميلك</div>
+    <div class="screen-sub" style="text-align:center">
+      أرسلنا رمز مكون من 6 أرقام إلى<br>
+      <strong style="color:var(--green);direction:ltr;display:inline-block;margin-top:4px" id="verifyEmailDisplay">—</strong>
     </div>
     <div class="form-group">
       <label>رمز التحقق</label>
-      <input type="text" id="verifyCode" placeholder="_ _ _ _ _ _" dir="ltr" maxlength="6"
-             style="text-align:center;font-size:28px;font-weight:900;letter-spacing:8px;font-family:monospace"
-             autocomplete="one-time-code"
+      <input type="text" id="verifyCode" class="otp-input" placeholder="_ _ _ _ _ _"
+             dir="ltr" maxlength="6" autocomplete="one-time-code"
              oninput="this.value=this.value.replace(/\D/g,'')"
              onkeydown="if(event.key==='Enter')doVerify()">
     </div>
@@ -136,19 +213,82 @@ input::placeholder{color:#334155}
       <span id="verifyBtnTxt">✅ تأكيد الرمز</span>
     </button>
     <div style="text-align:center;margin-top:14px">
-      <button onclick="doResendCode()" id="resendBtn"
+      <button onclick="doResendCode('register')" id="resendRegBtn"
         style="background:transparent;border:none;color:#475569;font-family:var(--font);font-size:13px;cursor:pointer;text-decoration:underline">
         لم يصلك الرمز؟ أعد الإرسال
       </button>
     </div>
-    <div style="text-align:center;margin-top:8px">
-      <button onclick="showTab('register')"
-        style="background:transparent;border:none;color:#334155;font-family:var(--font);font-size:12px;cursor:pointer">
-        ← العودة لإنشاء الحساب
+  </div>
+
+  <!-- ══ SCREEN: FORGOT PASSWORD (enter email) ══ -->
+  <div id="scForgot" style="display:none">
+    <button class="back-link" onclick="showScreen('login')">← رجوع لتسجيل الدخول</button>
+    <div class="icon-center">🔑</div>
+    <div class="screen-title" style="text-align:center">إعادة تعيين كلمة المرور</div>
+    <div class="screen-sub" style="text-align:center">أدخل إيميلك وسنرسل لك رمز إعادة التعيين</div>
+    <div class="form-group">
+      <label>الإيميل</label>
+      <input type="email" id="forgotEmail" placeholder="example@email.com" dir="ltr"
+             autocomplete="email" onkeydown="if(event.key==='Enter')doForgot()">
+    </div>
+    <button class="submit-btn" id="forgotBtn" onclick="doForgot()">
+      <span id="forgotBtnTxt">📧 إرسال الرمز</span>
+    </button>
+  </div>
+
+  <!-- ══ SCREEN: RESET CODE (enter 6-digit code) ══ -->
+  <div id="scResetCode" style="display:none">
+    <button class="back-link" onclick="showScreen('forgot')">← رجوع</button>
+    <div class="icon-center">🔢</div>
+    <div class="screen-title" style="text-align:center">أدخل رمز التحقق</div>
+    <div class="screen-sub" style="text-align:center">
+      أرسلنا رمزاً إلى<br>
+      <strong style="color:var(--green);direction:ltr;display:inline-block;margin-top:4px" id="resetEmailDisplay">—</strong>
+    </div>
+    <div class="form-group">
+      <label>رمز التحقق (6 أرقام)</label>
+      <input type="text" id="resetCode" class="otp-input" placeholder="_ _ _ _ _ _"
+             dir="ltr" maxlength="6" autocomplete="one-time-code"
+             oninput="this.value=this.value.replace(/\D/g,'')"
+             onkeydown="if(event.key==='Enter')doVerifyResetCode()">
+    </div>
+    <button class="submit-btn" id="resetCodeBtn" onclick="doVerifyResetCode()">
+      <span id="resetCodeBtnTxt">✅ تأكيد الرمز</span>
+    </button>
+    <div style="text-align:center;margin-top:14px">
+      <button onclick="doResendCode('reset')" id="resendResetBtn"
+        style="background:transparent;border:none;color:#475569;font-family:var(--font);font-size:13px;cursor:pointer;text-decoration:underline">
+        لم يصلك الرمز؟ أعد الإرسال
       </button>
     </div>
   </div>
-</div>
+
+  <!-- ══ SCREEN: NEW PASSWORD ══ -->
+  <div id="scNewPass" style="display:none">
+    <div class="icon-center">🔒</div>
+    <div class="screen-title" style="text-align:center">كلمة مرور جديدة</div>
+    <div class="screen-sub" style="text-align:center">اختر كلمة مرور قوية لحسابك</div>
+    <div class="form-group">
+      <label>كلمة المرور الجديدة</label>
+      <input type="password" id="newPass1" placeholder="8 أحرف على الأقل" dir="ltr"
+             oninput="checkStrength2(this.value)"
+             onkeydown="if(event.key==='Enter')document.getElementById('newPass2').focus()">
+      <button class="pass-toggle" onclick="togglePass('newPass1',this)" type="button" tabindex="-1">👁</button>
+      <div class="pass-strength" id="passStrength2"></div>
+      <div class="pass-label" id="passLabel2"></div>
+    </div>
+    <div class="form-group">
+      <label>تأكيد كلمة المرور</label>
+      <input type="password" id="newPass2" placeholder="أعد كتابة كلمة المرور" dir="ltr"
+             onkeydown="if(event.key==='Enter')doResetPassword()">
+      <button class="pass-toggle" onclick="togglePass('newPass2',this)" type="button" tabindex="-1">👁</button>
+    </div>
+    <button class="submit-btn" id="newPassBtn" onclick="doResetPassword()">
+      <span id="newPassBtnTxt">✅ حفظ كلمة المرور</span>
+    </button>
+  </div>
+
+</div><!-- /card -->
 
 <div class="features">
   <div class="feat"><div class="feat-icon">🤖</div><div class="feat-label">بوت ذكي يرد تلقائياً</div></div>
@@ -158,106 +298,235 @@ input::placeholder{color:#334155}
 </div>
 
 <script>
-let pendingEmail='';
+let pendingEmail = '';
+let pendingResetEmail = '';
+let verifiedResetEmail = '';
 
-function showTab(t){
-  document.getElementById('formLogin').style.display=t==='login'?'block':'none';
-  document.getElementById('formRegister').style.display=t==='register'?'block':'none';
-  document.getElementById('formVerify').style.display=t==='verify'?'block':'none';
-  document.getElementById('tabLogin').classList.toggle('active',t==='login');
-  document.getElementById('tabRegister').classList.toggle('active',t==='register'||t==='verify');
+// ── NAVIGATION ──
+function showScreen(name) {
+  const screens = ['login','register','verify','forgot','resetCode','newPass'];
+  screens.forEach(s => {
+    const el = document.getElementById('sc' + s.charAt(0).toUpperCase() + s.slice(1));
+    if (el) el.style.display = s === name ? 'block' : 'none';
+  });
+  // tabs: show for login/register, hide for sub-screens
+  const tabs = document.getElementById('mainTabs');
+  tabs.style.display = (name === 'login' || name === 'register') ? 'flex' : 'none';
+  // highlight active tab
+  document.getElementById('tabLogin').classList.toggle('active', name === 'login');
+  document.getElementById('tabRegister').classList.toggle('active', name === 'register' || name === 'verify');
   hideMsg();
-  if(t==='verify'){
-    document.getElementById('verifyEmailDisplay').textContent=pendingEmail;
-    setTimeout(()=>document.getElementById('verifyCode').focus(),100);
-  }
+  // auto-focus first input
+  const focusMap = {
+    login: 'loginEmail', register: 'regName',
+    verify: 'verifyCode', forgot: 'forgotEmail',
+    resetCode: 'resetCode', newPass: 'newPass1',
+  };
+  setTimeout(() => { const el = document.getElementById(focusMap[name]); if (el) el.focus(); }, 80);
 }
 
-function showErr(m){const b=document.getElementById('errBox');b.textContent=m;b.className='error-box show';document.getElementById('successBox').className='success-box';}
-function showOk(m){const b=document.getElementById('successBox');b.textContent=m;b.className='success-box show';document.getElementById('errBox').className='error-box';}
-function hideMsg(){document.getElementById('errBox').className='error-box';document.getElementById('successBox').className='success-box';}
-
-function setLoading(btnId,txtId,loading,defaultTxt){
-  const btn=document.getElementById(btnId),txt=document.getElementById(txtId);
-  btn.disabled=loading;
-  txt.innerHTML=loading?'<div class="spinner"></div>':defaultTxt;
+// ── MESSAGES ──
+function showErr(m) {
+  const b = document.getElementById('errBox'); b.textContent = m; b.className = 'error-box show';
+  document.getElementById('successBox').className = 'success-box';
+  document.getElementById('devCode').className = 'dev-code';
+}
+function showOk(m) {
+  const b = document.getElementById('successBox'); b.textContent = m; b.className = 'success-box show';
+  document.getElementById('errBox').className = 'error-box';
+}
+function showDevCode(code) {
+  const b = document.getElementById('devCode');
+  b.textContent = '🔧 وضع التطوير — الرمز: ' + code;
+  b.className = 'dev-code show';
+}
+function hideMsg() {
+  document.getElementById('errBox').className = 'error-box';
+  document.getElementById('successBox').className = 'success-box';
+  document.getElementById('devCode').className = 'dev-code';
 }
 
-function checkStrength(v){
-  const el=document.getElementById('passStrength'),lbl=document.getElementById('passLabel');
-  if(!v){el.className='pass-strength';lbl.textContent='';return;}
-  const strong=v.length>=10&&/[A-Z]/.test(v)&&/[0-9]/.test(v);
-  const ok=v.length>=8;
-  el.className='pass-strength '+(strong?'strong':ok?'ok':'weak');
-  lbl.textContent=strong?'✅ قوية جداً':ok?'⚠️ مقبولة':'❌ ضعيفة — 8 أحرف على الأقل';
+// ── LOADING BUTTON ──
+function setLoading(btnId, txtId, loading, defaultTxt) {
+  const btn = document.getElementById(btnId), txt = document.getElementById(txtId);
+  btn.disabled = loading;
+  txt.innerHTML = loading ? '<div class="spinner"></div>' : defaultTxt;
 }
 
-async function doLogin(){
-  const email=document.getElementById('loginEmail').value.trim();
-  const pass=document.getElementById('loginPass').value;
-  if(!email||!pass){showErr('أدخل الإيميل وكلمة المرور');return;}
-  setLoading('loginBtn','loginBtnTxt',true,'');
-  try{
-    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pass})});
-    const d=await r.json();
-    if(d.success){showOk('✅ مرحباً '+d.name+'! جاري التحميل...');setTimeout(()=>location.href='/',800);}
+// ── SHOW/HIDE PASSWORD ──
+function togglePass(inputId, btn) {
+  const inp = document.getElementById(inputId);
+  const isPass = inp.type === 'password';
+  inp.type = isPass ? 'text' : 'password';
+  btn.textContent = isPass ? '🙈' : '👁';
+}
+
+// ── PASSWORD STRENGTH ──
+function _strengthCalc(v) {
+  if (!v) return 'none';
+  const strong = v.length >= 10 && /[A-Z]/.test(v) && /[0-9]/.test(v);
+  const ok = v.length >= 8;
+  return strong ? 'strong' : ok ? 'ok' : 'weak';
+}
+function checkStrength(v) {
+  const el = document.getElementById('passStrength'), lbl = document.getElementById('passLabel');
+  const s = _strengthCalc(v);
+  el.className = 'pass-strength' + (s === 'none' ? '' : ' ' + s);
+  lbl.textContent = s === 'strong' ? '✅ قوية جداً' : s === 'ok' ? '⚠️ مقبولة' : s === 'weak' ? '❌ ضعيفة — 8 أحرف على الأقل' : '';
+}
+function checkStrength2(v) {
+  const el = document.getElementById('passStrength2'), lbl = document.getElementById('passLabel2');
+  const s = _strengthCalc(v);
+  el.className = 'pass-strength' + (s === 'none' ? '' : ' ' + s);
+  lbl.textContent = s === 'strong' ? '✅ قوية جداً' : s === 'ok' ? '⚠️ مقبولة' : s === 'weak' ? '❌ ضعيفة — 8 أحرف على الأقل' : '';
+}
+
+// ── LOGIN ──
+async function doLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass  = document.getElementById('loginPass').value;
+  const rem   = document.getElementById('rememberMe').checked;
+  if (!email || !pass) { showErr('أدخل الإيميل وكلمة المرور'); return; }
+  setLoading('loginBtn', 'loginBtnTxt', true, '');
+  try {
+    const r = await fetch('/api/auth/login', { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password: pass, rememberMe: rem }) });
+    const d = await r.json();
+    if (d.success) { showOk('✅ مرحباً ' + d.name + '! جاري التحميل...'); setTimeout(() => location.href = '/', 700); }
     else showErr(d.message);
-  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
-  finally{setLoading('loginBtn','loginBtnTxt',false,'🔓 دخول');}
+  } catch (_) { showErr('تعذر الاتصال بالسيرفر'); }
+  finally { setLoading('loginBtn', 'loginBtnTxt', false, '🔓 دخول'); }
 }
 
-async function doRegister(){
-  const name=document.getElementById('regName').value.trim();
-  const email=document.getElementById('regEmail').value.trim();
-  const pass=document.getElementById('regPass').value;
-  if(!name||!email||!pass){showErr('جميع الحقول مطلوبة');return;}
-  if(pass.length<8){showErr('كلمة المرور يجب أن تكون 8 أحرف على الأقل');return;}
-  setLoading('registerBtn','regBtnTxt',true,'');
-  try{
-    const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password:pass})});
-    const d=await r.json();
-    if(d.success){
-      if(d.verified){
-        // SMTP not configured — account created directly
+// ── REGISTER ──
+async function doRegister() {
+  const name  = document.getElementById('regName').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const pass  = document.getElementById('regPass').value;
+  if (!name || !email || !pass) { showErr('جميع الحقول مطلوبة'); return; }
+  if (pass.length < 8) { showErr('كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
+  setLoading('registerBtn', 'regBtnTxt', true, '');
+  try {
+    const r = await fetch('/api/auth/register', { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ name, email, password: pass }) });
+    const d = await r.json();
+    if (d.success) {
+      if (d.verified) {
         showOk('✅ تم إنشاء الحساب! جاري الدخول...');
-        setTimeout(()=>location.href='/',800);
+        setTimeout(() => location.href = '/', 700);
       } else {
-        // Need email verification
-        pendingEmail=email;
+        pendingEmail = email;
+        document.getElementById('verifyEmailDisplay').textContent = email;
         showOk('📧 تم إرسال رمز التحقق إلى إيميلك');
-        setTimeout(()=>showTab('verify'),600);
+        setTimeout(() => showScreen('verify'), 600);
       }
     } else showErr(d.message);
-  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
-  finally{setLoading('registerBtn','regBtnTxt',false,'✅ إنشاء الحساب');}
+  } catch (_) { showErr('تعذر الاتصال بالسيرفر'); }
+  finally { setLoading('registerBtn', 'regBtnTxt', false, '✅ إنشاء الحساب'); }
 }
 
-async function doVerify(){
-  const code=document.getElementById('verifyCode').value.trim();
-  if(!code||code.length!==6){showErr('أدخل الرمز المكون من 6 أرقام');return;}
-  setLoading('verifyBtn','verifyBtnTxt',true,'');
-  try{
-    const r=await fetch('/api/auth/verify-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:pendingEmail,code})});
-    const d=await r.json();
-    if(d.success){showOk('✅ تم التحقق! جاري الدخول...');setTimeout(()=>location.href='/',800);}
+// ── VERIFY EMAIL (after register) ──
+async function doVerify() {
+  const code = document.getElementById('verifyCode').value.trim();
+  if (!code || code.length !== 6) { showErr('أدخل الرمز المكون من 6 أرقام'); return; }
+  setLoading('verifyBtn', 'verifyBtnTxt', true, '');
+  try {
+    const r = await fetch('/api/auth/verify-email', { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email: pendingEmail, code }) });
+    const d = await r.json();
+    if (d.success) { showOk('✅ تم التحقق! جاري الدخول...'); setTimeout(() => location.href = '/', 700); }
     else showErr(d.message);
-  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
-  finally{setLoading('verifyBtn','verifyBtnTxt',false,'✅ تأكيد الرمز');}
+  } catch (_) { showErr('تعذر الاتصال بالسيرفر'); }
+  finally { setLoading('verifyBtn', 'verifyBtnTxt', false, '✅ تأكيد الرمز'); }
 }
 
-async function doResendCode(){
-  const btn=document.getElementById('resendBtn');
-  btn.disabled=true;btn.textContent='جاري الإرسال...';
-  try{
-    const r=await fetch('/api/auth/resend-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:pendingEmail})});
-    const d=await r.json();
-    if(d.success) showOk('📧 تم إرسال رمز جديد');
-    else showErr(d.message);
-  }catch(_){showErr('تعذر الاتصال بالسيرفر');}
-  finally{
-    setTimeout(()=>{btn.disabled=false;btn.textContent='لم يصلك الرمز؟ أعد الإرسال';},30000);
+// ── FORGOT PASSWORD ──
+async function doForgot() {
+  const email = document.getElementById('forgotEmail').value.trim();
+  if (!email) { showErr('أدخل إيميلك'); return; }
+  setLoading('forgotBtn', 'forgotBtnTxt', true, '');
+  try {
+    const r = await fetch('/api/auth/forgot-password', { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email }) });
+    const d = await r.json();
+    if (d.success) {
+      pendingResetEmail = email;
+      document.getElementById('resetEmailDisplay').textContent = email;
+      showOk('📧 تم إرسال رمز إعادة التعيين');
+      if (d.devCode) showDevCode(d.devCode); // only in dev (no SMTP)
+      setTimeout(() => showScreen('resetCode'), 800);
+    } else showErr(d.message);
+  } catch (_) { showErr('تعذر الاتصال بالسيرفر'); }
+  finally { setLoading('forgotBtn', 'forgotBtnTxt', false, '📧 إرسال الرمز'); }
+}
+
+// ── VERIFY RESET CODE ──
+async function doVerifyResetCode() {
+  const code = document.getElementById('resetCode').value.trim();
+  if (!code || code.length !== 6) { showErr('أدخل الرمز المكون من 6 أرقام'); return; }
+  // Client-side validation only — actual password change is in doResetPassword
+  verifiedResetEmail = pendingResetEmail;
+  hideMsg();
+  showScreen('newPass');
+}
+
+// ── SET NEW PASSWORD ──
+async function doResetPassword() {
+  const p1 = document.getElementById('newPass1').value;
+  const p2 = document.getElementById('newPass2').value;
+  const code = document.getElementById('resetCode').value.trim();
+  if (!p1 || !p2) { showErr('أدخل كلمة المرور الجديدة'); return; }
+  if (p1 !== p2) { showErr('كلمتا المرور غير متطابقتين'); return; }
+  if (p1.length < 8) { showErr('كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
+  setLoading('newPassBtn', 'newPassBtnTxt', true, '');
+  try {
+    const r = await fetch('/api/auth/reset-password', { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email: verifiedResetEmail, code, newPassword: p1 }) });
+    const d = await r.json();
+    if (d.success) {
+      showOk('✅ تم تغيير كلمة المرور! جاري تسجيل الدخول...');
+      setTimeout(() => { showScreen('login'); document.getElementById('loginEmail').value = verifiedResetEmail; }, 1200);
+    } else showErr(d.message);
+  } catch (_) { showErr('تعذر الاتصال بالسيرفر'); }
+  finally { setLoading('newPassBtn', 'newPassBtnTxt', false, '✅ حفظ كلمة المرور'); }
+}
+
+// ── RESEND CODE ──
+async function doResendCode(type) {
+  const btnId = type === 'register' ? 'resendRegBtn' : 'resendResetBtn';
+  const email = type === 'register' ? pendingEmail : pendingResetEmail;
+  const endpoint = type === 'register' ? '/api/auth/resend-code' : '/api/auth/forgot-password';
+  const btn = document.getElementById(btnId);
+  btn.disabled = true; btn.textContent = 'جاري الإرسال...';
+  try {
+    const r = await fetch(endpoint, { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email }) });
+    const d = await r.json();
+    if (d.success) {
+      showOk('📧 تم إرسال رمز جديد');
+      if (d.devCode) showDevCode(d.devCode);
+    } else showErr(d.message);
+  } catch (_) { showErr('تعذر الاتصال بالسيرفر'); }
+  finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'لم يصلك الرمز؟ أعد الإرسال'; }, 30000);
   }
 }
+
+// ── KEYBOARD SHORTCUT: Enter on email check if already registered ──
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const active = ['scVerify','scForgot','scResetCode','scNewPass'].find(
+      id => document.getElementById(id)?.style.display === 'block');
+    if (active === 'scVerify') showScreen('register');
+    else if (active === 'scForgot' || active === 'scResetCode' || active === 'scNewPass') showScreen('login');
+  }
+});
 </script>
 </body>
 </html>

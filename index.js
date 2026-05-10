@@ -15,6 +15,7 @@ const session = require('express-session');
 const { v4: uuidv4 } = require('uuid');
 const rateLimit = require('express-rate-limit');
 let nodemailer; try { nodemailer = require('nodemailer'); } catch (_) {}
+let FileStore; try { FileStore = require('session-file-store')(session); } catch (_) {}
 
 // ─── GLOBAL HELPERS ──────────────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -1109,9 +1110,9 @@ ${productsBlock}
   }
 }
 
-// ─── EMAIL VERIFICATION ───────────────────────────────────────────────
-// Map: email → { code, user, expiresAt }  (in-memory, survives runtime but not restart)
-const pendingVerifications = new Map();
+// ─── EMAIL VERIFICATION & PASSWORD RESET ─────────────────────────────
+const pendingVerifications = new Map(); // email → { code, user, expiresAt }
+const pendingResets        = new Map(); // email → { code, expiresAt }
 
 function createMailTransport() {
   if (!nodemailer) return null;
@@ -1191,12 +1192,28 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(session({
+const SESSION_TTL_DEFAULT = 7  * 24 * 60 * 60 * 1000; // 7 أيام
+const SESSION_TTL_REMEMBER = 30 * 24 * 60 * 60 * 1000; // 30 يوم (تذكرني)
+
+const sessionConfig = {
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 7 * 24 * 60 * 60 * 1000, httpOnly: true, sameSite: 'strict' },
-}));
+  cookie: { maxAge: SESSION_TTL_DEFAULT, httpOnly: true, sameSite: 'strict' },
+};
+
+if (FileStore) {
+  const sessDir = path.join(DATA_DIR, 'sessions');
+  try { fs.mkdirSync(sessDir, { recursive: true }); } catch (_) {}
+  sessionConfig.store = new FileStore({
+    path: sessDir,
+    ttl: SESSION_TTL_DEFAULT / 1000,
+    retries: 1,
+    logFn: () => {},
+  });
+}
+
+app.use(session(sessionConfig));
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { success: false, message: 'كثير محاولات — انتظر 15 دقيقة' } });
 const apiLimiter  = rateLimit({ windowMs: 60 * 1000, max: 60,  message: { success: false, message: 'كثير طلبات — انتظر دقيقة' } });
@@ -1308,7 +1325,7 @@ app.post('/api/auth/resend-code', authLimiter, async (req, res) => {
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, rememberMe } = req.body;
     if (!email || !password) return res.json({ success: false, message: 'أدخل الإيميل وكلمة المرور' });
     const user = findUser(email);
     if (!user) return res.json({ success: false, message: 'الإيميل أو كلمة المرور غير صحيحة' });
@@ -1316,6 +1333,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     if (!ok) return res.json({ success: false, message: 'الإيميل أو كلمة المرور غير صحيحة' });
     req.session.userId = user.id;
     req.session.userName = user.name;
+    if (rememberMe) req.session.cookie.maxAge = SESSION_TTL_REMEMBER;
     getUserBot(user.id).log(`🔓 دخول: ${user.name}`);
     res.json({ success: true, name: user.name, role: user.role });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -1329,11 +1347,65 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', (req, res) => {
   if (!req.session?.userId) return res.json({ loggedIn: false });
   const user = loadUsers().users.find(u => u.id === req.session.userId);
-  res.json({ loggedIn: true, name: req.session.userName, role: user?.role || 'user' });
+  res.json({ loggedIn: true, name: req.session.userName, email: user?.email || '', role: user?.role || 'user' });
+});
+
+// ── Forgot password ──
+app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.json({ success: false, message: 'أدخل الإيميل' });
+    const user = findUser(email);
+    if (!user) return res.json({ success: false, message: 'هذا الإيميل غير مسجل لدينا' });
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    pendingResets.set(email.toLowerCase().trim(), { code, expiresAt: Date.now() + 10 * 60 * 1000 });
+    const result = await sendVerificationEmail(email, user.name, code);
+    if (result.dev) console.log(`🔑 [DEV] رمز إعادة التعيين لـ ${email}: ${code}`);
+    res.json({ success: true, dev: !!result.dev, devCode: result.dev ? code : undefined });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+// ── Reset password (with code) ──
+app.post('/api/auth/reset-password', authLimiter, async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body;
+    if (!email || !code || !newPassword) return res.json({ success: false, message: 'جميع الحقول مطلوبة' });
+    if (newPassword.length < 8) return res.json({ success: false, message: 'كلمة المرور يجب أن تكون 8 أحرف على الأقل' });
+    const emailLower = email.toLowerCase().trim();
+    const pending = pendingResets.get(emailLower);
+    if (!pending || pending.code !== String(code).trim() || Date.now() > pending.expiresAt) {
+      return res.json({ success: false, message: 'الرمز غير صحيح أو انتهت صلاحيته' });
+    }
+    const data = loadUsers();
+    const idx = data.users.findIndex(u => u.email.toLowerCase() === emailLower);
+    if (idx === -1) return res.json({ success: false, message: 'المستخدم غير موجود' });
+    data.users[idx].password = await bcrypt.hash(newPassword, 12);
+    saveUsers(data);
+    pendingResets.delete(emailLower);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
 // Rate limit + auth on all other API routes
 app.use('/api', apiLimiter, requireAuth);
+
+// ── Change password (authenticated) ──
+app.post('/api/auth/change-password', async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.json({ success: false, message: 'جميع الحقول مطلوبة' });
+    if (newPassword.length < 8) return res.json({ success: false, message: 'كلمة المرور الجديدة يجب أن تكون 8 أحرف على الأقل' });
+    const data = loadUsers();
+    const idx = data.users.findIndex(u => u.id === req.session.userId);
+    if (idx === -1) return res.json({ success: false, message: 'المستخدم غير موجود' });
+    const ok = await bcrypt.compare(currentPassword, data.users[idx].password);
+    if (!ok) return res.json({ success: false, message: 'كلمة المرور الحالية غير صحيحة' });
+    data.users[idx].password = await bcrypt.hash(newPassword, 12);
+    saveUsers(data);
+    getUserBot(req.session.userId).log('🔑 تم تغيير كلمة المرور');
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
 
 // ─── BOT STATUS ROUTES ────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {

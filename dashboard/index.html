@@ -269,6 +269,7 @@ label{display:flex;align-items:center}
     <button class="tab active" onclick="goTab('connect')" id="tab-connect">📱 الربط</button>
     <button class="tab" onclick="goTab('settings')" id="tab-settings">⚙️ الإعدادات</button>
     <button class="tab" onclick="goTab('train')" id="tab-train">🎓 دربني</button>
+    <button class="tab" onclick="goTab('account')" id="tab-account">👤 حسابي</button>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <div class="conn-badge">
@@ -825,6 +826,87 @@ label{display:flex;align-items:center}
     <textarea id="trainResultText" rows="12"></textarea>
     <button class="train-apply" onclick="applyTrainResult()">✅ تطبيق كتعليمات البوت والحفظ</button>
     <button onclick="resetTraining()" style="width:100%;margin-top:8px;padding:10px;border-radius:10px;border:1.5px solid rgba(255,255,255,.1);background:transparent;color:#64748b;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer">↩ إعادة التدريب</button>
+  </div>
+
+</div>
+</div>
+
+<!-- ══ ACCOUNT VIEW ══ -->
+<div class="view" id="view-account">
+<div style="max-width:540px;margin:0 auto;padding:28px 16px">
+
+  <!-- Account Info -->
+  <div class="panel">
+    <div class="phdr">👤 معلومات الحساب</div>
+    <div class="pbdy">
+      <div class="g2">
+        <div>
+          <label>الاسم</label>
+          <input type="text" id="accName" disabled style="color:#94a3b8;cursor:default">
+        </div>
+        <div>
+          <label>الإيميل</label>
+          <input type="email" id="accEmail" disabled dir="ltr" style="color:#94a3b8;cursor:default">
+        </div>
+      </div>
+      <div style="margin-top:8px;padding:10px 14px;background:rgba(37,211,102,.05);border:1px solid rgba(37,211,102,.12);border-radius:11px;font-size:13px;color:#64748b">
+        🔒 بياناتك مشفرة ومحفوظة بأمان — لا يمكن لأحد رؤية كلمة مرورك
+      </div>
+    </div>
+  </div>
+
+  <!-- Change Password -->
+  <div class="panel">
+    <div class="phdr">🔑 تغيير كلمة المرور</div>
+    <div class="pbdy">
+      <div>
+        <label>كلمة المرور الحالية</label>
+        <div style="position:relative">
+          <input type="password" id="currPass" placeholder="••••••••" dir="ltr" autocomplete="current-password">
+          <button onclick="togglePassDash('currPass',this)" type="button"
+            style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#475569;cursor:pointer;font-size:15px">👁</button>
+        </div>
+      </div>
+      <div style="margin-top:14px">
+        <label>كلمة المرور الجديدة</label>
+        <div style="position:relative">
+          <input type="password" id="newPassDash" placeholder="8 أحرف على الأقل" dir="ltr"
+                 autocomplete="new-password" oninput="checkPassDash(this.value)">
+          <button onclick="togglePassDash('newPassDash',this)" type="button"
+            style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#475569;cursor:pointer;font-size:15px">👁</button>
+        </div>
+        <div id="dashPassBar" style="height:3px;border-radius:3px;margin-top:6px;background:#1e293b;transition:all .3s"></div>
+        <div id="dashPassLbl" style="font-size:10px;color:#475569;margin-top:3px"></div>
+      </div>
+      <div style="margin-top:14px">
+        <label>تأكيد كلمة المرور الجديدة</label>
+        <div style="position:relative">
+          <input type="password" id="confPassDash" placeholder="أعد كتابة كلمة المرور" dir="ltr"
+                 autocomplete="new-password">
+          <button onclick="togglePassDash('confPassDash',this)" type="button"
+            style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#475569;cursor:pointer;font-size:15px">👁</button>
+        </div>
+      </div>
+      <button class="save-btn" style="margin-top:18px" onclick="doChangePassword()">
+        <span id="changePassBtnTxt">🔒 حفظ كلمة المرور الجديدة</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Logout -->
+  <div class="panel">
+    <div class="phdr">🚪 تسجيل الخروج</div>
+    <div class="pbdy">
+      <p class="hint" style="margin-bottom:14px">لن يتأثر البوت عند تسجيل الخروج — سيستمر في العمل بشكل طبيعي</p>
+      <button onclick="doLogout()"
+        style="width:100%;padding:13px;border-radius:13px;border:1.5px solid rgba(239,68,68,.3);
+               background:rgba(239,68,68,.06);color:#f87171;font-family:var(--font);
+               font-size:15px;font-weight:800;cursor:pointer;transition:all .2s"
+        onmouseenter="this.style.background='rgba(239,68,68,.12)'"
+        onmouseleave="this.style.background='rgba(239,68,68,.06)'">
+        🚪 تسجيل الخروج
+      </button>
+    </div>
   </div>
 
 </div>
@@ -1488,9 +1570,51 @@ async function doLogout(){
 async function loadUserInfo(){
   try{
     const d=await fetch('/api/auth/me').then(r=>r.json());
-    if(d.loggedIn){const el=document.getElementById('userNameBadge');if(el)el.textContent=d.name||'';}
-    else location.href='/login';
+    if(d.loggedIn){
+      const el=document.getElementById('userNameBadge');if(el)el.textContent=d.name||'';
+      const n=document.getElementById('accName');if(n)n.value=d.name||'';
+      const e=document.getElementById('accEmail');if(e)e.value=d.email||'';
+    } else location.href='/login';
   }catch(_){}
+}
+
+// ── ACCOUNT PAGE ──
+function togglePassDash(id,btn){
+  const inp=document.getElementById(id);
+  inp.type=inp.type==='password'?'text':'password';
+  btn.textContent=inp.type==='text'?'🙈':'👁';
+}
+function checkPassDash(v){
+  const bar=document.getElementById('dashPassBar'),lbl=document.getElementById('dashPassLbl');
+  if(!v){bar.style.background='#1e293b';lbl.textContent='';return;}
+  const strong=v.length>=10&&/[A-Z]/.test(v)&&/[0-9]/.test(v);
+  const ok=v.length>=8;
+  bar.style.background=strong?'#25d366':ok?'#f59e0b':'#ef4444';
+  lbl.textContent=strong?'✅ قوية جداً':ok?'⚠️ مقبولة':'❌ ضعيفة — 8 أحرف على الأقل';
+}
+async function doChangePassword(){
+  const curr=document.getElementById('currPass').value;
+  const np=document.getElementById('newPassDash').value;
+  const cp=document.getElementById('confPassDash').value;
+  if(!curr||!np||!cp){toast('❌ جميع الحقول مطلوبة',true);return;}
+  if(np!==cp){toast('❌ كلمتا المرور الجديدة غير متطابقتين',true);return;}
+  if(np.length<8){toast('❌ كلمة المرور يجب أن تكون 8 أحرف على الأقل',true);return;}
+  const btn=document.getElementById('changePassBtnTxt');btn.textContent='⏳ جاري الحفظ...';
+  try{
+    const r=await fetch('/api/auth/change-password',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({currentPassword:curr,newPassword:np})});
+    const d=await r.json();
+    if(d.success){
+      toast('✅ تم تغيير كلمة المرور بنجاح');
+      document.getElementById('currPass').value='';
+      document.getElementById('newPassDash').value='';
+      document.getElementById('confPassDash').value='';
+      document.getElementById('dashPassBar').style.background='#1e293b';
+      document.getElementById('dashPassLbl').textContent='';
+    } else toast('❌ '+d.message,true);
+  }catch(_){toast('❌ تعذر الاتصال بالسيرفر',true);}
+  finally{btn.textContent='🔒 حفظ كلمة المرور الجديدة';}
 }
 
 // ── INIT ──
