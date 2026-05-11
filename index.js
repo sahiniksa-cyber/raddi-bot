@@ -446,6 +446,10 @@ class UserBot {
     return /غير متصل|sendMessage timeout|getChat timeout|Protocol|Execution context|Target closed|Session closed|Navigation|timeout|disconnected|not connected/i.test(msg);
   }
 
+  _canRetryMessage() {
+    return this.connection.status !== 'stopped';
+  }
+
   // ════════════════════════════════════════════════════════════════════
   // Message Processing (runs in background via queue)
   // ════════════════════════════════════════════════════════════════════
@@ -519,7 +523,7 @@ class UserBot {
       this.logger.info('message', '✅ رد: ' + reply.substring(0, 70));
     } catch (err) {
       this.logger.error('message', 'خطأ في الرد على ' + sender.replace('@c.us', '').replace('@lid', '') + ': ' + err.message);
-      if (this._isTransientWhatsAppError(err)) {
+      if (this._canRetryMessage() && this._isTransientWhatsAppError(err)) {
         const scheduled = this.queue.retryLater(sender, msg, meta, err.message);
         if (scheduled) return;
       }
@@ -882,6 +886,7 @@ app.post('/api/config', (req, res) => {
 app.post('/api/clear', (req, res) => {
   const bot = getUserBot(req.session.userId);
   bot.conversations.clear();
+  bot.saveConversations();
   res.json({ success: true });
 });
 
@@ -891,9 +896,17 @@ app.post('/api/bot/start', async (req, res) => {
   res.json({ success: true, started, status: bot.appState.status });
 });
 
-app.post('/api/bot/stop', (req, res) => {
-  getUserBot(req.session.userId).stopBot();
-  res.json({ success: true });
+app.post('/api/bot/stop', async (req, res) => {
+  const bot = getUserBot(req.session.userId);
+  try {
+    await Promise.race([
+      bot.stopBot(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('stop timeout')), 8000)),
+    ]);
+    res.json({ success: true, status: bot.appState.status });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message, status: bot.appState.status });
+  }
 });
 
 app.post('/api/bot/clear-session', async (req, res) => {
@@ -913,7 +926,10 @@ app.post('/api/send-message', async (req, res) => {
     return res.json({ success: false, message: 'البوت غير متصل' });
   try {
     const cleanPhone = phone.replace(/\+/g, '').replace(/[\s\-()]/g, '');
-    await bot.client.sendMessage(cleanPhone + '@c.us', message.trim());
+    await Promise.race([
+      bot.client.sendMessage(cleanPhone + '@c.us', message.trim()),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('sendMessage timeout (30s)')), TIMERS.SEND_MESSAGE_TIMEOUT_MS)),
+    ]);
     bot.log(`📤 رسالة مباشرة إلى ${cleanPhone}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -1198,24 +1214,32 @@ console.log('🚀 ردّي جاهز — اضغط "تشغيل البوت" للب�
 setInterval(async () => {
   for (const bot of userBots.values()) {
     if (!bot.botRunning || !bot.client) continue;
-    const phone = bot.client.info?.wid?.user;
-    if (phone && bot.connection.status !== 'connected' && bot.connection.status !== 'qr_ready') {
-      bot.connection.status = 'connected';
-      bot.connection.phone = phone;
-      bot.connection.ready = true;
-      bot.log('✅ تصحيح تلقائي → متصل');
-      continue;
-    }
-    if (bot.connection.status === 'connecting' || bot.connection.status === 'disconnected') {
-      try {
-        const state = await Promise.race([bot.client.getState(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000))]).catch(() => null);
-        if (state === 'CONNECTED') {
-          bot.connection.status = 'connected';
-          bot.connection.phone = bot.client.info?.wid?.user || bot.connection.phone;
-          bot.connection.ready = true;
-          bot.log('✅ تصحيح getState → متصل');
+    try {
+      const state = await Promise.race([
+        bot.client.getState(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2500)),
+      ]).catch(() => null);
+
+      if (state === 'CONNECTED') {
+        if (bot.connection.status !== 'connected') bot.log('✅ تصحيح getState → متصل');
+        bot.connection.status = 'connected';
+        bot.connection.phone = bot.client.info?.wid?.user || bot.connection.phone;
+        bot.connection.ready = true;
+        bot.connection.error = null;
+        continue;
+      }
+
+      if (bot.connection.status === 'connected' && state && state !== 'CONNECTED') {
+        bot.connection.ready = false;
+        bot.connection.status = 'connecting';
+        bot.connection.error = 'WhatsApp state mismatch: ' + (state || 'unknown');
+        bot.log('⚠️ الحالة كانت متصل لكن WhatsApp ليس CONNECTED — إعادة تهيئة');
+        if (typeof bot.connection._scheduleRetry === 'function') {
+          bot.connection._scheduleRetry(0, 'auto-fix state mismatch: ' + (state || 'unknown'));
         }
-      } catch (_) {}
+      }
+    } catch (_) {
+      // ConnectionManager heartbeat owns recovery; this interval only corrects stale UI state.
     }
   }
 }, TIMERS.AUTO_FIX_INTERVAL_MS);
