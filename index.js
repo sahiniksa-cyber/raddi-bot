@@ -609,7 +609,7 @@ class UserBot {
     this.botReplyingTo    = new Set(); // ← tracks chats where bot is actively sending a reply
     this.handledMessageIds = new Set(); // dedup: WhatsApp sometimes delivers the same msg twice
     this.lastReplyByChat = new Map(); // sender → last reply text, prevents identical back-to-back replies
-    this.processingChats = new Set(); // prevents concurrent handleMessage races for same sender
+    this.processingChats = new Map(); // sender → timestamp, prevents concurrent races + auto-expires
     this.botReady = false; // sticky flag set on `ready` — guards against late loading_screen flipping status back
     this.appState = { status: 'stopped', qrString: null, qrVersion: 0, phone: null, activeChats: 0, error: null, logs: [] };
     this.client     = null;
@@ -747,16 +747,66 @@ class UserBot {
       if (delaySec > 0) await sleep(delaySec * 1000);
     }
 
+    // Re-check connection after the long delay — don't send into the void
+    if (!this.client || !this.botRunning) throw new Error('العميل غير متصل بعد التأخير');
+
     // Mark chat as "bot is replying" so message_create won't pause it
     this.botReplyingTo.add(msg.from);
     try {
       if (!this.client || !this.botRunning) throw new Error('العميل غير متصل');
-      // client.sendMessage is more reliable than a stale chat object after a long delay
-      await this.client.sendMessage(msg.from, text);
+      // 30s timeout — if Chrome is dead, sendMessage hangs forever without this
+      await Promise.race([
+        this.client.sendMessage(msg.from, text),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('sendMessage timeout (30s)')), 30000)),
+      ]);
       this.log(`✅ أُرسلت إلى ${msg.from.replace('@c.us', '').replace('@lid', '')}`);
     } finally {
       // Clear the flag after 5s to handle any timing edge cases
       setTimeout(() => this.botReplyingTo.delete(msg.from), 5000);
+    }
+  }
+
+  // ── Heartbeat: continuous connection monitoring ──
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    let failCount = 0;
+    this._heartbeatInterval = setInterval(async () => {
+      if (!this.botRunning || !this.botReady || !this.client) return;
+      try {
+        const state = await Promise.race([
+          this.client.getState(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
+        ]);
+        if (state === 'CONNECTED') {
+          failCount = 0;
+        } else {
+          failCount++;
+          this.log(`⚠️ نبض: الحالة "${state}" بدلاً من CONNECTED (${failCount}/2)`);
+          if (failCount >= 2) {
+            this.log('❌ اتصال غير مستقر — إعادة التشغيل تلقائياً');
+            failCount = 0;
+            this._stopHeartbeat();
+            this._scheduleRetry(0, 'heartbeat: state=' + state);
+          }
+        }
+      } catch (e) {
+        failCount++;
+        this.log(`⚠️ نبض: فشل الفحص (${failCount}/2) — ${e.message.substring(0, 50)}`);
+        if (failCount >= 2) {
+          this.log('❌ البوت لا يستجيب — إعادة التشغيل تلقائياً');
+          failCount = 0;
+          this._stopHeartbeat();
+          this._scheduleRetry(0, 'heartbeat: ' + e.message.substring(0, 50));
+        }
+      }
+    }, 30000); // فحص كل 30 ثانية
+    this.log('💓 تم تشغيل مراقب الاتصال (نبض كل 30 ثانية)');
+  }
+
+  _stopHeartbeat() {
+    if (this._heartbeatInterval) {
+      clearInterval(this._heartbeatInterval);
+      this._heartbeatInterval = null;
     }
   }
 
@@ -1065,10 +1115,17 @@ ${productsBlock}
 
     const sender = msg.from;
 
-    // ── Concurrency guard: if a previous reply for this sender is still being generated, queue here ──
+    // ── Concurrency guard: if a previous reply for this sender is still being generated ──
     if (this.processingChats.has(sender)) {
-      this.log(`⏳ ${sender.replace('@c.us', '').replace('@lid', '')} — رد آخر قيد المعالجة، تجاهل التكرار`);
-      return;
+      const startedAt = this.processingChats.get(sender);
+      // Auto-expire stuck locks after 3 minutes (reply delay max ~105s + AI time ~30s + buffer)
+      if (startedAt && Date.now() - startedAt > 180000) {
+        this.processingChats.delete(sender);
+        this.log(`⚠️ ${sender.replace('@c.us', '').replace('@lid', '')} — كان عالق 3+ دقائق، تم التحرير`);
+      } else {
+        this.log(`⏳ ${sender.replace('@c.us', '').replace('@lid', '')} — رد آخر قيد المعالجة، تجاهل`);
+        return;
+      }
     }
 
     // If WhatsApp is sending us messages, we ARE connected — fix any stale flag
@@ -1086,7 +1143,7 @@ ${productsBlock}
 
     this.log('📨 ' + sender.replace('@c.us', '').replace('@lid', '') + ': ' + text.substring(0, 60));
 
-    this.processingChats.add(sender);
+    this.processingChats.set(sender, Date.now());
     try {
       const kw = this.checkKeywords(text);
       if (kw) {
@@ -1201,6 +1258,7 @@ ${productsBlock}
     clearTimeout(this._retryTimer);
     clearTimeout(this._watchdogTimer);
     clearTimeout(this._healthProbeTimer);
+    this._stopHeartbeat();
 
     if (this.botRunning) {
       // Force-restart: stop the current instance then start fresh
@@ -1265,6 +1323,7 @@ ${productsBlock}
   _scheduleRetry(retryCount, reason) {
     clearTimeout(this._watchdogTimer);
     clearTimeout(this._healthProbeTimer);
+    this._stopHeartbeat();
     if (!this.botRunning) return;
 
     const MAX_RETRIES = 4;
@@ -1300,6 +1359,7 @@ ${productsBlock}
     clearTimeout(this._retryTimer); // ألغِ أي إعادة محاولة مجدولة
     clearTimeout(this._watchdogTimer); // ألغِ الـ watchdog إن كان نشطاً
     clearTimeout(this._healthProbeTimer); // ألغِ فحص ما بعد الاتصال
+    this._stopHeartbeat(); // ألغِ المراقب المستمر
     if (!this.botRunning) {
       this.appState.status = 'stopped';
       this.appState.qrString = null;
@@ -1358,19 +1418,20 @@ ${productsBlock}
       this.appState.error = null;
       this.log('✅ متصل! رقم: +' + this.appState.phone);
 
-      // ── Post-ready health probe: verify connection is REAL, not a stale session ──
-      // WhatsApp-web.js can fire `ready` from a cached session even if the actual
-      // Puppeteer page is broken. Check getState() after 8s to catch ghost connections.
+      // ── Post-ready verification + start continuous heartbeat ──
+      // First verify the connection is real (not a ghost from a stale session),
+      // then start 30s heartbeat to catch any future drops immediately.
       clearTimeout(this._healthProbeTimer);
       this._healthProbeTimer = setTimeout(async () => {
         if (!this.botRunning || !this.botReady) return;
         try {
           const state = await Promise.race([
             this.client.getState(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
           ]);
           if (state === 'CONNECTED') {
             this.log('✅ فحص الاتصال: تم التأكد — البوت يعمل فعلاً');
+            this._startHeartbeat(); // Start continuous monitoring
           } else {
             this.log(`⚠️ فحص ما بعد الاتصال: الحالة "${state}" — إعادة التشغيل`);
             this._scheduleRetry(0, 'post-ready: state is ' + state);
@@ -1392,16 +1453,24 @@ ${productsBlock}
     c.on('disconnected', (r) => {
       if (!this.botRunning) return;
       this.botReady = false;
-      this.appState.status = 'disconnected';
-      this.appState.phone = null;
-      this.log('⚠️ انقطع (' + r + ') — إعادة التشغيل خلال 5ث...');
-      // Full restart: نوقف الـ client القديم ونعيد التشغيل من الصفر
-      // (استدعاء initialize() على client منقطع لا يعمل بشكل موثوق)
-      const dyingClient = this.client;
-      this.botRunning = false;
-      this.client = null;
-      if (dyingClient) dyingClient.destroy().catch(() => {});
-      setTimeout(() => { if (!this.botRunning) this.startBot(); }, 5000);
+      this._stopHeartbeat();
+      this.processingChats.clear(); // Release all stuck processing locks
+      this.log('⚠️ انقطع (' + r + ') — إعادة الاتصال تلقائياً...');
+      // Use the robust retry system (kills Chrome, retries up to 4 times)
+      this._scheduleRetry(0, 'disconnected: ' + r);
+    });
+
+    // ── Detect WhatsApp state changes (CONFLICT, UNPAIRED, etc.) ──
+    c.on('change_state', (state) => {
+      this.log('🔄 حالة WhatsApp: ' + state);
+      if (state === 'CONFLICT') {
+        this.log('⚠️ تعارض: WhatsApp مفتوح على جهاز آخر — سيتم استعادة الجلسة تلقائياً');
+      }
+      if (state === 'UNLAUNCHED' && this.botReady) {
+        this.log('⚠️ الجلسة فُقدت (UNLAUNCHED) — إعادة التشغيل');
+        this._stopHeartbeat();
+        this._scheduleRetry(0, 'change_state: UNLAUNCHED');
+      }
     });
 
     c.on('message', (msg) => this.handleMessage(msg));
