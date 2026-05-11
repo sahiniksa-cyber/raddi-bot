@@ -108,14 +108,15 @@ class UserBot {
     this.totalChatsHandled = 0;
     this.costsData = { totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUSD: 0, byModel: {}, resetAt: new Date().toISOString() };
 
+    // ── Core modules used during startup ──
+    this.logger = new Logger(userId);
+
     // ── Config ──
     this.config = this._loadConfig();
     this._loadCosts();
     this._loadConversations();
 
-    // ── Modules ──
-    this.logger = new Logger(userId);
-
+    // ── Runtime modules ──
     this.heartbeat = new Heartbeat(this.logger);
 
     this.queue = new MessageQueue(this.logger);
@@ -216,8 +217,12 @@ class UserBot {
       for (const [k, v] of Object.entries(data)) {
         if (v.lastAt > cutoff && Array.isArray(v.msgs) && v.msgs.length > 0) { this.conversations.set(k, v.msgs); count++; }
       }
-      if (count > 0) this.logger.info('system', `📚 تم تحميل ${count} محادثة`);
-    } catch (e) { this.logger.warn('system', 'تعذر تحميل المحادثات: ' + e.message); }
+      if (count > 0) this.logger?.info('system', `📚 تم تحميل ${count} محادثة`);
+    } catch (e) {
+      const message = 'تعذر تحميل المحادثات: ' + e.message;
+      if (this.logger) this.logger.warn('system', message);
+      else console.warn(message);
+    }
   }
 
   saveConversations() {
@@ -567,6 +572,7 @@ errorHandler.install({
 // ██  EXPRESS APP
 // ══════════════════════════════════════════════════════════════════════
 const app = express();
+app.set('trust proxy', 1);
 
 const SESSION_SECRET = (() => {
   const f = path.join(DATA_DIR, '.session-secret');
