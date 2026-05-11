@@ -635,6 +635,7 @@ class UserBot {
       botInstructions: '', welcomeMode: 'inline', model: 'google/gemini-2.0-flash', openaiApiKey: '',
       openrouterApiKey: '', replyDelayPreset: '1min', memoryMessages: 50,
       maxResponseLength: 300, products: [], autoReplyKeywords: {},
+      escalationContacts: [], // [{name, phone, role, when}] — جهات تصعيد يحوّل إليها AI
       replyStyle: { tone: 'ودي ومحترم', useDialect: true, dialect: 'السعودية الخفيفة', emojiLevel: 'medium', useShortReplies: false },
     };
   }
@@ -759,6 +760,42 @@ class UserBot {
     }
   }
 
+  // ── Escalation: forward to a contact ──
+  async forwardToContact(contactName, summary, customerPhone, recentHistory = []) {
+    const contacts = this.config.escalationContacts || [];
+    const contact = contacts.find(c => c.name.trim() === contactName.trim());
+    if (!contact || !contact.phone) {
+      this.log('⚠️ جهة التحويل غير موجودة: ' + contactName);
+      return false;
+    }
+
+    const cleanPhone = contact.phone.replace(/\+/g, '').replace(/[\s\-()]/g, '');
+    const targetId = cleanPhone + '@c.us';
+    const customerNum = customerPhone.replace('@c.us', '').replace('@lid', '');
+
+    let forwardMsg = `📨 *تحويل من عميل*\n\n`;
+    forwardMsg += `👤 رقم العميل: wa.me/${customerNum}\n`;
+    if (contact.role) forwardMsg += `📋 القسم: ${contact.role}\n`;
+    forwardMsg += `💬 الملخص: ${summary}\n`;
+
+    if (recentHistory.length > 0) {
+      forwardMsg += `\n📜 آخر الرسائل:\n`;
+      for (const m of recentHistory.slice(-6)) {
+        const label = m.role === 'user' ? '👤 العميل' : '🤖 البوت';
+        forwardMsg += `${label}: ${m.content.substring(0, 120)}\n`;
+      }
+    }
+
+    try {
+      await this.client.sendMessage(targetId, forwardMsg);
+      this.log(`📨 تم تحويل العميل ${customerNum} إلى ${contact.name} (${cleanPhone})`);
+      return true;
+    } catch (e) {
+      this.log(`❌ فشل التحويل إلى ${contact.name}: ${e.message}`);
+      return false;
+    }
+  }
+
   // ── Keywords ──
   checkKeywords(text) {
     const lower = text.toLowerCase();
@@ -876,6 +913,23 @@ class UserBot {
       ? '\n\n💬 ملاحظة: تم إرسال ترحيب للعميل — اكتب رد يجاوب على طلبه مباشرة.'
       : '';
 
+    // ── Escalation contacts section (shared between both prompt paths) ──
+    const esc = this.config.escalationContacts;
+    let escalationBlock = '';
+    if (esc?.length > 0) {
+      const contactsList = esc.map((c, i) =>
+        `${i + 1}. ${c.name}${c.role ? ' (' + c.role + ')' : ''}${c.when ? ' — متى: ' + c.when : ''}`
+      ).join('\n');
+      escalationBlock = `\n\n📞 التحويل والتصعيد:
+عندما لا تستطيع حل مشكلة العميل أو يحتاج مساعدة متخصصة، حوّل الطلب لأحد هؤلاء:
+${contactsList}
+
+طريقة التحويل: أجب العميل أولاً (مثلاً: "خلني أحوّلك للمختص")، ثم أضف في آخر ردك:
+[تحويل:اسم_الشخص|ملخص المشكلة بالتفصيل]
+مثال: خلني أحوّلك لأحمد يساعدك بالموضوع [تحويل:أحمد|العميل لديه مشكلة في طلب 5432 لم يصل]
+⚠️ لا تستخدم التحويل إلا عند الحاجة الفعلية. العلامة [تحويل:...] لن تظهر للعميل.`;
+    }
+
     if (this.config.botInstructions && this.config.botInstructions.trim().length > 300) {
       return `${this.config.botInstructions.trim()}
 
@@ -885,7 +939,7 @@ class UserBot {
 - المنتجات المضافة في لوحة التحكم:
 ${productsBlock}
 - كلمات ممنوعة: ${avoid}
-- تنسيق الرد: نظّم المعلومات بأسطر منفصلة وترتيب واضح — استخدم الأسطر والنقاط (- أو •) لتسهيل القراءة. تجنب رموز Markdown (** ## --- |جداول|) لكن الأسطر الجديدة والنقاط مقبولة${welcomeHint}`;
+- تنسيق الرد: نظّم المعلومات بأسطر منفصلة وترتيب واضح — استخدم الأسطر والنقاط (- أو •) لتسهيل القراءة. تجنب رموز Markdown (** ## --- |جداول|) لكن الأسطر الجديدة والنقاط مقبولة${escalationBlock}${welcomeHint}`;
     }
 
     const tone = r.tone || 'ودي ومحترم';
@@ -923,7 +977,7 @@ ${productsBlock}
 - قول هذه الكلمات أبداً: ${avoid}
 - تكرار الترحيب إذا كنت رحبت في رسالة سابقة
 
-⚡ مهم: ركّز على آخر رسالة من العميل وأجب عليها.${welcomeHint}`;
+⚡ مهم: ركّز على آخر رسالة من العميل وأجب عليها.${escalationBlock}${welcomeHint}`;
   }
 
   async getAIReply(history, opts = {}) {
@@ -1062,13 +1116,22 @@ ${productsBlock}
       const memSize = Math.max(2, parseInt(this.config.memoryMessages) || 50);
       if (history.length > memSize) history.splice(0, history.length - memSize);
 
-      const reply = (await this.getAIReply(history, { isFirstMsg }) || '').trim();
+      let reply = (await this.getAIReply(history, { isFirstMsg }) || '').trim();
 
       // Empty reply: stay silent (don't send a blank message — that fails on WhatsApp anyway)
       if (!reply) {
         this.log('⚠️ الـ AI رد بنص فارغ — لن يُرسل شيء (سيُحاول مع الرسالة التالية)');
         history.pop(); // remove the unanswered user msg so the next message gets a fresh attempt
         return;
+      }
+
+      // ── Parse escalation/forwarding tag: [تحويل:name|summary] ──
+      const forwardMatch = reply.match(/\[تحويل:([^|\]]+)\|([^\]]+)\]/);
+      if (forwardMatch) {
+        const [fullTag, contactName, summary] = forwardMatch;
+        reply = reply.replace(fullTag, '').trim();
+        // Forward in background — don't block the customer reply
+        this.forwardToContact(contactName.trim(), summary.trim(), sender, history).catch(() => {});
       }
 
       // Anti-repetition: if identical to the last reply we sent in this chat, skip
@@ -1134,7 +1197,21 @@ ${productsBlock}
   }
 
   startBot(retryCount = 0) {
-    if (this.botRunning) { this.log('⚠️ البوت يعمل بالفعل'); return; }
+    // ── Clean up any pending timers from a previous run ──
+    clearTimeout(this._retryTimer);
+    clearTimeout(this._watchdogTimer);
+    clearTimeout(this._healthProbeTimer);
+
+    if (this.botRunning) {
+      // Force-restart: stop the current instance then start fresh
+      this.log('⚠️ البوت يعمل بالفعل — إعادة تشغيل تلقائي...');
+      this.stopBot().then(() => this.startBot(retryCount)).catch(() => {
+        this.botRunning = false;
+        this.startBot(retryCount);
+      });
+      return;
+    }
+
     this.botRunning = true;
     this.botReady = false;
     this.appState.status = 'waiting_qr';
@@ -1166,16 +1243,16 @@ ${productsBlock}
     this.client = this.createClient();
     this.attachEvents(this.client);
 
-    // ── Watchdog: if neither qr nor ready fires within 90s, the Chrome page is hung
-    //    silently (common on Railway cold-start). Force a restart instead of waiting forever.
+    // ── Watchdog: if ready doesn't fire within 90s, Chrome is hung.
+    //    'connecting' is NOT safe to skip — bot can get stuck in authenticated/loading forever.
+    //    Only skip if QR is showing (waiting for user) or already connected (working).
     clearTimeout(this._watchdogTimer);
     this._watchdogTimer = setTimeout(() => {
       if (!this.botRunning) return;
       const s = this.appState.status;
-      // If we made it to QR or further, watchdog isn't needed anymore (it should have been cleared)
-      if (s === 'qr_ready' || s === 'connecting' || s === 'connected') return;
-      this.log('⏱ انتظرنا 90 ثانية بدون نشاط — Chrome متجمد، إعادة التشغيل تلقائياً');
-      this._scheduleRetry(retryCount, 'watchdog: no QR/ready in 90s');
+      if (s === 'qr_ready' || s === 'connected') return;
+      this.log('⏱ انتظرنا 90 ثانية بدون تشغيل فعلي — Chrome متجمد، إعادة التشغيل تلقائياً');
+      this._scheduleRetry(retryCount, 'watchdog: no ready in 90s (status: ' + s + ')');
     }, 90000);
 
     this.client.initialize().catch(err => {
@@ -1187,6 +1264,7 @@ ${productsBlock}
 
   _scheduleRetry(retryCount, reason) {
     clearTimeout(this._watchdogTimer);
+    clearTimeout(this._healthProbeTimer);
     if (!this.botRunning) return;
 
     const MAX_RETRIES = 4;
@@ -1221,6 +1299,7 @@ ${productsBlock}
   async stopBot() {
     clearTimeout(this._retryTimer); // ألغِ أي إعادة محاولة مجدولة
     clearTimeout(this._watchdogTimer); // ألغِ الـ watchdog إن كان نشطاً
+    clearTimeout(this._healthProbeTimer); // ألغِ فحص ما بعد الاتصال
     if (!this.botRunning) {
       this.appState.status = 'stopped';
       this.appState.qrString = null;
@@ -1278,6 +1357,29 @@ ${productsBlock}
       this.appState.qrString = null;
       this.appState.error = null;
       this.log('✅ متصل! رقم: +' + this.appState.phone);
+
+      // ── Post-ready health probe: verify connection is REAL, not a stale session ──
+      // WhatsApp-web.js can fire `ready` from a cached session even if the actual
+      // Puppeteer page is broken. Check getState() after 8s to catch ghost connections.
+      clearTimeout(this._healthProbeTimer);
+      this._healthProbeTimer = setTimeout(async () => {
+        if (!this.botRunning || !this.botReady) return;
+        try {
+          const state = await Promise.race([
+            this.client.getState(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+          ]);
+          if (state === 'CONNECTED') {
+            this.log('✅ فحص الاتصال: تم التأكد — البوت يعمل فعلاً');
+          } else {
+            this.log(`⚠️ فحص ما بعد الاتصال: الحالة "${state}" — إعادة التشغيل`);
+            this._scheduleRetry(0, 'post-ready: state is ' + state);
+          }
+        } catch (e) {
+          this.log('⚠️ فحص ما بعد الاتصال فشل: ' + e.message + ' — إعادة التشغيل');
+          this._scheduleRetry(0, 'post-ready health probe: ' + e.message);
+        }
+      }, 8000);
     });
 
     c.on('auth_failure', (m) => {
@@ -1693,8 +1795,12 @@ app.post('/api/clear', (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/bot/start', (req, res) => {
+app.post('/api/bot/start', async (req, res) => {
   const bot = getUserBot(req.session.userId);
+  // If already "running" but potentially stale, force a clean restart
+  if (bot.botRunning) {
+    try { await Promise.race([bot.stopBot(), new Promise(r => setTimeout(r, 5000))]); } catch (_) {}
+  }
   bot.startBot();
   res.json({ success: true });
 });
@@ -1727,6 +1833,26 @@ app.post('/api/bot/clear-session', async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     bot.log('❌ فشل مسح الجلسة: ' + e.message);
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ─── SEND DIRECT MESSAGE (for admin/escalation) ─────────────────────
+app.post('/api/send-message', async (req, res) => {
+  const bot = getUserBot(req.session.userId);
+  const { phone, message } = req.body;
+  if (!phone || !message?.trim()) return res.status(400).json({ success: false, message: 'الرقم والرسالة مطلوبان' });
+  if (!bot.botRunning || !bot.client || bot.appState.status !== 'connected') {
+    return res.json({ success: false, message: 'البوت غير متصل — شغّله أولاً' });
+  }
+  try {
+    const cleanPhone = phone.replace(/\+/g, '').replace(/[\s\-()]/g, '');
+    const targetId = cleanPhone + '@c.us';
+    await bot.client.sendMessage(targetId, message.trim());
+    bot.log(`📤 رسالة مباشرة إلى ${cleanPhone}: ${message.trim().substring(0, 50)}`);
+    res.json({ success: true });
+  } catch (e) {
+    bot.log(`❌ فشل إرسال رسالة مباشرة: ${e.message}`);
     res.status(500).json({ success: false, message: e.message });
   }
 });

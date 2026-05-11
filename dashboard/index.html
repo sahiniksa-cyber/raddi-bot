@@ -731,6 +731,22 @@ details summary::-webkit-details-marker{display:none}
     </div>
   </div>
 
+  <!-- ═══ ESCALATION CONTACTS ═══ -->
+  <div class="panel">
+    <div class="phdr">
+      <span>📞 جهات التحويل والتصعيد — AI يتواصل مع فريقك</span>
+    </div>
+    <div class="pbdy">
+      <p class="hint" style="margin:0 0 14px;background:var(--indigo-bg);border-right:3px solid var(--indigo-soft);padding:11px 13px;border-radius:8px;color:var(--indigo);font-weight:600">
+        🔗 إذا واجه البوت مشكلة لا يعرف حلها، يرسل تلقائياً لأحد هؤلاء الأشخاص مع ملخص المشكلة ورقم العميل.<br>
+        <small style="color:var(--text-soft)">مثال: العميل يشتكي من تأخر الشحن → البوت يرد على العميل ويرسل لمسؤول الشحن تلقائياً.</small>
+      </p>
+      <div id="escContainer"></div>
+      <button class="add-btn" onclick="addEscContact()">+ إضافة جهة تحويل</button>
+      <div class="hint" style="margin-top:10px">اكتب في تعليمات البوت متى يحوّل. مثال: "إذا العميل يسأل عن مرتجعات حوّل لسارة"</div>
+    </div>
+  </div>
+
   <!-- ═══ OWNER PAUSE STATUS ═══ -->
   <div class="panel" id="pausedPanel" style="display:none">
     <div class="phdr">
@@ -1187,6 +1203,7 @@ function fillForm(c){
 
   renderKW(c.autoReplyKeywords||{});
   renderProd(c.products||[]);
+  renderEscContacts(c.escalationContacts||[]);
 }
 
 async function clearAllConversations(){
@@ -1338,6 +1355,16 @@ function updProd(){
   const cnt=document.querySelectorAll('.prod-card').length;
   const el=document.getElementById('prodCount');if(el)el.textContent=cnt>0?cnt+' منتج':'';
 }
+// ── ESCALATION CONTACTS ──
+function renderEscContacts(arr){document.getElementById('escContainer').innerHTML='';(arr||[]).forEach(c=>addEscContact(c.name,c.phone,c.role,c.when));}
+function addEscContact(n='',p='',role='',when=''){
+  const c=document.getElementById('escContainer'),el=document.createElement('div');
+  el.className='esc-card';
+  el.style.cssText='background:var(--card-soft);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:8px';
+  el.innerHTML=`<div class="g2"><div><label>الاسم</label><input type="text" class="esc-name" placeholder="مثال: أحمد" value="${esc(n)}"></div><div><label>رقم الواتساب</label><input type="text" class="esc-phone" placeholder="966501234567" value="${esc(p)}" dir="ltr"></div></div><div class="g2"><div><label>الدور/القسم</label><input type="text" class="esc-role" placeholder="مثال: مدير الشحن" value="${esc(role)}"></div><div><label>متى يُحوَّل إليه</label><input type="text" class="esc-when" placeholder="مثال: مشاكل التوصيل والشحن" value="${esc(when)}"></div></div><button class="prod-del" onclick="this.parentElement.remove()">× حذف</button>`;
+  c.appendChild(el);
+}
+
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 async function saveConf(){
@@ -1346,6 +1373,9 @@ async function saveConf(){
   document.querySelectorAll('.kw-row').forEach(r=>{const k=r.querySelector('.kw-k')?.value?.trim(),v=r.querySelector('.kw-v')?.value?.trim();if(k&&v)kws[k]=v;});
   const prods=[];
   document.querySelectorAll('.prod-card').forEach(r=>{const n=r.querySelector('.pn')?.value?.trim();if(n)prods.push({name:n,description:r.querySelector('.pd')?.value?.trim()||'',price:r.querySelector('.pp')?.value?.trim()||''});});
+  // Escalation contacts
+  const escContacts=[];
+  document.querySelectorAll('.esc-card').forEach(r=>{const n=r.querySelector('.esc-name')?.value?.trim(),p=r.querySelector('.esc-phone')?.value?.trim();if(n&&p)escContacts.push({name:n,phone:p,role:r.querySelector('.esc-role')?.value?.trim()||'',when:r.querySelector('.esc-when')?.value?.trim()||''});});
   // Reply style
   const langStyle=document.getElementById('rsLanguage').value;
   const replyStyle={
@@ -1389,6 +1419,7 @@ async function saveConf(){
     memoryMessages,
     welcomeMode,
     autoReplyKeywords:kws,products:prods,
+    escalationContacts:escContacts,
   };
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(nc)});
