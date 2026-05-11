@@ -5,9 +5,11 @@ const { createConfigRoutes } = require('./config.routes');
 const { createDashboardRoutes } = require('./dashboard.routes');
 const { createHealthRoutes } = require('./health.routes');
 const { createQueueRoutes } = require('./queue.routes');
+const { createAuthRoutes } = require('./auth.routes');
 
 function mountRoutes(app, deps = {}) {
   app.use(createHealthRoutes(deps));
+  app.use(createAuthRoutes(deps));
   app.use(createDashboardRoutes(deps));
   app.use(createBotRoutes(deps));
   app.use(createConfigRoutes(deps));
@@ -18,6 +20,7 @@ function mountRoutes(app, deps = {}) {
 module.exports = {
   createBotRoutes,
   createConfigRoutes,
+  createAuthRoutes,
   createDashboardRoutes,
   createHealthRoutes,
   createQueueRoutes,

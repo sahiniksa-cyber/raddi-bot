@@ -20,4 +20,4 @@ RUN npm install --production --no-audit --no-fund
 COPY . .
 
 EXPOSE 3000
-CMD ["npm", "run", "start:web"]
+CMD ["npm", "run", "start:all"]

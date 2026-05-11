@@ -3,8 +3,8 @@
 const { spawn } = require('child_process');
 
 const processes = [
-  { name: 'web', command: 'node', args: ['index.js'], required: true },
-  { name: 'ai-worker', command: 'node', args: ['src/workers/ai-worker.js'], required: process.env.REQUIRE_WORKER === 'true' },
+  { name: 'web', command: 'node', args: ['src/server.js'], required: true },
+  { name: 'ai-worker', command: 'node', args: ['src/workers/ai-worker.js'], required: process.env.REQUIRE_WORKER !== 'false' },
 ];
 
 const children = new Map();

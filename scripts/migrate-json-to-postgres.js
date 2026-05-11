@@ -163,7 +163,7 @@ async function migrateUserDirectory(client, userId, userDir) {
   const config = await readJson(path.join(userDir, 'config.json'), null);
   const conversations = await readJson(path.join(userDir, 'conversations.json'), {});
 
-  if (config) await upsertConfig(client, userId, config);
+  await upsertConfig(client, userId, config || {});
   await upsertSession(client, userId, userDir);
 
   let convCount = 0;

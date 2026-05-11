@@ -18,6 +18,29 @@ function createBotController({ getUserBot }) {
       });
     },
 
+    async qr(req, res) {
+      const bot = getUserBot(req.session.userId);
+      res.json({ qr: bot.appState.qrString || null });
+    },
+
+    async qrImage(req, res) {
+      const QRCode = require('qrcode');
+      const bot = getUserBot(req.session.userId);
+      const qr = bot.appState.qrString;
+      if (!qr) return res.status(404).end();
+      try {
+        const buf = await QRCode.toBuffer(qr, {
+          width: 512,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' },
+          errorCorrectionLevel: 'H',
+        });
+        res.type('png').send(buf);
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    },
+
     start(req, res) {
       const bot = getUserBot(req.session.userId);
       const started = bot.startBot();
