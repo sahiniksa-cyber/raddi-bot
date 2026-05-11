@@ -3,6 +3,7 @@ node_modules/
 
 # Session & Auth (sensitive)
 session/
+sessions/
 .session-secret
 *.pem
 
