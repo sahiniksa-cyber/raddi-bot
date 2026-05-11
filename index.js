@@ -42,16 +42,79 @@ const storeScanner      = require('./lib/store-scanner');
 // ─── DATA PERSISTENCE ─────────────────────────────────────────────────
 const _onRailway = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
 
+function canUseDataDir(dir) {
+  if (!dir) return false;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.write-test-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(probe, 'ok', 'utf8');
+    fs.unlinkSync(probe);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 const DATA_DIR = (() => {
-  if (process.env.DATA_DIR) return process.env.DATA_DIR;
+  if (process.env.DATA_DIR && canUseDataDir(process.env.DATA_DIR)) return path.resolve(process.env.DATA_DIR);
+  if (process.env.RAILWAY_VOLUME_MOUNT_PATH && canUseDataDir(process.env.RAILWAY_VOLUME_MOUNT_PATH)) {
+    const p = path.resolve(process.env.RAILWAY_VOLUME_MOUNT_PATH);
+    console.log(`✅ Railway Volume detected: ${p}`);
+    return p;
+  }
   try { fs.accessSync('/data', fs.constants.W_OK); if (_onRailway) console.log('✅ تم اكتشاف Volume على /data تلقائياً'); return '/data'; } catch (_) {}
   return __dirname;
 })();
+
+function migrateRuntimeData(targetDir) {
+  if (targetDir === __dirname) return;
+  for (const name of ['users.json', '.session-secret']) {
+    const source = path.join(__dirname, name);
+    const target = path.join(targetDir, name);
+    try {
+      if (fs.existsSync(source) && !fs.existsSync(target)) fs.copyFileSync(source, target);
+    } catch (e) {
+      console.warn(`⚠️ تعذر ترحيل ${name}: ${e.message}`);
+    }
+  }
+
+  const targetUserRoot = path.join(targetDir, 'data');
+  try { fs.mkdirSync(targetUserRoot, { recursive: true }); } catch (_) {}
+
+  // Previous Railway setups often mounted ./data as /app/data. Preserve those sessions.
+  try {
+    for (const entry of fs.readdirSync(targetDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (!/^[0-9a-f-]{36}$/i.test(entry.name)) continue;
+      const source = path.join(targetDir, entry.name);
+      const target = path.join(targetUserRoot, entry.name);
+      if (!fs.existsSync(target)) fs.cpSync(source, target, { recursive: true });
+    }
+  } catch (_) {}
+
+  try {
+    const legacyRoot = path.join(__dirname, 'data');
+    if (path.resolve(legacyRoot) !== path.resolve(targetUserRoot) && fs.existsSync(legacyRoot)) {
+      for (const entry of fs.readdirSync(legacyRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (!/^[0-9a-f-]{36}$/i.test(entry.name)) continue;
+        const source = path.join(legacyRoot, entry.name);
+        const target = path.join(targetUserRoot, entry.name);
+        if (!fs.existsSync(target)) fs.cpSync(source, target, { recursive: true });
+      }
+    }
+  } catch (_) {}
+}
+
+migrateRuntimeData(DATA_DIR);
 
 const storageStatus = {
   path: DATA_DIR,
   persistent: DATA_DIR !== __dirname,
   onRailway: _onRailway,
+  railwayVolumeMountPath: process.env.RAILWAY_VOLUME_MOUNT_PATH || null,
+  sessionRoot: path.join(DATA_DIR, 'data'),
+  usersPath: path.join(DATA_DIR, 'users.json'),
   warning: (_onRailway && DATA_DIR === __dirname)
     ? 'البيانات تُحفظ داخل الـ container. كل deploy يمسح الجلسة وتحتاج لإعادة مسح الباركود. الحل: أضف Volume على /data في Railway.'
     : null,
@@ -139,7 +202,9 @@ class UserBot {
     // ── Wire connection events ──
     this.connection.on('message', (msg) => this._onMessage(msg));
     this.connection.on('message_create', (msg) => this._onMessageCreate(msg));
-    this.connection.on('disconnected', () => this.queue.clear());
+    this.connection.on('disconnected', (reason) => {
+      this.logger.warn('connection', `connection dropped; keeping ${this.queue.stats().pending} queued messages for retry (${reason || 'unknown'})`);
+    });
     this.connection.on('ready', () => {});
   }
 
