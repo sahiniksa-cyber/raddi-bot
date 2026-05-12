@@ -427,6 +427,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       fs.rmSync(this.sessionPath, { recursive: true, force: true });
       fs.mkdirSync(this.sessionPath, { recursive: true });
       this.log('warn', 'auth', `cleared corrupted auth session: ${reason}`);
+      this.emit('auth_cleared', { reason, sessionPath: this.sessionPath });
     } catch (err) {
       this.log('warn', 'auth', `failed to clear auth session: ${err.message}`);
     }
