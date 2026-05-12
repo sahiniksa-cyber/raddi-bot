@@ -160,7 +160,8 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
     console.error(`${new Date().toISOString()} [${WORKER_NAME}] failed ${job?.id}: ${err.message}`);
     if (job?.id) {
       const attemptsLimit = job.opts?.attempts || parseInt(process.env.QUEUE_JOB_ATTEMPTS || '3', 10);
-      const exhausted = job.attemptsMade >= attemptsLimit;
+      const waitingForConnection = /not connected|qr|stopped|reconnecting|disconnected|waiting/i.test(err.message);
+      const exhausted = !waitingForConnection && job.attemptsMade >= attemptsLimit;
       await updateJobStatus(job.id, {
         status: exhausted ? 'failed' : 'queued',
         last_error: err.message,
