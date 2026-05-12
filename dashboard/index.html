@@ -718,6 +718,27 @@ button:hover,.green-btn:hover,.red-btn:hover,.ghost-btn:hover,.ctrl-start:hover,
     padding:18px;
   }
 }
+
+/* Runtime performance: keep the bento look without expensive motion. */
+body{background-attachment:scroll}
+.topbar,.panel,.health-results,.test-chat,.train-chat,.train-result,.logs-box,.err-box,.conn-badge,.user-pill{
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+.stat,.panel,.mc,.feat,button,.tab{
+  transition:background .14s ease,color .14s ease,border-color .14s ease,box-shadow .14s ease!important;
+}
+.stat:hover,.panel:hover,.mc:hover,.feat:hover,button:hover,.tab:hover{
+  transform:none!important;
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms!important;
+    animation-iteration-count:1!important;
+    scroll-behavior:auto!important;
+    transition-duration:.01ms!important;
+  }
+}
 </style>
 </head>
 <body>
@@ -2213,9 +2234,9 @@ async function checkStorageStatus(){
 
 // ── INIT ──
 loadConf();poll();loadCosts();loadUserInfo();loadPausedChats();checkStorageStatus();
-setInterval(loadPausedChats, 10000);
-setInterval(poll,2000);
-setInterval(loadCosts,15000);
+setInterval(()=>{if(!document.hidden)loadPausedChats();}, 30000);
+setInterval(()=>{if(!document.hidden)poll();}, 4000);
+setInterval(()=>{if(!document.hidden)loadCosts();}, 30000);
 </script>
 </body>
 </html>

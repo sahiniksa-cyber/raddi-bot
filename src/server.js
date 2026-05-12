@@ -17,6 +17,7 @@ const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { RuntimeBot } = require('./services/bot/runtime-bot');
+const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
 
 function resolveDataDir() {
   const configured = (process.env.DATA_DIR || '').trim();
@@ -192,7 +193,21 @@ function asyncRoute(fn) {
 async function main() {
   await migrate();
   const app = createApp();
-  app.listen(PORT, () => console.log(`Raddi src server listening on ${PORT}`));
+  const outgoingWorker = process.env.OUTGOING_WORKER_DISABLED === 'true'
+    ? null
+    : createOutgoingWhatsappWorker({ getUserBot });
+  const server = app.listen(PORT, () => console.log(`Raddi src server listening on ${PORT}`));
+
+  const shutdown = async (signal) => {
+    console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);
+    server.close(() => {});
+    await outgoingWorker?.close?.().catch(() => {});
+    await db.close().catch(() => {});
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 if (require.main === module) {
