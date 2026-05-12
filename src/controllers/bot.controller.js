@@ -41,14 +41,14 @@ function createBotController({ getUserBot }) {
       }
     },
 
-    start(req, res) {
+    async start(req, res) {
       const bot = getUserBot(req.session.userId);
-      const started = bot.startBot();
+      const started = await bot.startBot();
       const state = bot.appState;
       if (state.status === 'error') {
         return res.status(500).json({ success: false, started, status: state.status, message: state.error || 'bot start failed' });
       }
-      res.json({ success: true, started, status: state.status, message: started ? null : 'bot already running' });
+      res.json({ success: true, started, status: state.status, message: started ? null : 'bot already running or waiting for active deployment lock' });
     },
 
     async stop(req, res) {

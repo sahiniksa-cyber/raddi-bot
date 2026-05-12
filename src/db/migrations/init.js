@@ -49,6 +49,12 @@ const statements = [
   `ALTER TABLE whatsapp_sessions
     ADD COLUMN IF NOT EXISTS desired_state TEXT NOT NULL DEFAULT 'stopped'`,
 
+  `ALTER TABLE whatsapp_sessions
+    ADD COLUMN IF NOT EXISTS connection_owner TEXT`,
+
+  `ALTER TABLE whatsapp_sessions
+    ADD COLUMN IF NOT EXISTS connection_lease_expires_at TIMESTAMPTZ`,
+
   `CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -108,6 +114,9 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_desired_state
     ON whatsapp_sessions(desired_state)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_connection_lease
+    ON whatsapp_sessions(connection_owner, connection_lease_expires_at)`,
 
   `CREATE INDEX IF NOT EXISTS idx_conversations_user_last_message
     ON conversations(user_id, last_message_at DESC)`,

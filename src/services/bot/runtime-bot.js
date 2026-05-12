@@ -1,7 +1,9 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 
 const db = require('../../db/client');
 const Logger = require('../../../lib/logger');
@@ -20,7 +22,10 @@ class RuntimeBot {
     this.config = { ...DEFAULT_CONFIG };
     this.sessionDesiredState = 'stopped';
     this._autoRecoverTimer = null;
+    this._leaseRenewTimer = null;
     this.lastPersistedSession = null;
+    this.instanceId = process.env.RAILWAY_REPLICA_ID ||
+      `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString('hex')}`;
     this.totalChatsHandled = 0;
     this.costsData = { totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUSD: 0, byModel: {} };
 
@@ -92,7 +97,9 @@ class RuntimeBot {
       this._autoRecoverTimer = setTimeout(() => {
         if (this.connection.status === 'stopped') {
           this.logger.info('boot', 'auto recovering WhatsApp session after server restart');
-          this.startBot('auto_recover');
+          this.startBot('auto_recover').catch((err) => {
+            this.logger.warn('boot', `auto recover failed: ${err.message}`);
+          });
         }
       }, parseInt(process.env.WA_AUTO_RECOVER_DELAY_MS || '2500', 10));
       if (typeof this._autoRecoverTimer.unref === 'function') this._autoRecoverTimer.unref();
@@ -155,6 +162,81 @@ class RuntimeBot {
     this.lastPersistedSession = result.rows[0] || this.lastPersistedSession;
   }
 
+  leaseTtlMs() {
+    return parseInt(process.env.WA_CONNECTION_LEASE_MS || '120000', 10);
+  }
+
+  leaseExpiresAt() {
+    return new Date(Date.now() + this.leaseTtlMs());
+  }
+
+  async acquireConnectionLease(reason = 'start') {
+    const result = await db.query(
+      `UPDATE whatsapp_sessions
+       SET connection_owner = $2,
+           connection_lease_expires_at = $3,
+           desired_state = 'running',
+           last_error = NULL
+       WHERE user_id = $1
+         AND (
+           connection_owner IS NULL
+           OR connection_owner = $2
+           OR connection_lease_expires_at IS NULL
+           OR connection_lease_expires_at < NOW()
+         )
+       RETURNING connection_owner, connection_lease_expires_at`,
+      [this.userId, this.instanceId, this.leaseExpiresAt()],
+    );
+
+    if (!result.rows[0]) {
+      this.logger.warn('boot', `WhatsApp lease is held by another instance; postponing ${reason}`);
+      this.scheduleLeaseRetry(reason);
+      return false;
+    }
+
+    this.startLeaseRenewal();
+    return true;
+  }
+
+  startLeaseRenewal() {
+    clearInterval(this._leaseRenewTimer);
+    const interval = Math.max(10000, Math.floor(this.leaseTtlMs() / 3));
+    this._leaseRenewTimer = setInterval(() => {
+      db.query(
+        `UPDATE whatsapp_sessions
+         SET connection_lease_expires_at = $3
+         WHERE user_id = $1 AND connection_owner = $2`,
+        [this.userId, this.instanceId, this.leaseExpiresAt()],
+      ).catch((err) => this.logger.warn('connection', `failed to renew WhatsApp lease: ${err.message}`));
+    }, interval);
+    if (typeof this._leaseRenewTimer.unref === 'function') this._leaseRenewTimer.unref();
+  }
+
+  async releaseConnectionLease() {
+    clearInterval(this._leaseRenewTimer);
+    this._leaseRenewTimer = null;
+    await db.query(
+      `UPDATE whatsapp_sessions
+       SET connection_owner = NULL,
+           connection_lease_expires_at = NULL
+       WHERE user_id = $1 AND connection_owner = $2`,
+      [this.userId, this.instanceId],
+    );
+  }
+
+  scheduleLeaseRetry(reason) {
+    clearTimeout(this._autoRecoverTimer);
+    const delay = parseInt(process.env.WA_LEASE_RETRY_MS || '10000', 10);
+    this._autoRecoverTimer = setTimeout(() => {
+      if (this.sessionDesiredState === 'running' && this.connection.status === 'stopped') {
+        this.startBot(`lease_retry:${reason}`).catch((err) => {
+          this.logger.warn('boot', `lease retry failed: ${err.message}`);
+        });
+      }
+    }, delay);
+    if (typeof this._autoRecoverTimer.unref === 'function') this._autoRecoverTimer.unref();
+  }
+
   async saveConfig() {
     await db.query(
       `INSERT INTO bot_configs (user_id, config, source)
@@ -165,7 +247,7 @@ class RuntimeBot {
     this.ai.updateConfig(this.config);
   }
 
-  startBot(source = 'manual') {
+  async startBot(source = 'manual') {
     const staleWaitingQrMs = parseInt(process.env.WA_STALE_WAITING_QR_RESTART_MS || '45000', 10);
     const updatedAt = this.lastPersistedSession?.updated_at ? new Date(this.lastPersistedSession.updated_at).getTime() : 0;
     const staleStatuses = new Set(['waiting_qr', 'connecting', 'reconnecting', 'disconnected']);
@@ -175,6 +257,7 @@ class RuntimeBot {
       return false;
     }
     this.sessionDesiredState = 'running';
+    if (!(await this.acquireConnectionLease(source))) return false;
     this.persistSessionState({ desiredState: 'running' }).catch((err) => {
       this.logger.warn('connection', `failed to persist start intent: ${err.message}`);
     });
@@ -186,11 +269,13 @@ class RuntimeBot {
     this.sessionDesiredState = 'stopped';
     await this.connection.stop();
     await this.persistSessionState({ desiredState: 'stopped' });
+    await this.releaseConnectionLease();
   }
 
   async restartBot() {
     this.sessionDesiredState = 'running';
     await this.connection.stop();
+    if (!(await this.acquireConnectionLease('restart'))) return false;
     await this.persistSessionState({ desiredState: 'running', state: { ...this.connection.state(), status: 'restarting' } });
     this.logger.info('boot', 'force restarting WhatsApp connection');
     return this.connection.start(0);
@@ -205,6 +290,7 @@ class RuntimeBot {
       desiredState: 'stopped',
       state: { status: 'stopped', ready: false, phone: null, error: null, qrVersion: 0, reconnectCount: 0, authFailureCount: 0 },
     });
+    await this.releaseConnectionLease();
   }
 
   log(message) {
