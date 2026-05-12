@@ -235,12 +235,17 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.log('warn', 'connection', `reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
     this.setStatus('reconnecting', 'reconnect');
 
-    if (/QR watchdog|ready watchdog|initialize|Protocol error|Execution context was destroyed|Target closed|Page crashed|Navigation failed/i.test(String(reason || '')) && retryCount >= 1) {
+    const reasonText = String(reason || '');
+    const browserLaunchFailure = /Protocol error|Execution context was destroyed|Target closed|Page crashed|Navigation failed/i.test(reasonText);
+    if (/QR watchdog|ready watchdog|initialize|Protocol error|Execution context was destroyed|Target closed|Page crashed|Navigation failed/i.test(reasonText) && retryCount >= 1) {
       this.clearWebCache(`retry ${retryCount + 1}: ${reason}`);
     }
-    if (/launch watchdog|profile appears to be in use|SingletonLock|Chromium has locked|Protocol error|Execution context was destroyed|Target closed|Page crashed|Navigation failed/i.test(String(reason || ''))) {
+    if (/launch watchdog|profile appears to be in use|SingletonLock|Chromium has locked|Protocol error|Execution context was destroyed|Target closed|Page crashed|Navigation failed/i.test(reasonText)) {
       this.cleanupBrowserProcesses(`reconnect: ${reason}`);
       this.cleanupChromiumLocks();
+    }
+    if (browserLaunchFailure && retryCount >= 2 && !this.ready && !this.qr) {
+      this.clearAuthCache(`repeated browser launch failure before QR: ${reason}`);
     }
 
     if (current) {
