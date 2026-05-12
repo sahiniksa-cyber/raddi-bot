@@ -118,16 +118,29 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     return new Client({
       authStrategy: new LocalAuth({ dataPath: this.sessionPath }),
       puppeteer,
-      webVersionCache: {
-        type: 'local',
-        path: path.join(this.dataDir, '.waweb-cache'),
-        strict: false,
-      },
+      webVersionCache: this.webVersionCache(),
       qrMaxRetries: parseInt(process.env.WA_QR_MAX_RETRIES || '25', 10),
       takeoverOnConflict: true,
       takeoverTimeoutMs: 0,
       authTimeoutMs: parseInt(process.env.WA_AUTH_TIMEOUT_MS || '90000', 10),
     });
+  }
+
+  webVersionCache() {
+    const mode = (process.env.WA_WEB_VERSION_CACHE || 'remote').trim().toLowerCase();
+    if (mode === 'local') {
+      return {
+        type: 'local',
+        path: path.join(this.dataDir, '.waweb-cache'),
+        strict: false,
+      };
+    }
+    return {
+      type: 'remote',
+      remotePath: process.env.WA_WEB_VERSION_CACHE_REMOTE_PATH ||
+        'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+      strict: false,
+    };
   }
 
   start(retryCount = 0) {
@@ -303,7 +316,9 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   }
 
   cleanupBrowserProcesses(reason) {
-    if (process.env.WA_KILL_CHROME_ON_START === 'false') return;
+    const shouldKill = process.env.WA_KILL_CHROME_ON_START === 'true' ||
+      (process.env.WA_KILL_CHROME_ON_START !== 'false' && process.env.NODE_ENV === 'production');
+    if (!shouldKill) return;
     try {
       killChrome();
       this.log('warn', 'boot', `cleaned old Chromium processes: ${reason}`);
