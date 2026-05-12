@@ -17,7 +17,14 @@ const { createHealthRoutes } = require('./routes/health.routes');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { RuntimeBot } = require('./services/bot/runtime-bot');
 
-const DATA_DIR = path.resolve(process.env.DATA_DIR || process.cwd());
+function resolveDataDir() {
+  const configured = (process.env.DATA_DIR || '').trim();
+  const railwayVolume = (process.env.RAILWAY_VOLUME_MOUNT_PATH || '').trim();
+  if (railwayVolume && (!configured || configured === './' || configured === '.')) return path.resolve(railwayVolume);
+  return path.resolve(configured || railwayVolume || process.cwd());
+}
+
+const DATA_DIR = resolveDataDir();
 const PORT = process.env.PORT || 3000;
 const botCache = new Map();
 

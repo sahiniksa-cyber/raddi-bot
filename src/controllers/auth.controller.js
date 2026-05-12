@@ -73,9 +73,16 @@ function createAuthController() {
       }
     },
 
-    me(req, res) {
+    async me(req, res) {
       if (!req.session?.userId) return res.json({ loggedIn: false });
-      res.json({ loggedIn: true, id: req.session.userId, name: req.session.userName || '', role: 'user' });
+      const result = await db.query(
+        'SELECT id, email, name, role FROM users WHERE id = $1 LIMIT 1',
+        [req.session.userId],
+      );
+      const user = result.rows[0];
+      if (!user) return res.json({ loggedIn: false });
+      req.session.userName = user.name;
+      res.json({ loggedIn: true, ...publicUser(user) });
     },
 
     logout(req, res) {

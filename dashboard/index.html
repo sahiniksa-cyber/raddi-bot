@@ -1015,7 +1015,11 @@ function _disableBtn(btn, ms){
 async function botStart(src){
   _disableBtn(src,7000);
   _disableBtn(document.getElementById('ctrlStartBtn'),7000);
-  try{await fetch('/api/bot/start',{method:'POST'});}catch(_){}
+  try{
+    const r=await fetch('/api/bot/start',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.success===false)toast('فشل التشغيل: '+(d.message||r.status),true);
+  }catch(e){toast('فشل التشغيل: '+e.message,true);}
   setTimeout(poll,1000);
 }
 async function botStop(src){
@@ -1091,12 +1095,14 @@ async function poll(){
       stopped:     {sc:'stopped',     dc:'gray',   badge:'متوقف',           ctrl:'⏹ متوقف',      cd:'',    showS:true, showX:false},
       waiting_qr:  {sc:'waiting',     dc:'blink',  badge:'جاري التشغيل...', ctrl:'⏳ يعمل...',    cd:'pulse',showS:false,showX:true},
       qr_ready:    {sc:'qr',          dc:'yellow', badge:'امسح الباركود',   ctrl:'📱 باركود',     cd:'pulse',showS:false,showX:true},
+      authenticated:{sc:'connecting', dc:'yellow', badge:'تم التحقق...',     ctrl:'⏳ تحقق...',    cd:'pulse',showS:false,showX:true},
       connecting:  {sc:'connecting',  dc:'yellow', badge:'جاري الاتصال...', ctrl:'🔄 اتصال...',  cd:'pulse',showS:false,showX:true},
+      reconnecting:{sc:'connecting',  dc:'yellow', badge:'إعادة الاتصال...', ctrl:'🔄 إعادة...',  cd:'pulse',showS:false,showX:true},
       connected:   {sc:'connected',   dc:'green',  badge:'متصل ✓',           ctrl:'✅ متصل',       cd:'on',  showS:false,showX:true},
       disconnected:{sc:'disconnected',dc:'yellow', badge:'انقطع...',          ctrl:'🔌 انقطع',     cd:'pulse',showS:false,showX:true},
       error:       {sc:'error',       dc:'blink',  badge:'خطأ',             ctrl:'❌ خطأ',         cd:'',    showS:true, showX:false},
     };
-    const s=S[d.status]||S.stopped;
+    const s=S[d.status]||S.connecting;
     showSc(s.sc);
     dot.className='dot '+s.dc; txt.textContent=s.badge;
     if(ctrlTxt)ctrlTxt.textContent=s.ctrl;

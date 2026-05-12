@@ -41,6 +41,15 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this._running = false;
   }
 
+  log(level, stage, message, meta) {
+    const writer = this.logger?.[level] || this.logger?.log || console[level] || console.log;
+    try {
+      writer.call(this.logger, stage, message, meta);
+    } catch (_) {
+      console.log(`[${stage}] ${message}`);
+    }
+  }
+
   state() {
     return {
       status: this.status,
@@ -57,6 +66,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
 
     fs.mkdirSync(this.sessionPath, { recursive: true });
     const chromePath = findChrome();
+    this.log('info', 'boot', chromePath ? `Chrome found: ${chromePath}` : 'Chrome path not found; Puppeteer will try bundled/default browser');
     const puppeteer = {
       headless: true,
       args: [
@@ -92,19 +102,34 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   }
 
   start(retryCount = 0) {
-    if (this._running) return false;
+    if (this._running) {
+      this.log('info', 'boot', `start ignored: already ${this.status}`);
+      return false;
+    }
 
     clearTimeout(this._retryTimer);
     this.stopHeartbeat();
     this._running = true;
     this.ready = false;
-    this.status = 'connecting';
+    this.status = 'waiting_qr';
     this.lastError = null;
-    this.client = this.createClient();
-    this.attachEvents(this.client, retryCount);
+    this.qr = null;
+    this.log('info', 'boot', `starting WhatsApp client${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
+
+    try {
+      this.client = this.createClient();
+      this.attachEvents(this.client, retryCount);
+    } catch (err) {
+      this.status = 'error';
+      this.lastError = err.message;
+      this._running = false;
+      this.log('error', 'boot', `client creation failed: ${err.message}`, err);
+      return false;
+    }
 
     this.client.initialize().catch((err) => {
       if (!this._running) return;
+      this.log('warn', 'boot', `initialize failed: ${err.message}`);
       this.scheduleReconnect(retryCount, `initialize: ${err.message}`);
     });
 
@@ -142,6 +167,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.lastError = String(reason || 'unknown');
     this.client = null;
     this.stopHeartbeat();
+    this.log('warn', 'connection', `reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
 
     if (current) {
       Promise.race([
@@ -190,13 +216,24 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.status = 'qr_ready';
       this.qr = qr;
       this.qrVersion++;
+      this.lastError = null;
+      this.log('info', 'qr', `QR ready version=${this.qrVersion}`);
       this.emit('qr', { qr, qrVersion: this.qrVersion });
+    });
+
+    client.on('loading_screen', (pct) => {
+      if (!this._running) return;
+      if (this.ready && this.status === 'connected') return;
+      this.status = 'connecting';
+      this.qr = null;
+      this.log('info', 'auth', `loading WhatsApp ${pct}%`);
     });
 
     client.on('authenticated', () => {
       if (!this._running) return;
-      this.status = 'authenticated';
+      this.status = 'connecting';
       this.qr = null;
+      this.log('info', 'auth', 'authenticated');
       this.emit('authenticated');
     });
 
@@ -208,13 +245,15 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.lastError = null;
       this.qr = null;
       this.startHeartbeat();
+      this.log('info', 'connection', `connected${this.phone ? ` phone=+${this.phone}` : ''}`);
       this.emit('ready', this.state());
     });
 
     client.on('auth_failure', (message) => {
       this.ready = false;
-      this.status = 'auth_failure';
+      this.status = 'reconnecting';
       this.lastError = String(message || 'auth failure');
+      this.log('error', 'auth', `auth failure: ${this.lastError}`);
       this.scheduleReconnect(retryCount, `auth_failure: ${message}`);
     });
 
@@ -222,8 +261,16 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       if (!this._running) return;
       this.ready = false;
       this.status = 'disconnected';
+      this.log('warn', 'connection', `disconnected: ${reason}`);
       this.emit('disconnected', reason);
       this.scheduleReconnect(0, `disconnected: ${reason}`);
+    });
+
+    client.on('change_state', (state) => {
+      this.log('info', 'connection', `WhatsApp state: ${state}`);
+      if (state === 'UNLAUNCHED' && this.ready) {
+        this.scheduleReconnect(0, 'change_state: UNLAUNCHED');
+      }
     });
 
     client.on('message', (msg) => {
