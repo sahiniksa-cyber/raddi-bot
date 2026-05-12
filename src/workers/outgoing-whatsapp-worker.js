@@ -39,6 +39,41 @@ async function markReplyMessage(replyMessageId, status, rawPayload = {}) {
   );
 }
 
+async function getPersistedJobCreatedAt(jobKey) {
+  if (!db.isConfigured() || !jobKey) return null;
+  const result = await db.query(
+    `SELECT created_at
+     FROM jobs
+     WHERE queue_name = $1 AND job_key = $2
+     LIMIT 1`,
+    [QUEUE_NAMES.outgoingWhatsapp, jobKey],
+  );
+  return result.rows[0]?.created_at ? new Date(result.rows[0].created_at).getTime() : null;
+}
+
+async function skipStaleOutgoingJob(job, { replyMessageId }) {
+  const maxAgeMs = parseInt(process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || '600000', 10);
+  if (maxAgeMs <= 0) return false;
+
+  const createdAt = await getPersistedJobCreatedAt(job.id) || job.timestamp || Date.now();
+  const ageMs = Date.now() - createdAt;
+  if (ageMs <= maxAgeMs) return false;
+
+  const message = `expired stale outgoing reply age=${Math.round(ageMs / 1000)}s`;
+  await markReplyMessage(replyMessageId, 'expired', {
+    sentBy: WORKER_NAME,
+    expiredAt: new Date().toISOString(),
+    error: message,
+  });
+  await updateJobStatus(job.id, {
+    status: 'expired',
+    finished_at: new Date(),
+    attempts: job.attemptsMade,
+    last_error: message,
+  });
+  return true;
+}
+
 async function processOutgoingWhatsapp(job, { getUserBot }) {
   const payload = job.data || {};
   const userId = payload.userId;
@@ -50,6 +85,10 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   if (!userId) throw new Error('Missing userId in outgoing payload');
   if (!sender) throw new Error('Missing sender in outgoing payload');
   if (!reply) throw new Error('Missing reply in outgoing payload');
+
+  if (await skipStaleOutgoingJob(job, { replyMessageId })) {
+    return { skipped: true, reason: 'stale_outgoing_reply' };
+  }
 
   await updateJobStatus(job.id, {
     status: 'processing',
