@@ -235,10 +235,10 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.log('warn', 'connection', `reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
     this.setStatus('reconnecting', 'reconnect');
 
-    if (/QR watchdog|ready watchdog|initialize/i.test(String(reason || '')) && retryCount >= 1) {
+    if (/QR watchdog|ready watchdog|initialize|Protocol error|Execution context was destroyed|Target closed|Page crashed|Navigation failed/i.test(String(reason || '')) && retryCount >= 1) {
       this.clearWebCache(`retry ${retryCount + 1}: ${reason}`);
     }
-    if (/launch watchdog|profile appears to be in use|SingletonLock|Chromium has locked/i.test(String(reason || ''))) {
+    if (/launch watchdog|profile appears to be in use|SingletonLock|Chromium has locked|Protocol error|Execution context was destroyed|Target closed|Page crashed|Navigation failed/i.test(String(reason || ''))) {
       this.cleanupBrowserProcesses(`reconnect: ${reason}`);
       this.cleanupChromiumLocks();
     }
