@@ -10,6 +10,7 @@ const Logger = require('../../../lib/logger');
 const AIClient = require('../../../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../../../lib/constants');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
+const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
 
 class RuntimeBot {
   constructor(userId, { dataDir = process.env.DATA_DIR || process.cwd(), logger = null } = {}) {
@@ -33,7 +34,11 @@ class RuntimeBot {
       record: (model, inputTokens, outputTokens) => this.recordUsage(model, inputTokens, outputTokens),
     });
 
-    this.connection = new EnterpriseWhatsAppConnectionManager({
+    const ConnectionManager = (process.env.WA_ENGINE || 'baileys').trim().toLowerCase() === 'whatsapp-web'
+      ? EnterpriseWhatsAppConnectionManager
+      : BaileysConnectionManager;
+
+    this.connection = new ConnectionManager({
       userId,
       dataDir: this.dataDir,
       logger: this.logger,
@@ -284,7 +289,9 @@ class RuntimeBot {
   async clearSession() {
     this.sessionDesiredState = 'stopped';
     await this.connection.stop();
+    try { this.connection.clearAuthCache?.('manual clear-session'); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, 'session'), { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(this.dataDir, 'baileys-session'), { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, '.waweb-cache'), { recursive: true, force: true }); } catch (_) {}
     await this.persistSessionState({
       desiredState: 'stopped',

@@ -34,6 +34,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
+ENV WA_ENGINE=baileys
 ENV WA_USE_PUPPETEER_BUNDLED=true
 
 COPY package*.json ./
