@@ -56,10 +56,10 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     attempts: job.attemptsMade,
   });
 
-  const bot = await getUserBot(userId);
-  if (!bot?.client || bot.appState.status !== 'connected') {
-    throw new Error(`WhatsApp is not connected (status=${bot?.appState?.status || 'unknown'})`);
-  }
+  const bot = await waitForConnectedBot(await getUserBot(userId), {
+    reason: `outgoing:${job.id}`,
+    timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
+  });
 
   await Promise.race([
     bot.client.sendMessage(sender, reply),
@@ -78,13 +78,33 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   return { sent: true, replyMessageId };
 }
 
+async function waitForConnectedBot(bot, { reason, timeoutMs }) {
+  if (!bot) throw new Error('Unable to load user bot');
+  if (bot.appState.status === 'connected' && bot.client) return bot;
+
+  if (bot.sessionDesiredState === 'running' || ['stopped', 'reconnecting', 'disconnected', 'waiting_qr'].includes(bot.appState.status)) {
+    bot.startBot(reason).catch((err) => bot.log?.(`outgoing start failed: ${err.message}`));
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (bot.appState.status === 'connected' && bot.client) return bot;
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
+
+  throw new Error(`WhatsApp is not connected (status=${bot.appState.status})`);
+}
+
 async function requeuePersistedOutgoingJobs(limit = 200) {
   if (!db.isConfigured()) return;
   const result = await db.query(
     `SELECT job_key, payload
      FROM jobs
      WHERE queue_name = $1
-       AND status IN ('queued', 'processing')
+       AND (
+         status IN ('queued', 'processing')
+         OR (status = 'failed' AND COALESCE(last_error, '') ILIKE '%not connected%')
+       )
      ORDER BY created_at ASC
      LIMIT $2`,
     [QUEUE_NAMES.outgoingWhatsapp, limit],
@@ -93,6 +113,14 @@ async function requeuePersistedOutgoingJobs(limit = 200) {
 
   const { outgoingWhatsapp } = getQueues();
   for (const row of result.rows) {
+    const existing = row.job_key ? await outgoingWhatsapp.getJob(row.job_key).catch(() => null) : null;
+    if (existing) {
+      const state = await existing.getState().catch(() => null);
+      if (state === 'failed') {
+        await existing.retry('failed').catch(() => {});
+      }
+      continue;
+    }
     await outgoingWhatsapp.add('send-whatsapp-message', row.payload, {
       jobId: row.job_key || undefined,
       attempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS || '3', 10),
@@ -131,12 +159,14 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
   worker.on('failed', async (job, err) => {
     console.error(`${new Date().toISOString()} [${WORKER_NAME}] failed ${job?.id}: ${err.message}`);
     if (job?.id) {
+      const attemptsLimit = job.opts?.attempts || parseInt(process.env.QUEUE_JOB_ATTEMPTS || '3', 10);
+      const exhausted = job.attemptsMade >= attemptsLimit;
       await updateJobStatus(job.id, {
-        status: 'failed',
+        status: exhausted ? 'failed' : 'queued',
         last_error: err.message,
         attempts: job.attemptsMade,
       }).catch(() => {});
-      await markReplyMessage(job.data?.replyMessageId, 'send_failed', {
+      await markReplyMessage(job.data?.replyMessageId, exhausted ? 'send_failed' : 'queued_for_send', {
         sentBy: WORKER_NAME,
         failedAt: new Date().toISOString(),
         error: err.message,
@@ -155,4 +185,5 @@ module.exports = {
   createOutgoingWhatsappWorker,
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
+  waitForConnectedBot,
 };
