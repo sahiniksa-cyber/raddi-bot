@@ -12,7 +12,6 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV WA_ENGINE=whatsapp-web
-ENV WA_SESSION_DIR=/tmp/raddi-wa-sessions
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 

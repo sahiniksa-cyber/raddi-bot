@@ -16,7 +16,7 @@ const { createAuthRoutes } = require('./routes/auth.routes');
 const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { createQueueRoutes } = require('./routes/queue.routes');
-const { RuntimeBot } = require('./services/bot/runtime-bot');
+const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bot');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
 
 function resolveDataDir() {
@@ -192,6 +192,7 @@ function asyncRoute(fn) {
 
 async function main() {
   await migrate();
+  cleanupRuntimeStorage(DATA_DIR);
   const app = createApp();
   const outgoingWorker = process.env.OUTGOING_WORKER_DISABLED === 'true'
     ? null

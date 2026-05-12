@@ -17,7 +17,16 @@ class RuntimeBot {
     this.userId = userId;
     this.rootDir = dataDir;
     this.dataDir = path.join(dataDir, 'data', userId);
-    fs.mkdirSync(this.dataDir, { recursive: true });
+    try {
+      fs.mkdirSync(this.dataDir, { recursive: true });
+    } catch (err) {
+      if (err.code === 'ENOSPC') {
+        cleanupRuntimeStorage(dataDir, userId);
+        fs.mkdirSync(this.dataDir, { recursive: true });
+      } else {
+        throw err;
+      }
+    }
 
     this.logger = logger || new Logger(userId);
     this.config = { ...DEFAULT_CONFIG };
@@ -39,9 +48,18 @@ class RuntimeBot {
       ? BaileysConnectionManager
       : EnterpriseWhatsAppConnectionManager;
     const connectionDataDir = engine === 'whatsapp-web'
-      ? path.join(process.env.WA_SESSION_DIR || path.join(os.tmpdir(), 'raddi-wa-sessions'), userId)
+      ? path.join(process.env.WA_SESSION_DIR || this.dataDir)
       : this.dataDir;
-    fs.mkdirSync(connectionDataDir, { recursive: true });
+    try {
+      fs.mkdirSync(connectionDataDir, { recursive: true });
+    } catch (err) {
+      if (err.code === 'ENOSPC') {
+        cleanupRuntimeStorage(dataDir, userId);
+        fs.mkdirSync(connectionDataDir, { recursive: true });
+      } else {
+        throw err;
+      }
+    }
 
     this.connection = new ConnectionManager({
       userId,
@@ -332,4 +350,31 @@ class RuntimeBot {
   }
 }
 
-module.exports = { RuntimeBot };
+function cleanupRuntimeStorage(rootDir, currentUserId = '') {
+  const usersRoot = path.join(rootDir, 'data');
+  const removeTargets = [];
+
+  const scanUserDir = (userDir) => {
+    removeTargets.push(path.join(userDir, 'baileys-session'));
+    removeTargets.push(path.join(userDir, '.waweb-cache'));
+  };
+
+  try {
+    if (currentUserId) scanUserDir(path.join(usersRoot, currentUserId));
+    for (const entry of fs.readdirSync(usersRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      scanUserDir(path.join(usersRoot, entry.name));
+    }
+  } catch (_) {}
+
+  for (const target of [...new Set(removeTargets)]) {
+    try { fs.rmSync(target, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  try {
+    const tmpRoot = path.join(os.tmpdir(), 'raddi-wa-sessions');
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  } catch (_) {}
+}
+
+module.exports = { RuntimeBot, cleanupRuntimeStorage };
