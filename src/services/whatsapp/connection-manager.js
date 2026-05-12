@@ -80,6 +80,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     if (this.clientFactory) return this.clientFactory();
 
     fs.mkdirSync(this.sessionPath, { recursive: true });
+    this.cleanupChromiumLocks();
     const chromePath = findChrome();
     this.log('info', 'boot', chromePath ? `Chrome found: ${chromePath}` : 'Chrome path not found; Puppeteer will try bundled/default browser');
     const puppeteer = {
@@ -248,6 +249,37 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.log('warn', 'connection', `cleared WhatsApp web cache: ${reason}`);
     } catch (err) {
       this.log('warn', 'connection', `failed to clear WhatsApp web cache: ${err.message}`);
+    }
+  }
+
+  cleanupChromiumLocks() {
+    const lockNames = new Set(['SingletonLock', 'SingletonSocket', 'SingletonCookie']);
+    let removed = 0;
+    const scan = (dir, depth = 0) => {
+      if (depth > 4) return;
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch (_) {
+        return;
+      }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          scan(fullPath, depth + 1);
+          continue;
+        }
+        if (!lockNames.has(entry.name)) continue;
+        try {
+          fs.rmSync(fullPath, { force: true });
+          removed++;
+        } catch (_) {}
+      }
+    };
+
+    scan(this.sessionPath);
+    if (removed > 0) {
+      this.log('warn', 'boot', `removed ${removed} stale Chromium profile lock file(s)`);
     }
   }
 
