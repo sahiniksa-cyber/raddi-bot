@@ -798,6 +798,8 @@ button:hover,.green-btn:hover,.red-btn:hover,.ghost-btn:hover,.ctrl-start:hover,
       <div class="spin"></div>
       <div class="ctitle">⏳ جاري الاتصال...</div>
       <div class="csub">تم مسح الباركود، انتظر لحظة</div>
+      <div class="logs-box live-logs" id="connectingLogsBox" style="max-height:150px;margin-top:14px"></div>
+      <button class="ghost-btn" style="margin-top:14px;width:100%" onclick="botRestart(this)">🔄 إعادة التهيئة الآن</button>
     </div>
   </div>
 
@@ -1445,6 +1447,16 @@ async function botStop(src){
   try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}
   setTimeout(poll,800);
 }
+async function botRestart(src){
+  _disableBtn(src,9000);
+  try{
+    const r=await fetch('/api/bot/restart',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.success===false)toast('تعذرت إعادة التهيئة: '+(d.message||r.status),true);
+    else toast('تمت إعادة التهيئة، انتظر ظهور الباركود أو الاتصال');
+  }catch(e){toast('تعذرت إعادة التهيئة: '+e.message,true);}
+  setTimeout(poll,1200);
+}
 async function clearSession(){
   if(!confirm('سيتم حذف جلسة الواتس أب الحالية وستحتاج لمسح الباركود من جديد. متابعة؟'))return;
   const btn=event?.target;
@@ -1496,12 +1508,28 @@ function setModel(m){
 
 // ── STATUS POLL ──
 let lastQrVersion=0;
+let lastAutoRestartAt=0;
+function updateLiveLogs(logs){
+  if(!logs?.length)return;
+  document.querySelectorAll('.live-logs,#logsBox').forEach(el=>{
+    if(el)el.textContent=logs.join('\n');
+  });
+}
+function maybeRecoverStuckConnecting(d){
+  const stuck=['authenticated','connecting'].includes(d.status);
+  const age=d.statusAgeMs||0;
+  if(!stuck||age<75000||Date.now()-lastAutoRestartAt<90000)return;
+  lastAutoRestartAt=Date.now();
+  toast('الاتصال أخذ وقت طويل، تتم إعادة التهيئة تلقائياً...');
+  fetch('/api/bot/restart',{method:'POST'}).catch(()=>{});
+}
 async function poll(){
   try{
     const r=await fetch('/api/status');
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
-    if(d.logs?.length){const lb=document.getElementById('logsBox');if(lb)lb.textContent=d.logs.join('\n')}
+    updateLiveLogs(d.logs);
+    maybeRecoverStuckConnecting(d);
     const qv=d.qrVersion||0;
     if(d.status===lastStatus&&qv===lastQrVersion)return;
     lastStatus=d.status;lastQrVersion=qv;

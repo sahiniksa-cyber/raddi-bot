@@ -38,8 +38,11 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.reconnectCount = 0;
     this.authFailureCount = 0;
     this.heartbeatFailures = 0;
+    this.statusSince = Date.now();
+    this.lastProbeState = null;
     this._retryTimer = null;
     this._heartbeatTimer = null;
+    this._stateProbeTimer = null;
     this._qrWatchdogTimer = null;
     this._readyWatchdogTimer = null;
     this._launchTimer = null;
@@ -65,6 +68,8 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       reconnectCount: this.reconnectCount,
       authFailureCount: this.authFailureCount,
       heartbeatFailures: this.heartbeatFailures,
+      statusAgeMs: Date.now() - this.statusSince,
+      lastProbeState: this.lastProbeState,
     };
   }
 
@@ -73,6 +78,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   }
 
   setStatus(status, stage = status) {
+    if (this.status !== status) this.statusSince = Date.now();
     this.status = status;
     this.emitState(stage);
   }
@@ -156,6 +162,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.lastError = null;
     this.qr = null;
     this.setStatus('waiting_qr', 'start');
+    this.startStateProbe();
     this.log('info', 'boot', `starting WhatsApp client${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
     try {
@@ -186,7 +193,12 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     clearTimeout(this._qrWatchdogTimer);
     clearTimeout(this._readyWatchdogTimer);
     clearTimeout(this._launchTimer);
+    this._retryTimer = null;
+    this._qrWatchdogTimer = null;
+    this._readyWatchdogTimer = null;
+    this._launchTimer = null;
     this.stopHeartbeat();
+    this.stopStateProbe();
     this._running = false;
     this.ready = false;
     this.setStatus('stopped', 'stop');
@@ -217,6 +229,9 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     clearTimeout(this._qrWatchdogTimer);
     clearTimeout(this._readyWatchdogTimer);
     clearTimeout(this._launchTimer);
+    this._qrWatchdogTimer = null;
+    this._readyWatchdogTimer = null;
+    this._launchTimer = null;
     this.log('warn', 'connection', `reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
     this.setStatus('reconnecting', 'reconnect');
 
@@ -238,6 +253,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.emit('reconnecting', { delay, reason, reconnectCount: this.reconnectCount });
     clearTimeout(this._retryTimer);
     this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
       this._running = false;
       this.start(retryCount + 1);
     }, delay);
@@ -248,6 +264,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     clearTimeout(this._qrWatchdogTimer);
     const timeout = parseInt(process.env.WA_QR_WATCHDOG_TIMEOUT_MS || '90000', 10);
     this._qrWatchdogTimer = setTimeout(() => {
+      this._qrWatchdogTimer = null;
       if (!this._running || this.ready || this.qr) return;
       this.scheduleReconnect(retryCount, 'QR watchdog timeout');
     }, timeout);
@@ -258,6 +275,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     clearTimeout(this._launchTimer);
     const timeout = parseInt(process.env.WA_LAUNCH_WATCHDOG_TIMEOUT_MS || '30000', 10);
     this._launchTimer = setTimeout(() => {
+      this._launchTimer = null;
       if (!this._running || this.ready || this.qr || this.status !== 'waiting_qr') return;
       this.scheduleReconnect(retryCount, 'launch watchdog timeout before QR/loading');
     }, timeout);
@@ -265,14 +283,86 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   }
 
   startReadyWatchdog(retryCount, stage) {
-    if (this._readyWatchdogTimer) return;
     clearTimeout(this._readyWatchdogTimer);
     const timeout = parseInt(process.env.WA_READY_WATCHDOG_TIMEOUT_MS || '120000', 10);
     this._readyWatchdogTimer = setTimeout(() => {
+      this._readyWatchdogTimer = null;
       if (!this._running || this.ready) return;
       this.scheduleReconnect(retryCount, `ready watchdog timeout after ${stage}`);
     }, timeout);
     if (typeof this._readyWatchdogTimer.unref === 'function') this._readyWatchdogTimer.unref();
+  }
+
+  startStateProbe() {
+    if (this._stateProbeTimer) return;
+    const interval = parseInt(process.env.WA_STATE_PROBE_INTERVAL_MS || String(TIMERS.AUTO_FIX_INTERVAL_MS || 4000), 10);
+    this._stateProbeTimer = setInterval(() => {
+      this.probeLiveState().catch((err) => {
+        this.lastProbeState = `probe_error:${err.message}`;
+      });
+    }, Math.max(2500, interval));
+    if (typeof this._stateProbeTimer.unref === 'function') this._stateProbeTimer.unref();
+  }
+
+  stopStateProbe() {
+    if (!this._stateProbeTimer) return;
+    clearInterval(this._stateProbeTimer);
+    this._stateProbeTimer = null;
+  }
+
+  async probeLiveState() {
+    if (!this._running || !this.client) return;
+    const state = await Promise.race([
+      this.client.getState(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('state probe timeout')), 5000)),
+    ]).catch((err) => {
+      this.lastProbeState = `error:${err.message}`;
+      return null;
+    });
+
+    this.lastProbeState = state || this.lastProbeState || 'unknown';
+    if (state === 'CONNECTED') {
+      this.markConnectedFromProbe('state_probe');
+      return;
+    }
+
+    if (this.ready || this.status === 'connected') {
+      this.ready = false;
+      this.lastError = `WhatsApp state mismatch: ${state || 'unknown'}`;
+      this.log('warn', 'connection', `${this.lastError}; reconnecting`);
+      this.scheduleReconnect(0, this.lastError);
+      return;
+    }
+
+    const stuckStatuses = new Set(['authenticated', 'connecting']);
+    const stuckMs = parseInt(process.env.WA_CONNECTING_STUCK_RESTART_MS || '60000', 10);
+    if (stuckStatuses.has(this.status) && Date.now() - this.statusSince > stuckMs) {
+      this.scheduleReconnect(0, `stuck ${this.status}; probe=${state || 'unknown'}`);
+    }
+  }
+
+  markConnectedFromProbe(stage) {
+    if (!this._running || !this.client) return;
+    const phone = this.client.info?.wid?.user || this.phone || null;
+    const wasConnected = this.ready && this.status === 'connected';
+    this.ready = true;
+    this.phone = phone;
+    this.lastError = null;
+    this.qr = null;
+    this.authFailureCount = 0;
+    this.heartbeatFailures = 0;
+    clearTimeout(this._qrWatchdogTimer);
+    clearTimeout(this._readyWatchdogTimer);
+    clearTimeout(this._launchTimer);
+    this._qrWatchdogTimer = null;
+    this._readyWatchdogTimer = null;
+    this._launchTimer = null;
+    if (!this._heartbeatTimer) this.startHeartbeat();
+    if (!wasConnected) {
+      this.log('info', 'connection', `connected by ${stage}${phone ? ` phone=+${phone}` : ''}`);
+      this.setStatus('connected', stage);
+      this.emit('ready', this.state());
+    }
   }
 
   clearWebCache(reason) {
@@ -386,6 +476,8 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.authFailureCount = 0;
       clearTimeout(this._qrWatchdogTimer);
       clearTimeout(this._launchTimer);
+      this._qrWatchdogTimer = null;
+      this._launchTimer = null;
       this.log('info', 'qr', `QR ready version=${this.qrVersion}`);
       this.emitState('qr');
       this.emit('qr', { qr, qrVersion: this.qrVersion });
@@ -422,6 +514,9 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       clearTimeout(this._qrWatchdogTimer);
       clearTimeout(this._readyWatchdogTimer);
       clearTimeout(this._launchTimer);
+      this._qrWatchdogTimer = null;
+      this._readyWatchdogTimer = null;
+      this._launchTimer = null;
       this.startHeartbeat();
       this.log('info', 'connection', `connected${this.phone ? ` phone=+${this.phone}` : ''}`);
       this.setStatus('connected', 'ready');
@@ -451,7 +546,12 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     });
 
     client.on('change_state', (state) => {
+      this.lastProbeState = state || this.lastProbeState;
       this.log('info', 'connection', `WhatsApp state: ${state}`);
+      if (state === 'CONNECTED' && !this.ready) {
+        this.markConnectedFromProbe('change_state');
+        return;
+      }
       if (state === 'UNLAUNCHED' && this.ready) {
         this.scheduleReconnect(0, 'change_state: UNLAUNCHED');
       }
