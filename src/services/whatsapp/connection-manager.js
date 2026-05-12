@@ -41,6 +41,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this._retryTimer = null;
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
+    this._readyWatchdogTimer = null;
     this._running = false;
   }
 
@@ -166,6 +167,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   async stop() {
     clearTimeout(this._retryTimer);
     clearTimeout(this._qrWatchdogTimer);
+    clearTimeout(this._readyWatchdogTimer);
     this.stopHeartbeat();
     this._running = false;
     this.ready = false;
@@ -195,8 +197,13 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.client = null;
     this.stopHeartbeat();
     clearTimeout(this._qrWatchdogTimer);
+    clearTimeout(this._readyWatchdogTimer);
     this.log('warn', 'connection', `reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
     this.setStatus('reconnecting', 'reconnect');
+
+    if (/QR watchdog|ready watchdog|initialize/i.test(String(reason || '')) && retryCount >= 1) {
+      this.clearWebCache(`retry ${retryCount + 1}: ${reason}`);
+    }
 
     if (current) {
       Promise.race([
@@ -224,6 +231,26 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     if (typeof this._qrWatchdogTimer.unref === 'function') this._qrWatchdogTimer.unref();
   }
 
+  startReadyWatchdog(retryCount, stage) {
+    if (this._readyWatchdogTimer) return;
+    clearTimeout(this._readyWatchdogTimer);
+    const timeout = parseInt(process.env.WA_READY_WATCHDOG_TIMEOUT_MS || '120000', 10);
+    this._readyWatchdogTimer = setTimeout(() => {
+      if (!this._running || this.ready) return;
+      this.scheduleReconnect(retryCount, `ready watchdog timeout after ${stage}`);
+    }, timeout);
+    if (typeof this._readyWatchdogTimer.unref === 'function') this._readyWatchdogTimer.unref();
+  }
+
+  clearWebCache(reason) {
+    try {
+      fs.rmSync(path.join(this.dataDir, '.waweb-cache'), { recursive: true, force: true });
+      this.log('warn', 'connection', `cleared WhatsApp web cache: ${reason}`);
+    } catch (err) {
+      this.log('warn', 'connection', `failed to clear WhatsApp web cache: ${err.message}`);
+    }
+  }
+
   clearAuthCache(reason) {
     try {
       fs.rmSync(this.sessionPath, { recursive: true, force: true });
@@ -233,7 +260,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.log('warn', 'auth', `failed to clear auth session: ${err.message}`);
     }
     try {
-      fs.rmSync(path.join(this.dataDir, '.waweb-cache'), { recursive: true, force: true });
+      this.clearWebCache(reason);
     } catch (_) {}
   }
 
@@ -292,6 +319,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       if (this.ready && this.status === 'connected') return;
       this.setStatus('connecting', 'loading');
       this.qr = null;
+      this.startReadyWatchdog(retryCount, `loading ${pct}%`);
       this.log('info', 'auth', `loading WhatsApp ${pct}%`);
     });
 
@@ -300,6 +328,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.setStatus('connecting', 'authenticated');
       this.qr = null;
       this.authFailureCount = 0;
+      this.startReadyWatchdog(retryCount, 'authenticated');
       this.log('info', 'auth', 'authenticated');
       this.emit('authenticated');
     });
@@ -313,6 +342,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.authFailureCount = 0;
       this.heartbeatFailures = 0;
       clearTimeout(this._qrWatchdogTimer);
+      clearTimeout(this._readyWatchdogTimer);
       this.startHeartbeat();
       this.log('info', 'connection', `connected${this.phone ? ` phone=+${this.phone}` : ''}`);
       this.setStatus('connected', 'ready');

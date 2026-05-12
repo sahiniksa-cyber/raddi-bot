@@ -8,10 +8,10 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
-let FileStore; try { FileStore = require('session-file-store')(session); } catch (_) {}
 
 const db = require('./db/client');
 const { migrate } = require('./db/migrations/init');
+const { PostgresSessionStore } = require('./db/session-store');
 const { createAuthRoutes } = require('./routes/auth.routes');
 const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
@@ -72,16 +72,23 @@ function createApp() {
   app.use(bodyParser.json({ limit: '2mb' }));
 
   const sessionConfig = {
+    name: 'raddi.sid',
     secret: sessionSecret(),
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 7 * 24 * 60 * 60 * 1000, httpOnly: true, sameSite: 'strict' },
+    rolling: true,
+    store: new PostgresSessionStore(),
+    cookie: {
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      sameSite: process.env.COOKIE_SAME_SITE || 'lax',
+      secure: process.env.COOKIE_SECURE === 'true'
+        ? true
+        : process.env.COOKIE_SECURE === 'false'
+          ? false
+          : process.env.NODE_ENV === 'production',
+    },
   };
-  if (FileStore) {
-    const sessionDir = path.join(DATA_DIR, 'sessions');
-    fs.mkdirSync(sessionDir, { recursive: true });
-    sessionConfig.store = new FileStore({ path: sessionDir, ttl: 30 * 24 * 60 * 60, retries: 1, logFn: () => {} });
-  }
   app.use(session(sessionConfig));
 
   const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, message: { success: false, message: 'كثير طلبات' } });

@@ -5,6 +5,12 @@ const { v4: uuidv4 } = require('uuid');
 
 const db = require('../db/client');
 
+function saveSession(req) {
+  return new Promise((resolve, reject) => {
+    req.session.save((err) => (err ? reject(err) : resolve()));
+  });
+}
+
 function publicUser(row) {
   return {
     id: row.id,
@@ -36,6 +42,7 @@ function createAuthController() {
         req.session.userId = user.id;
         req.session.userName = user.name;
         if (remember) req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
+        await saveSession(req);
         res.json({ success: true, ...publicUser(user) });
       } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -67,6 +74,7 @@ function createAuthController() {
 
         req.session.userId = id;
         req.session.userName = name;
+        await saveSession(req);
         res.json({ success: true, verified: true, ...publicUser(result.rows[0]) });
       } catch (err) {
         res.status(500).json({ success: false, message: err.message });

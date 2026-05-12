@@ -94,6 +94,12 @@ const statements = [
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
 
+  `CREATE TABLE IF NOT EXISTS app_sessions (
+    sid TEXT PRIMARY KEY,
+    sess JSONB NOT NULL,
+    expire TIMESTAMPTZ NOT NULL
+  )`,
+
   `CREATE INDEX IF NOT EXISTS idx_bot_configs_user_id
     ON bot_configs(user_id)`,
 
@@ -122,6 +128,9 @@ const statements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_queue_job_key_unique
     ON jobs(queue_name, job_key)
     WHERE job_key IS NOT NULL`,
+
+  `CREATE INDEX IF NOT EXISTS idx_app_sessions_expire
+    ON app_sessions(expire)`,
 
   `CREATE OR REPLACE FUNCTION set_updated_at()
   RETURNS TRIGGER AS $$
