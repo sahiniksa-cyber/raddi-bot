@@ -10,11 +10,12 @@ const {
   fetchLatestBaileysVersion,
   jidNormalizedUser,
   makeWASocket,
-  useMultiFileAuthState,
 } = require('@whiskeysockets/baileys');
 
+const db = require('../../db/client');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
+const { usePostgresBaileysAuthState, BaileysPostgresAuthState } = require('./baileys-postgres-auth');
 
 function textFromBaileysMessage(message = {}) {
   return String(
@@ -57,6 +58,7 @@ class BaileysConnectionManager extends EventEmitter {
     dataDir,
     logger = console,
     ingestService = new MessageIngestService({ logger }),
+    database = db,
   }) {
     super();
     if (!userId) throw new Error('userId is required');
@@ -67,6 +69,7 @@ class BaileysConnectionManager extends EventEmitter {
     this.sessionPath = path.join(dataDir, 'baileys-session');
     this.logger = logger;
     this.ingestService = ingestService;
+    this.db = database;
 
     this.sock = null;
     this.client = null;
@@ -136,8 +139,7 @@ class BaileysConnectionManager extends EventEmitter {
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
     try {
-      fs.mkdirSync(this.sessionPath, { recursive: true });
-      const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
+      const { state, saveCreds } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
       if (!this._version) {
         const { version } = await fetchLatestBaileysVersion();
         this._version = version;
@@ -161,7 +163,12 @@ class BaileysConnectionManager extends EventEmitter {
       };
 
       sock.ev.on('creds.update', saveCreds);
-      sock.ev.on('connection.update', (update) => this.handleConnectionUpdate(update, retryCount));
+      sock.ev.on('connection.update', (update) => {
+        this.handleConnectionUpdate(update, retryCount).catch((err) => {
+          this.lastError = err.message;
+          this.log('error', 'connection', `Baileys connection update failed: ${err.message}`, err);
+        });
+      });
       sock.ev.on('messages.upsert', (event) => this.handleMessages(event));
       this.startQrWatchdog(retryCount);
       return true;
@@ -245,7 +252,7 @@ class BaileysConnectionManager extends EventEmitter {
     if (typeof this._retryTimer.unref === 'function') this._retryTimer.unref();
   }
 
-  handleConnectionUpdate(update, retryCount) {
+  async handleConnectionUpdate(update, retryCount) {
     if (!this._running) return;
 
     if (update.qr) {
@@ -284,7 +291,7 @@ class BaileysConnectionManager extends EventEmitter {
       this.lastError = message;
       if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
         this.authFailureCount++;
-        this.clearAuthCache('Baileys logged out');
+        await this.clearAuthCache('Baileys logged out');
         this.setStatus('stopped', 'logged_out');
         this._running = false;
         this.emit('disconnected', message);
@@ -313,10 +320,10 @@ class BaileysConnectionManager extends EventEmitter {
     this.log('info', 'connection', `Baileys has no browser cache to clear: ${reason}`);
   }
 
-  clearAuthCache(reason) {
+  async clearAuthCache(reason) {
     try {
-      fs.rmSync(this.sessionPath, { recursive: true, force: true });
-      fs.mkdirSync(this.sessionPath, { recursive: true });
+      const store = new BaileysPostgresAuthState({ db: this.db, userId: this.userId });
+      await store.clear();
       this.log('warn', 'auth', `cleared Baileys auth session: ${reason}`);
     } catch (err) {
       this.log('warn', 'auth', `failed to clear Baileys auth session: ${err.message}`);

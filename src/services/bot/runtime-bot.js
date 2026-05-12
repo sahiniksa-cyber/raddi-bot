@@ -289,7 +289,7 @@ class RuntimeBot {
   async clearSession() {
     this.sessionDesiredState = 'stopped';
     await this.connection.stop();
-    try { this.connection.clearAuthCache?.('manual clear-session'); } catch (_) {}
+    try { await this.connection.clearAuthCache?.('manual clear-session'); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, 'session'), { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, 'baileys-session'), { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, '.waweb-cache'), { recursive: true, force: true }); } catch (_) {}
