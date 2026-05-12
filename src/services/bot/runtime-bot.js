@@ -18,6 +18,8 @@ class RuntimeBot {
 
     this.logger = logger || new Logger(userId);
     this.config = { ...DEFAULT_CONFIG };
+    this.sessionDesiredState = 'stopped';
+    this._autoRecoverTimer = null;
     this.totalChatsHandled = 0;
     this.costsData = { totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUSD: 0, byModel: {} };
 
@@ -34,6 +36,11 @@ class RuntimeBot {
     this.connection.on('message_ingested', () => {
       this.totalChatsHandled++;
     });
+    this.connection.on('state_changed', (state) => {
+      this.persistSessionState({ state }).catch((err) => {
+        this.logger.warn('connection', `failed to persist WhatsApp state: ${err.message}`);
+      });
+    });
   }
 
   get client() {
@@ -41,7 +48,7 @@ class RuntimeBot {
   }
 
   get botRunning() {
-    return this.connection.status !== 'stopped';
+    return !['stopped', 'error'].includes(this.connection.status);
   }
 
   get appState() {
@@ -63,7 +70,85 @@ class RuntimeBot {
     const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [this.userId]);
     this.config = { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
     this.ai.updateConfig(this.config);
+    await this.loadSessionState();
     return this;
+  }
+
+  async loadSessionState() {
+    const result = await db.query(
+      `INSERT INTO whatsapp_sessions (user_id, status, session_path, desired_state, auth_state)
+       VALUES ($1, 'stopped', $2, 'stopped', '{}'::jsonb)
+       ON CONFLICT (user_id) DO UPDATE SET session_path = EXCLUDED.session_path
+       RETURNING desired_state, status`,
+      [this.userId, this.connection.sessionPath],
+    );
+
+    const row = result.rows[0] || {};
+    this.sessionDesiredState = row.desired_state || 'stopped';
+    if (this.sessionDesiredState === 'running' && process.env.WA_AUTO_RECOVER !== 'false') {
+      clearTimeout(this._autoRecoverTimer);
+      this._autoRecoverTimer = setTimeout(() => {
+        if (this.connection.status === 'stopped') {
+          this.logger.info('boot', 'auto recovering WhatsApp session after server restart');
+          this.startBot('auto_recover');
+        }
+      }, parseInt(process.env.WA_AUTO_RECOVER_DELAY_MS || '2500', 10));
+      if (typeof this._autoRecoverTimer.unref === 'function') this._autoRecoverTimer.unref();
+    }
+  }
+
+  async persistSessionState({ desiredState = this.sessionDesiredState, state = this.connection.state() } = {}) {
+    this.sessionDesiredState = desiredState;
+    const status = state.status || this.connection.status || 'stopped';
+    const nowFields = {
+      lastQr: status === 'qr_ready',
+      lastConnected: status === 'connected',
+      lastDisconnected: ['disconnected', 'reconnecting', 'error'].includes(status),
+    };
+
+    await db.query(
+      `INSERT INTO whatsapp_sessions (
+         user_id, phone, status, session_path, desired_state, auth_state,
+         last_qr_at, last_connected_at, last_disconnected_at, last_error, reconnect_count
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6::jsonb,
+         CASE WHEN $7 THEN NOW() ELSE NULL END,
+         CASE WHEN $8 THEN NOW() ELSE NULL END,
+         CASE WHEN $9 THEN NOW() ELSE NULL END,
+         $10, $11
+       )
+       ON CONFLICT (user_id) DO UPDATE SET
+         phone = COALESCE(EXCLUDED.phone, whatsapp_sessions.phone),
+         status = EXCLUDED.status,
+         session_path = EXCLUDED.session_path,
+         desired_state = EXCLUDED.desired_state,
+         auth_state = EXCLUDED.auth_state,
+         last_qr_at = CASE WHEN $7 THEN NOW() ELSE whatsapp_sessions.last_qr_at END,
+         last_connected_at = CASE WHEN $8 THEN NOW() ELSE whatsapp_sessions.last_connected_at END,
+         last_disconnected_at = CASE WHEN $9 THEN NOW() ELSE whatsapp_sessions.last_disconnected_at END,
+         last_error = EXCLUDED.last_error,
+         reconnect_count = EXCLUDED.reconnect_count`,
+      [
+        this.userId,
+        state.phone || this.connection.phone || null,
+        status,
+        this.connection.sessionPath,
+        desiredState,
+        JSON.stringify({
+          ready: !!state.ready,
+          qrVersion: state.qrVersion || 0,
+          authFailureCount: state.authFailureCount || 0,
+          heartbeatFailures: state.heartbeatFailures || 0,
+          updatedAt: new Date().toISOString(),
+        }),
+        nowFields.lastQr,
+        nowFields.lastConnected,
+        nowFields.lastDisconnected,
+        state.error || null,
+        state.reconnectCount || 0,
+      ],
+    );
   }
 
   async saveConfig() {
@@ -76,17 +161,30 @@ class RuntimeBot {
     this.ai.updateConfig(this.config);
   }
 
-  startBot() {
+  startBot(source = 'manual') {
+    this.sessionDesiredState = 'running';
+    this.persistSessionState({ desiredState: 'running' }).catch((err) => {
+      this.logger.warn('connection', `failed to persist start intent: ${err.message}`);
+    });
+    this.logger.info('boot', `start requested (${source})`);
     return this.connection.start();
   }
 
   async stopBot() {
+    this.sessionDesiredState = 'stopped';
     await this.connection.stop();
+    await this.persistSessionState({ desiredState: 'stopped' });
   }
 
   async clearSession() {
+    this.sessionDesiredState = 'stopped';
     await this.connection.stop();
     try { fs.rmSync(path.join(this.dataDir, 'session'), { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(this.dataDir, '.waweb-cache'), { recursive: true, force: true }); } catch (_) {}
+    await this.persistSessionState({
+      desiredState: 'stopped',
+      state: { status: 'stopped', ready: false, phone: null, error: null, qrVersion: 0, reconnectCount: 0, authFailureCount: 0 },
+    });
   }
 
   log(message) {

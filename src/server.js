@@ -11,6 +11,7 @@ const rateLimit = require('express-rate-limit');
 let FileStore; try { FileStore = require('session-file-store')(session); } catch (_) {}
 
 const db = require('./db/client');
+const { migrate } = require('./db/migrations/init');
 const { createAuthRoutes } = require('./routes/auth.routes');
 const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
@@ -181,6 +182,7 @@ function asyncRoute(fn) {
 }
 
 async function main() {
+  await migrate();
   const app = createApp();
   app.listen(PORT, () => console.log(`Raddi src server listening on ${PORT}`));
 }

@@ -36,8 +36,11 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.qrVersion = 0;
     this.lastError = null;
     this.reconnectCount = 0;
+    this.authFailureCount = 0;
+    this.heartbeatFailures = 0;
     this._retryTimer = null;
     this._heartbeatTimer = null;
+    this._qrWatchdogTimer = null;
     this._running = false;
   }
 
@@ -58,7 +61,18 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       qrVersion: this.qrVersion,
       error: this.lastError,
       reconnectCount: this.reconnectCount,
+      authFailureCount: this.authFailureCount,
+      heartbeatFailures: this.heartbeatFailures,
     };
+  }
+
+  emitState(stage) {
+    this.emit('state_changed', { stage, ...this.state() });
+  }
+
+  setStatus(status, stage = status) {
+    this.status = status;
+    this.emitState(stage);
   }
 
   createClient() {
@@ -69,18 +83,29 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.log('info', 'boot', chromePath ? `Chrome found: ${chromePath}` : 'Chrome path not found; Puppeteer will try bundled/default browser');
     const puppeteer = {
       headless: true,
+      protocolTimeout: parseInt(process.env.WA_PROTOCOL_TIMEOUT_MS || '120000', 10),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
         '--disable-gpu',
         '--disable-extensions',
         '--disable-background-networking',
         '--disable-sync',
         '--disable-translate',
+        '--metrics-recording-only',
+        '--safebrowsing-disable-auto-update',
         '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
         '--disable-background-timer-throttling',
         '--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+        '--disable-software-rasterizer',
+        '--ignore-certificate-errors',
+        '--disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process',
         '--window-size=1280,720',
       ],
     };
@@ -94,10 +119,10 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
         path: path.join(this.dataDir, '.waweb-cache'),
         strict: false,
       },
-      qrMaxRetries: 0,
+      qrMaxRetries: parseInt(process.env.WA_QR_MAX_RETRIES || '25', 10),
       takeoverOnConflict: true,
       takeoverTimeoutMs: 0,
-      authTimeoutMs: 60000,
+      authTimeoutMs: parseInt(process.env.WA_AUTH_TIMEOUT_MS || '90000', 10),
     });
   }
 
@@ -111,9 +136,9 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.stopHeartbeat();
     this._running = true;
     this.ready = false;
-    this.status = 'waiting_qr';
     this.lastError = null;
     this.qr = null;
+    this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting WhatsApp client${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
     try {
@@ -124,9 +149,11 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.lastError = err.message;
       this._running = false;
       this.log('error', 'boot', `client creation failed: ${err.message}`, err);
+      this.emitState('client_creation_failed');
       return false;
     }
 
+    this.startQrWatchdog(retryCount);
     this.client.initialize().catch((err) => {
       if (!this._running) return;
       this.log('warn', 'boot', `initialize failed: ${err.message}`);
@@ -138,10 +165,11 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
 
   async stop() {
     clearTimeout(this._retryTimer);
+    clearTimeout(this._qrWatchdogTimer);
     this.stopHeartbeat();
     this._running = false;
     this.ready = false;
-    this.status = 'stopped';
+    this.setStatus('stopped', 'stop');
     this.qr = null;
 
     const current = this.client;
@@ -163,11 +191,12 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
 
     this.reconnectCount++;
     this.ready = false;
-    this.status = 'reconnecting';
     this.lastError = String(reason || 'unknown');
     this.client = null;
     this.stopHeartbeat();
+    clearTimeout(this._qrWatchdogTimer);
     this.log('warn', 'connection', `reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
+    this.setStatus('reconnecting', 'reconnect');
 
     if (current) {
       Promise.race([
@@ -185,6 +214,29 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     if (typeof this._retryTimer.unref === 'function') this._retryTimer.unref();
   }
 
+  startQrWatchdog(retryCount) {
+    clearTimeout(this._qrWatchdogTimer);
+    const timeout = parseInt(process.env.WA_QR_WATCHDOG_TIMEOUT_MS || '90000', 10);
+    this._qrWatchdogTimer = setTimeout(() => {
+      if (!this._running || this.ready || this.qr) return;
+      this.scheduleReconnect(retryCount, 'QR watchdog timeout');
+    }, timeout);
+    if (typeof this._qrWatchdogTimer.unref === 'function') this._qrWatchdogTimer.unref();
+  }
+
+  clearAuthCache(reason) {
+    try {
+      fs.rmSync(this.sessionPath, { recursive: true, force: true });
+      fs.mkdirSync(this.sessionPath, { recursive: true });
+      this.log('warn', 'auth', `cleared corrupted auth session: ${reason}`);
+    } catch (err) {
+      this.log('warn', 'auth', `failed to clear auth session: ${err.message}`);
+    }
+    try {
+      fs.rmSync(path.join(this.dataDir, '.waweb-cache'), { recursive: true, force: true });
+    } catch (_) {}
+  }
+
   startHeartbeat() {
     this.stopHeartbeat();
     this._heartbeatTimer = setInterval(async () => {
@@ -195,10 +247,21 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
           new Promise((_, reject) => setTimeout(() => reject(new Error('heartbeat timeout')), 10000)),
         ]);
         if (state !== 'CONNECTED') {
-          this.scheduleReconnect(0, `heartbeat state=${state}`);
+          this.heartbeatFailures++;
+          this.log('warn', 'heartbeat', `state=${state} failure=${this.heartbeatFailures}`);
+          if (this.heartbeatFailures >= TIMERS.HEARTBEAT_FAIL_THRESHOLD) {
+            this.scheduleReconnect(0, `heartbeat state=${state}`);
+          }
+        } else {
+          this.heartbeatFailures = 0;
+          this.emitState('heartbeat_ok');
         }
       } catch (err) {
-        this.scheduleReconnect(0, `heartbeat ${err.message}`);
+        this.heartbeatFailures++;
+        this.log('warn', 'heartbeat', `${err.message} failure=${this.heartbeatFailures}`);
+        if (this.heartbeatFailures >= TIMERS.HEARTBEAT_FAIL_THRESHOLD) {
+          this.scheduleReconnect(0, `heartbeat ${err.message}`);
+        }
       }
     }, TIMERS.HEARTBEAT_INTERVAL_MS);
     if (typeof this._heartbeatTimer.unref === 'function') this._heartbeatTimer.unref();
@@ -217,22 +280,26 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.qr = qr;
       this.qrVersion++;
       this.lastError = null;
+      this.authFailureCount = 0;
+      clearTimeout(this._qrWatchdogTimer);
       this.log('info', 'qr', `QR ready version=${this.qrVersion}`);
+      this.emitState('qr');
       this.emit('qr', { qr, qrVersion: this.qrVersion });
     });
 
     client.on('loading_screen', (pct) => {
       if (!this._running) return;
       if (this.ready && this.status === 'connected') return;
-      this.status = 'connecting';
+      this.setStatus('connecting', 'loading');
       this.qr = null;
       this.log('info', 'auth', `loading WhatsApp ${pct}%`);
     });
 
     client.on('authenticated', () => {
       if (!this._running) return;
-      this.status = 'connecting';
+      this.setStatus('connecting', 'authenticated');
       this.qr = null;
+      this.authFailureCount = 0;
       this.log('info', 'auth', 'authenticated');
       this.emit('authenticated');
     });
@@ -240,27 +307,35 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     client.on('ready', () => {
       if (!this._running) return;
       this.ready = true;
-      this.status = 'connected';
       this.phone = client.info?.wid?.user || null;
       this.lastError = null;
       this.qr = null;
+      this.authFailureCount = 0;
+      this.heartbeatFailures = 0;
+      clearTimeout(this._qrWatchdogTimer);
       this.startHeartbeat();
       this.log('info', 'connection', `connected${this.phone ? ` phone=+${this.phone}` : ''}`);
+      this.setStatus('connected', 'ready');
       this.emit('ready', this.state());
     });
 
     client.on('auth_failure', (message) => {
       this.ready = false;
-      this.status = 'reconnecting';
       this.lastError = String(message || 'auth failure');
+      this.authFailureCount++;
       this.log('error', 'auth', `auth failure: ${this.lastError}`);
+      if (this.authFailureCount >= parseInt(process.env.WA_AUTH_FAILURES_BEFORE_CLEAR || '2', 10)) {
+        this.clearAuthCache('repeated auth_failure');
+        this.authFailureCount = 0;
+      }
+      this.setStatus('reconnecting', 'auth_failure');
       this.scheduleReconnect(retryCount, `auth_failure: ${message}`);
     });
 
     client.on('disconnected', (reason) => {
       if (!this._running) return;
       this.ready = false;
-      this.status = 'disconnected';
+      this.setStatus('disconnected', 'disconnected');
       this.log('warn', 'connection', `disconnected: ${reason}`);
       this.emit('disconnected', reason);
       this.scheduleReconnect(0, `disconnected: ${reason}`);

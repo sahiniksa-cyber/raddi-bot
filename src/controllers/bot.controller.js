@@ -44,7 +44,11 @@ function createBotController({ getUserBot }) {
     start(req, res) {
       const bot = getUserBot(req.session.userId);
       const started = bot.startBot();
-      res.json({ success: true, started, status: bot.appState.status });
+      const state = bot.appState;
+      if (state.status === 'error') {
+        return res.status(500).json({ success: false, started, status: state.status, message: state.error || 'bot start failed' });
+      }
+      res.json({ success: true, started, status: state.status, message: started ? null : 'bot already running' });
     },
 
     async stop(req, res) {
