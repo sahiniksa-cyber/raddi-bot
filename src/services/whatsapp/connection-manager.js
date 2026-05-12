@@ -244,7 +244,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.cleanupBrowserProcesses(`reconnect: ${reason}`);
       this.cleanupChromiumLocks();
     }
-    if (browserLaunchFailure && retryCount >= 2 && !this.ready && !this.qr) {
+    if (browserLaunchFailure && !this.ready && !this.qr) {
       this.clearAuthCache(`repeated browser launch failure before QR: ${reason}`);
     }
 
