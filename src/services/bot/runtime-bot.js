@@ -20,6 +20,7 @@ class RuntimeBot {
     this.config = { ...DEFAULT_CONFIG };
     this.sessionDesiredState = 'stopped';
     this._autoRecoverTimer = null;
+    this.lastPersistedSession = null;
     this.totalChatsHandled = 0;
     this.costsData = { totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUSD: 0, byModel: {} };
 
@@ -79,11 +80,12 @@ class RuntimeBot {
       `INSERT INTO whatsapp_sessions (user_id, status, session_path, desired_state, auth_state)
        VALUES ($1, 'stopped', $2, 'stopped', '{}'::jsonb)
        ON CONFLICT (user_id) DO UPDATE SET session_path = EXCLUDED.session_path
-       RETURNING desired_state, status`,
+       RETURNING desired_state, status, updated_at`,
       [this.userId, this.connection.sessionPath],
     );
 
     const row = result.rows[0] || {};
+    this.lastPersistedSession = row;
     this.sessionDesiredState = row.desired_state || 'stopped';
     if (this.sessionDesiredState === 'running' && process.env.WA_AUTO_RECOVER !== 'false') {
       clearTimeout(this._autoRecoverTimer);
@@ -106,7 +108,7 @@ class RuntimeBot {
       lastDisconnected: ['disconnected', 'reconnecting', 'error'].includes(status),
     };
 
-    await db.query(
+    const result = await db.query(
       `INSERT INTO whatsapp_sessions (
          user_id, phone, status, session_path, desired_state, auth_state,
          last_qr_at, last_connected_at, last_disconnected_at, last_error, reconnect_count
@@ -128,7 +130,8 @@ class RuntimeBot {
          last_connected_at = CASE WHEN $8 THEN NOW() ELSE whatsapp_sessions.last_connected_at END,
          last_disconnected_at = CASE WHEN $9 THEN NOW() ELSE whatsapp_sessions.last_disconnected_at END,
          last_error = EXCLUDED.last_error,
-         reconnect_count = EXCLUDED.reconnect_count`,
+         reconnect_count = EXCLUDED.reconnect_count
+       RETURNING desired_state, status, updated_at`,
       [
         this.userId,
         state.phone || this.connection.phone || null,
@@ -149,6 +152,7 @@ class RuntimeBot {
         state.reconnectCount || 0,
       ],
     );
+    this.lastPersistedSession = result.rows[0] || this.lastPersistedSession;
   }
 
   async saveConfig() {
@@ -162,6 +166,18 @@ class RuntimeBot {
   }
 
   startBot(source = 'manual') {
+    const staleWaitingQrMs = parseInt(process.env.WA_STALE_WAITING_QR_RESTART_MS || '45000', 10);
+    const updatedAt = this.lastPersistedSession?.updated_at ? new Date(this.lastPersistedSession.updated_at).getTime() : 0;
+    if (
+      this.connection.status === 'waiting_qr' &&
+      !this.connection.qr &&
+      updatedAt &&
+      Date.now() - updatedAt > staleWaitingQrMs
+    ) {
+      this.logger.warn('boot', 'stale waiting_qr detected; forcing WhatsApp restart');
+      this.restartBot().catch((err) => this.logger.error('boot', `forced restart failed: ${err.message}`));
+      return false;
+    }
     this.sessionDesiredState = 'running';
     this.persistSessionState({ desiredState: 'running' }).catch((err) => {
       this.logger.warn('connection', `failed to persist start intent: ${err.message}`);
@@ -174,6 +190,14 @@ class RuntimeBot {
     this.sessionDesiredState = 'stopped';
     await this.connection.stop();
     await this.persistSessionState({ desiredState: 'stopped' });
+  }
+
+  async restartBot() {
+    this.sessionDesiredState = 'running';
+    await this.connection.stop();
+    await this.persistSessionState({ desiredState: 'running', state: { ...this.connection.state(), status: 'restarting' } });
+    this.logger.info('boot', 'force restarting WhatsApp connection');
+    return this.connection.start(0);
   }
 
   async clearSession() {

@@ -119,6 +119,7 @@ function createApp() {
   app.get('/api/qr-image', requireAuth, asyncRoute(async (req, res) => wrapBotController.qrImage(req, res)));
   app.post('/api/bot/start', requireAuth, asyncRoute(async (req, res) => wrapBotController.start(req, res)));
   app.post('/api/bot/stop', requireAuth, asyncRoute(async (req, res) => wrapBotController.stop(req, res)));
+  app.post('/api/bot/restart', requireAuth, asyncRoute(async (req, res) => wrapBotController.restart(req, res)));
   app.post('/api/bot/clear-session', requireAuth, asyncRoute(async (req, res) => wrapBotController.clearSession(req, res)));
   app.post('/api/send-message', requireAuth, asyncRoute(async (req, res) => wrapBotController.sendMessage(req, res)));
   app.get('/api/config', requireAuth, asyncRoute(async (req, res) => wrapConfigController.getConfig(req, res)));

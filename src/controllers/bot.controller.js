@@ -64,6 +64,17 @@ function createBotController({ getUserBot }) {
       }
     },
 
+    async restart(req, res) {
+      const bot = getUserBot(req.session.userId);
+      try {
+        const started = await bot.restartBot();
+        const state = bot.appState;
+        res.json({ success: true, started, status: state.status, message: started ? null : 'restart requested' });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message, status: bot.appState.status });
+      }
+    },
+
     async clearSession(req, res) {
       const bot = getUserBot(req.session.userId);
       try {

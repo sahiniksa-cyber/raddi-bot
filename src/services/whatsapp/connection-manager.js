@@ -5,7 +5,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 
-const { findChrome } = require('../../../lib/helpers');
+const { findChrome, killChrome } = require('../../../lib/helpers');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
 
@@ -42,6 +42,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
     this._readyWatchdogTimer = null;
+    this._launchTimer = null;
     this._running = false;
   }
 
@@ -80,6 +81,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     if (this.clientFactory) return this.clientFactory();
 
     fs.mkdirSync(this.sessionPath, { recursive: true });
+    this.cleanupBrowserProcesses('before client launch');
     this.cleanupChromiumLocks();
     const chromePath = findChrome();
     this.log('info', 'boot', chromePath ? `Chrome found: ${chromePath}` : 'Chrome path not found; Puppeteer will try bundled/default browser');
@@ -156,6 +158,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     }
 
     this.startQrWatchdog(retryCount);
+    this.startLaunchWatchdog(retryCount);
     this.client.initialize().catch((err) => {
       if (!this._running) return;
       this.log('warn', 'boot', `initialize failed: ${err.message}`);
@@ -169,6 +172,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     clearTimeout(this._retryTimer);
     clearTimeout(this._qrWatchdogTimer);
     clearTimeout(this._readyWatchdogTimer);
+    clearTimeout(this._launchTimer);
     this.stopHeartbeat();
     this._running = false;
     this.ready = false;
@@ -199,11 +203,16 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.stopHeartbeat();
     clearTimeout(this._qrWatchdogTimer);
     clearTimeout(this._readyWatchdogTimer);
+    clearTimeout(this._launchTimer);
     this.log('warn', 'connection', `reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
     this.setStatus('reconnecting', 'reconnect');
 
     if (/QR watchdog|ready watchdog|initialize/i.test(String(reason || '')) && retryCount >= 1) {
       this.clearWebCache(`retry ${retryCount + 1}: ${reason}`);
+    }
+    if (/launch watchdog|profile appears to be in use|SingletonLock|Chromium has locked/i.test(String(reason || ''))) {
+      this.cleanupBrowserProcesses(`reconnect: ${reason}`);
+      this.cleanupChromiumLocks();
     }
 
     if (current) {
@@ -230,6 +239,16 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.scheduleReconnect(retryCount, 'QR watchdog timeout');
     }, timeout);
     if (typeof this._qrWatchdogTimer.unref === 'function') this._qrWatchdogTimer.unref();
+  }
+
+  startLaunchWatchdog(retryCount) {
+    clearTimeout(this._launchTimer);
+    const timeout = parseInt(process.env.WA_LAUNCH_WATCHDOG_TIMEOUT_MS || '30000', 10);
+    this._launchTimer = setTimeout(() => {
+      if (!this._running || this.ready || this.qr || this.status !== 'waiting_qr') return;
+      this.scheduleReconnect(retryCount, 'launch watchdog timeout before QR/loading');
+    }, timeout);
+    if (typeof this._launchTimer.unref === 'function') this._launchTimer.unref();
   }
 
   startReadyWatchdog(retryCount, stage) {
@@ -280,6 +299,16 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     scan(this.sessionPath);
     if (removed > 0) {
       this.log('warn', 'boot', `removed ${removed} stale Chromium profile lock file(s)`);
+    }
+  }
+
+  cleanupBrowserProcesses(reason) {
+    if (process.env.WA_KILL_CHROME_ON_START === 'false') return;
+    try {
+      killChrome();
+      this.log('warn', 'boot', `cleaned old Chromium processes: ${reason}`);
+    } catch (err) {
+      this.log('warn', 'boot', `failed to clean old Chromium processes: ${err.message}`);
     }
   }
 
@@ -341,6 +370,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.lastError = null;
       this.authFailureCount = 0;
       clearTimeout(this._qrWatchdogTimer);
+      clearTimeout(this._launchTimer);
       this.log('info', 'qr', `QR ready version=${this.qrVersion}`);
       this.emitState('qr');
       this.emit('qr', { qr, qrVersion: this.qrVersion });
@@ -351,6 +381,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       if (this.ready && this.status === 'connected') return;
       this.setStatus('connecting', 'loading');
       this.qr = null;
+      clearTimeout(this._launchTimer);
       this.startReadyWatchdog(retryCount, `loading ${pct}%`);
       this.log('info', 'auth', `loading WhatsApp ${pct}%`);
     });
@@ -375,6 +406,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       this.heartbeatFailures = 0;
       clearTimeout(this._qrWatchdogTimer);
       clearTimeout(this._readyWatchdogTimer);
+      clearTimeout(this._launchTimer);
       this.startHeartbeat();
       this.log('info', 'connection', `connected${this.phone ? ` phone=+${this.phone}` : ''}`);
       this.setStatus('connected', 'ready');

@@ -14,6 +14,7 @@ function createBotRoutes(deps) {
   router.get('/api/qr-image', controller.qrImage);
   router.post('/api/bot/start', controller.start);
   router.post('/api/bot/stop', controller.stop);
+  router.post('/api/bot/restart', controller.restart);
   router.post('/api/bot/clear-session', controller.clearSession);
   router.post('/api/send-message', controller.sendMessage);
 
