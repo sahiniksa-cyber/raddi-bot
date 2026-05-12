@@ -1,22 +1,45 @@
-FROM node:20-slim
+FROM node:20-bookworm-slim
 
-# chromium من apt يجلب كل dependencies تلقائياً — لا داعي لتعداد المكتبات يدوياً
+# Runtime libraries required by Chrome for Testing in headless Linux.
 RUN apt-get update && apt-get install -y \
-  chromium \
-  fonts-freefont-ttf \
   ca-certificates \
+  fonts-freefont-ttf \
+  libasound2 \
+  libatk-bridge2.0-0 \
+  libatk1.0-0 \
+  libcairo2 \
+  libcups2 \
+  libdbus-1-3 \
+  libdrm2 \
+  libgbm1 \
+  libglib2.0-0 \
+  libgtk-3-0 \
+  libnss3 \
+  libpango-1.0-0 \
+  libx11-6 \
+  libxcb1 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxext6 \
+  libxfixes3 \
+  libxkbcommon0 \
+  libxrandr2 \
+  wget \
+  xdg-utils \
   --no-install-recommends \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
-# أخبر Puppeteer يستخدم chromium المثبّت — هذا هو المسار الفعلي على Debian
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV NODE_ENV=production
-
 WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
+ENV WA_USE_PUPPETEER_BUNDLED=true
+
 COPY package*.json ./
-RUN npm install --production --no-audit --no-fund
+RUN npm install --production --no-audit --no-fund \
+  && npx puppeteer browsers install chrome --install-deps
+
 COPY . .
 
 EXPOSE 3000
