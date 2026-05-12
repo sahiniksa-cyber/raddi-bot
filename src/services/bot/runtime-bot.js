@@ -34,13 +34,18 @@ class RuntimeBot {
       record: (model, inputTokens, outputTokens) => this.recordUsage(model, inputTokens, outputTokens),
     });
 
-    const ConnectionManager = (process.env.WA_ENGINE || 'baileys').trim().toLowerCase() === 'whatsapp-web'
-      ? EnterpriseWhatsAppConnectionManager
-      : BaileysConnectionManager;
+    const engine = (process.env.WA_ENGINE || 'whatsapp-web').trim().toLowerCase();
+    const ConnectionManager = engine === 'baileys'
+      ? BaileysConnectionManager
+      : EnterpriseWhatsAppConnectionManager;
+    const connectionDataDir = engine === 'whatsapp-web'
+      ? path.join(process.env.WA_SESSION_DIR || path.join(os.tmpdir(), 'raddi-wa-sessions'), userId)
+      : this.dataDir;
+    fs.mkdirSync(connectionDataDir, { recursive: true });
 
     this.connection = new ConnectionManager({
       userId,
-      dataDir: this.dataDir,
+      dataDir: connectionDataDir,
       logger: this.logger,
     });
 
