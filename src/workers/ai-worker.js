@@ -196,6 +196,7 @@ async function processAiReply(job) {
     userId,
     conversationId: conversation.id,
     messageId: payload.messageId,
+    providerMessageId: payload.providerMessageId,
     replyMessageId,
     sender: conversation.sender,
     reply,

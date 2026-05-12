@@ -121,7 +121,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     };
     if (chromePath) puppeteer.executablePath = chromePath;
 
-    return new Client({
+    const options = {
       authStrategy: new LocalAuth({ dataPath: this.sessionPath }),
       puppeteer,
       webVersionCache: this.webVersionCache(),
@@ -129,11 +129,13 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
       takeoverOnConflict: true,
       takeoverTimeoutMs: 0,
       authTimeoutMs: parseInt(process.env.WA_AUTH_TIMEOUT_MS || '90000', 10),
-    });
+    };
+    if (process.env.WA_WEB_VERSION) options.webVersion = process.env.WA_WEB_VERSION;
+    return new Client(options);
   }
 
   webVersionCache() {
-    const mode = (process.env.WA_WEB_VERSION_CACHE || 'remote').trim().toLowerCase();
+    const mode = (process.env.WA_WEB_VERSION_CACHE || 'local').trim().toLowerCase();
     if (mode === 'local') {
       return {
         type: 'local',

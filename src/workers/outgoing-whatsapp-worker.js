@@ -45,6 +45,7 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   const sender = payload.sender;
   const reply = String(payload.reply || '').trim();
   const replyMessageId = payload.replyMessageId;
+  const providerMessageId = payload.providerMessageId;
 
   if (!userId) throw new Error('Missing userId in outgoing payload');
   if (!sender) throw new Error('Missing sender in outgoing payload');
@@ -61,10 +62,7 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
   });
 
-  await Promise.race([
-    bot.client.sendMessage(sender, reply),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), TIMERS.SEND_MESSAGE_TIMEOUT_MS)),
-  ]);
+  await sendWhatsappReply(bot, { sender, reply, providerMessageId });
 
   await markReplyMessage(replyMessageId, 'sent', { sentBy: WORKER_NAME, sentAt: new Date().toISOString() });
   await updateJobStatus(job.id, {
@@ -78,6 +76,38 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   return { sent: true, replyMessageId };
 }
 
+async function sendWhatsappReply(bot, { sender, reply, providerMessageId }) {
+  const timeoutMs = TIMERS.SEND_MESSAGE_TIMEOUT_MS;
+  return Promise.race([
+    sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), timeoutMs)),
+  ]);
+}
+
+async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }) {
+  if (providerMessageId && typeof bot.client.getMessageById === 'function') {
+    const original = await bot.client.getMessageById(providerMessageId).catch((err) => {
+      bot.log?.(`message reply lookup failed: ${err.message}`);
+      return null;
+    });
+    if (original && typeof original.reply === 'function') {
+      return original.reply(reply);
+    }
+  }
+
+  if (typeof bot.client.getChatById === 'function') {
+    const chat = await bot.client.getChatById(sender).catch((err) => {
+      bot.log?.(`chat lookup failed for ${sender}: ${err.message}`);
+      return null;
+    });
+    if (chat && typeof chat.sendMessage === 'function') {
+      return chat.sendMessage(reply);
+    }
+  }
+
+  return bot.client.sendMessage(sender, reply);
+}
+
 async function waitForConnectedBot(bot, { reason, timeoutMs }) {
   if (!bot) throw new Error('Unable to load user bot');
   if (bot.appState.status === 'connected' && bot.client) return bot;
@@ -88,7 +118,10 @@ async function waitForConnectedBot(bot, { reason, timeoutMs }) {
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (bot.appState.status === 'connected' && bot.client) return bot;
+    if (bot.appState.status === 'connected' && bot.client) {
+      const settleMs = parseInt(process.env.OUTGOING_CONNECTED_SETTLE_MS || '20000', 10);
+      if ((bot.appState.statusAgeMs || 0) >= settleMs) return bot;
+    }
     await new Promise(resolve => setTimeout(resolve, 1500));
   }
 
@@ -186,5 +219,6 @@ module.exports = {
   createOutgoingWhatsappWorker,
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
+  sendWhatsappReply,
   waitForConnectedBot,
 };

@@ -77,6 +77,7 @@ class RuntimeBot {
     this.sessionDesiredState = 'stopped';
     this._autoRecoverTimer = null;
     this._leaseRenewTimer = null;
+    this._sessionBackupTimer = null;
     this.lastPersistedSession = null;
     this.instanceId = process.env.RAILWAY_REPLICA_ID ||
       `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString('hex')}`;
@@ -135,13 +136,7 @@ class RuntimeBot {
     });
     this.connection.on('ready', () => {
       if (this.whatsappEngine !== 'whatsapp-web') return;
-      backupWhatsappSession({
-        source: this.connection.sessionPath,
-        target: this.persistentSessionPath,
-        logger: this.logger,
-        rootDir: this.rootDir,
-        userId: this.userId,
-      });
+      this.scheduleWhatsappSessionBackup('ready');
     });
     this.connection.on('auth_cleared', ({ reason } = {}) => {
       if (this.whatsappEngine !== 'whatsapp-web') return;
@@ -372,6 +367,7 @@ class RuntimeBot {
 
   async stopBot() {
     this.sessionDesiredState = 'stopped';
+    this.stopWhatsappSessionBackup();
     await this.connection.stop();
     await this.persistSessionState({ desiredState: 'stopped' });
     await this.releaseConnectionLease();
@@ -379,6 +375,7 @@ class RuntimeBot {
 
   async restartBot() {
     this.sessionDesiredState = 'running';
+    this.stopWhatsappSessionBackup();
     await this.connection.stop();
     if (!(await this.acquireConnectionLease('restart'))) return false;
     await this.persistSessionState({ desiredState: 'running', state: { ...this.connection.state(), status: 'restarting' } });
@@ -388,6 +385,7 @@ class RuntimeBot {
 
   async clearSession() {
     this.sessionDesiredState = 'stopped';
+    this.stopWhatsappSessionBackup();
     await this.connection.stop();
     try { await this.connection.clearAuthCache?.('manual clear-session'); } catch (_) {}
     try { fs.rmSync(this.persistentSessionPath, { recursive: true, force: true }); } catch (_) {}
@@ -426,6 +424,32 @@ class RuntimeBot {
     this.costsData.byModel[model].calls++;
     this.costsData.byModel[model].inputTokens += inputTokens || 0;
     this.costsData.byModel[model].outputTokens += outputTokens || 0;
+  }
+
+  scheduleWhatsappSessionBackup(reason = 'connected') {
+    this.stopWhatsappSessionBackup();
+    const delay = parseInt(process.env.WA_SESSION_BACKUP_DELAY_MS || '30000', 10);
+    this._sessionBackupTimer = setTimeout(() => {
+      this._sessionBackupTimer = null;
+      if (this.connection.status !== 'connected' || !this.connection.ready) return;
+      backupWhatsappSession({
+        source: this.connection.sessionPath,
+        target: this.persistentSessionPath,
+        logger: this.logger,
+        rootDir: this.rootDir,
+        userId: this.userId,
+      });
+      const interval = parseInt(process.env.WA_SESSION_BACKUP_INTERVAL_MS || '120000', 10);
+      this._sessionBackupTimer = setTimeout(() => this.scheduleWhatsappSessionBackup('interval'), interval);
+      if (typeof this._sessionBackupTimer.unref === 'function') this._sessionBackupTimer.unref();
+    }, delay);
+    if (typeof this._sessionBackupTimer.unref === 'function') this._sessionBackupTimer.unref();
+    this.logger.info('auth', `scheduled WhatsApp session backup after ${Math.round(delay / 1000)}s (${reason})`);
+  }
+
+  stopWhatsappSessionBackup() {
+    clearTimeout(this._sessionBackupTimer);
+    this._sessionBackupTimer = null;
   }
 }
 
