@@ -10,6 +10,7 @@ const { QUEUE_NAMES, enqueueOutgoingWhatsapp } = require('../queues/message-queu
 const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
+const { prepareEscalation } = require('./escalation-routing');
 const { resolveReplyDelayMs } = require('./reply-delay');
 
 const WORKER_NAME = 'ai-worker';
@@ -188,12 +189,20 @@ async function processAiReply(job) {
 
     const reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0 }) || '').trim();
     if (!reply) throw new Error('AI returned empty reply');
+    const escalation = prepareEscalation({
+      reply,
+      config,
+      customerSender: conversation.sender,
+      inboundText: text,
+    });
+    const customerReply = escalation.customerReply.trim();
+    if (!customerReply) throw new Error('AI returned empty customer reply after escalation marker cleanup');
 
     const replyMessageId = await storeAssistantMessage({
       userId,
       conversationId: conversation.id,
       sender: conversation.sender,
-      reply,
+      reply: customerReply,
       jobId: job.id,
     });
     const replyDelayMs = resolveReplyDelayMs(config);
@@ -205,13 +214,29 @@ async function processAiReply(job) {
       providerMessageId: payload.providerMessageId,
       replyMessageId,
       sender: conversation.sender,
-      reply,
+      reply: customerReply,
       replyDelayMs,
       replyDelayPreset: config.replyDelayPreset,
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,
     });
+
+    if (escalation.ownerMessage) {
+      await enqueueOutgoingWhatsapp({
+        userId,
+        conversationId: conversation.id,
+        messageId: payload.messageId,
+        providerMessageId: payload.providerMessageId,
+        sender: escalation.ownerMessage.sender,
+        reply: escalation.ownerMessage.reply,
+        escalation: true,
+        escalationSummary: escalation.ownerMessage.summary,
+        customerSender: conversation.sender,
+      }, {
+        jobKey: `${replyMessageId}:escalation`,
+      });
+    }
 
     await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
       status: 'completed',
