@@ -42,5 +42,5 @@ test('getBillingSettings uses safe defaults', () => {
   assert.equal(settings.platformAccessPriceHalalas, 175000);
   assert.equal(settings.messagePriceHalalas, 0);
   assert.equal(settings.currency, 'SAR');
-  assert.equal(settings.accessGateEnabled, false);
+  assert.equal(settings.accessGateEnabled, true);
 });

@@ -19,7 +19,7 @@ const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bot');
-const { createBillingAccessGate } = require('./middleware/billing-access');
+const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
@@ -123,6 +123,7 @@ function createApp() {
   app.get('/billing', requireAuth, (req, res) => res.sendFile(path.join(routeDeps.dashboardDir, 'billing.html')));
   app.get('/', requireAuth, createBillingAccessGate({ settings: billingSettings }), (req, res, next) => next());
   app.use(createDashboardRoutes(routeDeps));
+  app.use('/api', createBillingApiGate({ settings: billingSettings }));
   app.use(createQueueRoutes(routeDeps));
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup });

@@ -35,7 +35,7 @@ function getBillingSettings(env = process.env) {
     platformAccessPriceHalalas: parsePositiveInt(env.PLATFORM_ACCESS_PRICE_HALALAS, 175000),
     messagePriceHalalas: parsePositiveInt(env.MESSAGE_PRICE_HALALAS, 0),
     currency: String(env.BILLING_CURRENCY || 'SAR').trim().toUpperCase() || 'SAR',
-    accessGateEnabled: String(env.BILLING_ACCESS_GATE_ENABLED || '').toLowerCase() === 'true',
+    accessGateEnabled: String(env.BILLING_ACCESS_GATE_ENABLED || 'true').toLowerCase() !== 'false',
     activationCodes: parseActivationCodes(env.ADMIN_ACTIVATION_CODES),
   };
 }
