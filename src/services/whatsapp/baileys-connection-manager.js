@@ -89,6 +89,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
     this._version = null;
+    this._socketGeneration = 0;
   }
 
   log(level, stage, message, meta) {
@@ -157,6 +158,7 @@ class BaileysConnectionManager extends EventEmitter {
       });
 
       this.sock = sock;
+      const socketGeneration = ++this._socketGeneration;
       this.client = {
         sendMessage: async (target, text) => sock.sendMessage(normalizeOutboundJid(target), { text: String(text || '') }),
         getState: async () => (this.ready ? 'CONNECTED' : this.status.toUpperCase()),
@@ -164,7 +166,7 @@ class BaileysConnectionManager extends EventEmitter {
 
       sock.ev.on('creds.update', saveCreds);
       sock.ev.on('connection.update', (update) => {
-        this.handleConnectionUpdate(update, retryCount).catch((err) => {
+        this.handleConnectionUpdate(update, retryCount, socketGeneration).catch((err) => {
           this.lastError = err.message;
           this.log('error', 'connection', `Baileys connection update failed: ${err.message}`, err);
         });
@@ -188,6 +190,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._retryTimer = null;
     this._qrWatchdogTimer = null;
     this._running = false;
+    this._socketGeneration++;
     this.ready = false;
     this.qr = null;
     this.setStatus('stopped', 'stop');
@@ -226,8 +229,17 @@ class BaileysConnectionManager extends EventEmitter {
     this._heartbeatTimer = null;
   }
 
-  scheduleReconnect(retryCount, reason) {
+  scheduleReconnect(retryCount, reason, socketGeneration = this._socketGeneration) {
     if (!this._running) return;
+    if (socketGeneration !== this._socketGeneration) {
+      this.log('info', 'connection', `ignored stale reconnect request: ${String(reason || 'unknown')}`);
+      return;
+    }
+    if (this._retryTimer) {
+      this.lastError = String(reason || this.lastError || 'unknown');
+      this.log('warn', 'connection', `Baileys reconnect already scheduled; ignoring duplicate close: ${this.lastError}`);
+      return;
+    }
     const retryIndex = Math.min(retryCount, RETRY.DELAYS_MS.length - 1);
     const delay = RETRY.DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
     this.reconnectCount++;
@@ -237,13 +249,14 @@ class BaileysConnectionManager extends EventEmitter {
     this.stopHeartbeat();
     this.setStatus('reconnecting', 'reconnect');
     this.log('warn', 'connection', `Baileys reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
-    try { this.sock?.end?.(new Error('reconnect')); } catch (_) {}
-    try { this.sock?.ws?.close?.(); } catch (_) {}
+    const sock = this.sock;
     this.sock = null;
     this.client = null;
-    clearTimeout(this._retryTimer);
+    try { sock?.end?.(new Error('reconnect')); } catch (_) {}
+    try { sock?.ws?.close?.(); } catch (_) {}
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
+      if (socketGeneration !== this._socketGeneration) return;
       this._running = false;
       this.start(retryCount + 1).catch((err) => {
         this.log('error', 'connection', `Baileys reconnect failed: ${err.message}`, err);
@@ -252,8 +265,12 @@ class BaileysConnectionManager extends EventEmitter {
     if (typeof this._retryTimer.unref === 'function') this._retryTimer.unref();
   }
 
-  async handleConnectionUpdate(update, retryCount) {
+  async handleConnectionUpdate(update, retryCount, socketGeneration = this._socketGeneration) {
     if (!this._running) return;
+    if (socketGeneration !== this._socketGeneration) {
+      this.log('info', 'connection', `ignored stale Baileys update generation=${socketGeneration} current=${this._socketGeneration}`);
+      return;
+    }
 
     if (update.qr) {
       this.qr = update.qr;
@@ -273,6 +290,8 @@ class BaileysConnectionManager extends EventEmitter {
     }
 
     if (update.connection === 'open') {
+      clearTimeout(this._retryTimer);
+      this._retryTimer = null;
       this.ready = true;
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
       this.qr = null;
@@ -287,7 +306,9 @@ class BaileysConnectionManager extends EventEmitter {
     if (update.connection === 'close') {
       this.ready = false;
       const statusCode = update.lastDisconnect?.error?.output?.statusCode;
-      const message = update.lastDisconnect?.error?.message || `closed status=${statusCode || 'unknown'}`;
+      const reasonName = DisconnectReason[statusCode] || 'unknown';
+      const rawMessage = update.lastDisconnect?.error?.message || 'closed';
+      const message = `${rawMessage} (code=${statusCode || 'unknown'} reason=${reasonName})`;
       this.lastError = message;
       if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
         this.authFailureCount++;
@@ -298,7 +319,7 @@ class BaileysConnectionManager extends EventEmitter {
         return;
       }
       this.emit('disconnected', message);
-      this.scheduleReconnect(retryCount, message);
+      this.scheduleReconnect(retryCount, message, socketGeneration);
     }
   }
 

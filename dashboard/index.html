@@ -1368,6 +1368,52 @@ body{background-attachment:scroll}
     </div>
   </div>
 
+  <!-- WhatsApp Connection -->
+  <div class="panel">
+    <div class="phdr">اتصال واتساب</div>
+    <div class="pbdy">
+      <div class="g2">
+        <div>
+          <label>حالة الربط</label>
+          <input type="text" id="accWaStatus" disabled value="...">
+        </div>
+        <div>
+          <label>الرقم المرتبط</label>
+          <input type="text" id="accWaPhone" disabled dir="ltr" value="...">
+        </div>
+      </div>
+      <div class="g2" style="margin-top:8px">
+        <div>
+          <label>حالة العمل</label>
+          <input type="text" id="accWaWork" disabled value="...">
+        </div>
+        <div>
+          <label>عدد إعادة الاتصال</label>
+          <input type="text" id="accWaReconnects" disabled value="0">
+        </div>
+      </div>
+      <div class="g2" style="margin-top:8px">
+        <div>
+          <label>مدة الحالة الحالية</label>
+          <input type="text" id="accWaAge" disabled value="...">
+        </div>
+        <div>
+          <label>محرك واتساب</label>
+          <input type="text" id="accWaEngine" disabled value="...">
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <label>آخر سبب ظاهر</label>
+        <input type="text" id="accWaError" disabled value="لا يوجد">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+        <button class="ghost-btn" id="accWaStart" onclick="botStart(this)">تشغيل / إعادة اتصال</button>
+        <button class="ghost-btn" id="accWaStop" onclick="botStop(this)">إيقاف مؤقت</button>
+        <button class="ghost-btn" id="accWaClear" onclick="clearSession()">مسح الربط بالكامل</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Change Password -->
   <div class="panel">
     <div class="phdr">🔑 تغيير كلمة المرور</div>
@@ -1536,6 +1582,39 @@ function updateLiveLogs(logs){
     if(el)el.textContent=logs.join('\n');
   });
 }
+function fmtDuration(ms){
+  const s=Math.max(0,Math.floor((ms||0)/1000));
+  if(s<60)return s+' ثانية';
+  const m=Math.floor(s/60),r=s%60;
+  if(m<60)return m+' دقيقة'+(r?(' و '+r+' ثانية'):'');
+  const h=Math.floor(m/60),mr=m%60;
+  return h+' ساعة'+(mr?(' و '+mr+' دقيقة'):'');
+}
+function updateAccountConnection(d){
+  const set=(id,val)=>{const el=document.getElementById(id);if(el)el.value=val;};
+  const labels={
+    stopped:'غير مشغل',
+    waiting_qr:'ينتظر الباركود',
+    qr_ready:'يحتاج مسح الباركود',
+    authenticated:'تم التحقق وينتظر الاتصال',
+    connecting:'جاري الاتصال',
+    reconnecting:'يعيد الاتصال',
+    connected:'مربوط ويعمل',
+    disconnected:'مفصول',
+    error:'خطأ'
+  };
+  set('accWaStatus',labels[d.status]||d.status||'غير معروف');
+  set('accWaPhone',d.phone?('+'+d.phone):'لا يوجد');
+  set('accWaWork',d.desiredState==='running'?'يعمل':'متوقف');
+  set('accWaReconnects',String(d.reconnectCount||0));
+  set('accWaAge',fmtDuration(d.statusAgeMs||0));
+  set('accWaEngine',d.whatsappEngine||'غير معروف');
+  set('accWaError',d.error||d.lastProbeState||'لا يوجد');
+  const start=document.getElementById('accWaStart');
+  const stop=document.getElementById('accWaStop');
+  if(start)start.style.display=d.status==='connected'||d.status==='connecting'||d.status==='reconnecting'||d.status==='waiting_qr'||d.status==='qr_ready'?'none':'';
+  if(stop)stop.style.display=d.status==='stopped'?'none':'';
+}
 function maybeRecoverStuckConnecting(d){
   const stuck=['authenticated','connecting'].includes(d.status);
   const age=d.statusAgeMs||0;
@@ -1550,6 +1629,7 @@ async function poll(){
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
     updateLiveLogs(d.logs);
+    updateAccountConnection(d);
     maybeRecoverStuckConnecting(d);
     const qv=d.qrVersion||0;
     if(d.status===lastStatus&&qv===lastQrVersion)return;

@@ -10,6 +10,7 @@ const { QUEUE_NAMES, enqueueOutgoingWhatsapp } = require('../queues/message-queu
 const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
+const { resolveReplyDelayMs } = require('./reply-delay');
 
 const WORKER_NAME = 'ai-worker';
 const CONCURRENCY = parseInt(process.env.AI_WORKER_CONCURRENCY || '2', 10);
@@ -195,6 +196,7 @@ async function processAiReply(job) {
       reply,
       jobId: job.id,
     });
+    const replyDelayMs = resolveReplyDelayMs(config);
 
     await enqueueOutgoingWhatsapp({
       userId,
@@ -204,8 +206,11 @@ async function processAiReply(job) {
       replyMessageId,
       sender: conversation.sender,
       reply,
+      replyDelayMs,
+      replyDelayPreset: config.replyDelayPreset,
     }, {
       jobKey: String(replyMessageId),
+      delay: replyDelayMs,
     });
 
     await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
