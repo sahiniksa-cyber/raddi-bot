@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV WA_ENGINE=whatsapp-web
+ENV WA_ENGINE=baileys
 ENV WA_WEB_VERSION_CACHE=local
 ENV WA_SESSION_BACKUP_DELAY_MS=30000
 ENV OUTGOING_CONNECTED_SETTLE_MS=20000

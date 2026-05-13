@@ -11,6 +11,7 @@ const AIClient = require('../../../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../../../lib/constants');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
+const { resolveWhatsappEngine } = require('./engine-config');
 
 function isDirectoryUsable(dir) {
   try {
@@ -88,7 +89,7 @@ class RuntimeBot {
       record: (model, inputTokens, outputTokens) => this.recordUsage(model, inputTokens, outputTokens),
     });
 
-    const engine = (process.env.WA_ENGINE || 'whatsapp-web').trim().toLowerCase();
+    const engine = resolveWhatsappEngine(process.env);
     const ConnectionManager = engine === 'baileys'
       ? BaileysConnectionManager
       : EnterpriseWhatsAppConnectionManager;

@@ -9,6 +9,7 @@ const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, enqueueOutgoingWhatsapp } = require('../queues/message-queue');
 const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../../lib/constants');
+const { buildHistoryForReply } = require('./ai-history');
 
 const WORKER_NAME = 'ai-worker';
 const CONCURRENCY = parseInt(process.env.AI_WORKER_CONCURRENCY || '2', 10);
@@ -98,21 +99,6 @@ async function loadInboundMessage({ userId, messageId, text }) {
   return result.rows[0]?.content || '';
 }
 
-async function loadHistory(conversationId, limit) {
-  const result = await db.query(
-    `SELECT role, content
-     FROM messages
-     WHERE conversation_id = $1
-     ORDER BY created_at DESC
-     LIMIT $2`,
-    [conversationId, limit],
-  );
-
-  return result.rows
-    .reverse()
-    .map(row => ({ role: row.role, content: row.content }));
-}
-
 async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId }) {
   const result = await db.query(
     `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
@@ -138,79 +124,101 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
   return result.rows[0].id;
 }
 
+async function markInboundMessageFailed({ database = db, messageId, error }) {
+  if (!messageId || !database.isConfigured()) return;
+  await database.query(
+    `UPDATE messages
+     SET status = $2,
+         raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $3::jsonb
+     WHERE id = $1`,
+    [
+      messageId,
+      'ai_failed',
+      JSON.stringify({
+        aiFailedAt: new Date().toISOString(),
+        error: error?.message || String(error || 'AI failed'),
+      }),
+    ],
+  );
+}
+
 async function processAiReply(job) {
-  if (!db.isConfigured()) {
-    throw new Error('DATABASE_URL is required for AI worker');
-  }
-
   const payload = job.data || {};
-  const userId = payload.userId;
-  if (!userId) throw new Error('Missing userId in AI job payload');
+  try {
+    if (!db.isConfigured()) {
+      throw new Error('DATABASE_URL is required for AI worker');
+    }
 
-  await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
-    status: 'processing',
-    started_at: new Date(),
-    attempts: job.attemptsMade,
-  });
+    const userId = payload.userId;
+    if (!userId) throw new Error('Missing userId in AI job payload');
 
-  const logger = createLogger(job.id);
-  const config = await loadConfig(userId);
-  const conversation = await resolveConversation({
-    userId,
-    conversationId: payload.conversationId,
-    sender: payload.sender,
-  });
-  if (!conversation) throw new Error('Unable to resolve conversation');
+    await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+      status: 'processing',
+      started_at: new Date(),
+      attempts: job.attemptsMade,
+    });
 
-  const text = await loadInboundMessage({
-    userId,
-    messageId: payload.messageId,
-    text: payload.text,
-  });
-  if (!text.trim()) throw new Error('AI job has empty inbound text');
+    const logger = createLogger(job.id);
+    const config = await loadConfig(userId);
+    const conversation = await resolveConversation({
+      userId,
+      conversationId: payload.conversationId,
+      sender: payload.sender,
+    });
+    if (!conversation) throw new Error('Unable to resolve conversation');
 
-  const memSize = Math.max(2, parseInt(config.memoryMessages, 10) || 50);
-  const history = await loadHistory(conversation.id, memSize);
-  const last = history[history.length - 1];
-  if (!last || last.role !== 'user' || last.content !== text) {
-    history.push({ role: 'user', content: text });
+    const text = await loadInboundMessage({
+      userId,
+      messageId: payload.messageId,
+      text: payload.text,
+    });
+    if (!text.trim()) throw new Error('AI job has empty inbound text');
+
+    const history = await buildHistoryForReply({
+      database: db,
+      conversationId: conversation.id,
+      config,
+      inboundText: text,
+    });
+
+    const ai = new AIClient(config, logger, {
+      record: async () => {},
+    });
+
+    const reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0 }) || '').trim();
+    if (!reply) throw new Error('AI returned empty reply');
+
+    const replyMessageId = await storeAssistantMessage({
+      userId,
+      conversationId: conversation.id,
+      sender: conversation.sender,
+      reply,
+      jobId: job.id,
+    });
+
+    await enqueueOutgoingWhatsapp({
+      userId,
+      conversationId: conversation.id,
+      messageId: payload.messageId,
+      providerMessageId: payload.providerMessageId,
+      replyMessageId,
+      sender: conversation.sender,
+      reply,
+    }, {
+      jobKey: String(replyMessageId),
+    });
+
+    await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+      status: 'completed',
+      finished_at: new Date(),
+      attempts: job.attemptsMade + 1,
+    });
+
+    return { replyMessageId, queuedForSend: true };
+  } catch (err) {
+    await markInboundMessageFailed({ messageId: payload.messageId, error: err }).catch(() => {});
+    throw err;
   }
-  if (history.length > memSize) history.splice(0, history.length - memSize);
-
-  const ai = new AIClient(config, logger, {
-    record: async () => {},
-  });
-
-  const reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0 }) || '').trim();
-  if (!reply) throw new Error('AI returned empty reply');
-
-  const replyMessageId = await storeAssistantMessage({
-    userId,
-    conversationId: conversation.id,
-    sender: conversation.sender,
-    reply,
-    jobId: job.id,
-  });
-
-  await enqueueOutgoingWhatsapp({
-    userId,
-    conversationId: conversation.id,
-    messageId: payload.messageId,
-    providerMessageId: payload.providerMessageId,
-    replyMessageId,
-    sender: conversation.sender,
-    reply,
-  }, {
-    jobKey: String(replyMessageId),
-  });
-
-  await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
-    status: 'completed',
-    finished_at: new Date(),
-    attempts: job.attemptsMade + 1,
-  });
-
-  return { replyMessageId, queuedForSend: true };
 }
 
 function createWorker() {
@@ -265,5 +273,6 @@ if (require.main === module) {
 
 module.exports = {
   createWorker,
+  markInboundMessageFailed,
   processAiReply,
 };

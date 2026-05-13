@@ -10,7 +10,8 @@
     "start:all": "node src/runtime/start-all.js",
     "db:migrate": "node src/db/migrations/init.js",
     "migrate:json": "node scripts/migrate-json-to-postgres.js",
-    "worker:ai": "node src/workers/ai-worker.js"
+    "worker:ai": "node src/workers/ai-worker.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18.0.0"
