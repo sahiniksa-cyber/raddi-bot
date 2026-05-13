@@ -11,6 +11,7 @@ function shouldBypassBillingApiGate(path = '') {
     '/api/auth/',
     '/api/billing/',
     '/api/admin/',
+    '/api/health',
   ].some(prefix => String(path || '').startsWith(prefix));
 }
 

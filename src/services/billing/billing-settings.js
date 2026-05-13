@@ -28,7 +28,20 @@ function parseActivationCodes(value) {
     .filter(Boolean);
 }
 
+function normalizeBaseUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    return url.origin;
+  } catch (_) {
+    return '';
+  }
+}
+
 function getBillingSettings(env = process.env) {
+  const publishableKey = String(env.MOYASAR_PUBLISHABLE_KEY || '').trim();
+  const secretKey = String(env.MOYASAR_SECRET_KEY || '').trim();
   return {
     adminSecretPath: normalizeSecretPath(env.ADMIN_SECRET_PATH) || '/owner-control',
     adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
@@ -37,11 +50,20 @@ function getBillingSettings(env = process.env) {
     currency: String(env.BILLING_CURRENCY || 'SAR').trim().toUpperCase() || 'SAR',
     accessGateEnabled: String(env.BILLING_ACCESS_GATE_ENABLED || 'true').toLowerCase() !== 'false',
     activationCodes: parseActivationCodes(env.ADMIN_ACTIVATION_CODES),
+    appBaseUrl: normalizeBaseUrl(env.APP_BASE_URL),
+    moyasar: {
+      enabled: Boolean(publishableKey && secretKey),
+      publishableKey,
+      secretKey,
+      webhookSecret: String(env.MOYASAR_WEBHOOK_SECRET || '').trim(),
+      applePayLabel: String(env.MOYASAR_APPLE_PAY_LABEL || 'Raddi').trim() || 'Raddi',
+    },
   };
 }
 
 module.exports = {
   getBillingSettings,
+  normalizeBaseUrl,
   normalizeSecretPath,
   parseActivationCodes,
   parseAdminEmails,

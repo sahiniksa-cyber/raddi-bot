@@ -8,6 +8,7 @@ const {
   isActiveAccess,
   isValidActivationCode,
   normalizeAccessStatus,
+  paymentAlreadyUsedByAnotherUser,
 } = require('../src/services/billing/billing-service');
 
 test('normalizeAccessStatus accepts only known access states', () => {
@@ -54,4 +55,10 @@ test('isValidActivationCode matches configured codes exactly after trimming', ()
   assert.equal(isValidActivationCode(' FREE123 ', { activationCodes: ['FREE123'] }), true);
   assert.equal(isValidActivationCode('free123', { activationCodes: ['FREE123'] }), false);
   assert.equal(isValidActivationCode('', { activationCodes: ['FREE123'] }), false);
+});
+
+test('paymentAlreadyUsedByAnotherUser detects reused provider payment ids', () => {
+  assert.equal(paymentAlreadyUsedByAnotherUser(null, 'user-1'), false);
+  assert.equal(paymentAlreadyUsedByAnotherUser({ user_id: 'user-1' }, 'user-1'), false);
+  assert.equal(paymentAlreadyUsedByAnotherUser({ user_id: 'user-2' }, 'user-1'), true);
 });

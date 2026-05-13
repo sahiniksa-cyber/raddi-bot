@@ -200,6 +200,10 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_billing_payments_user_created
     ON billing_payments(user_id, created_at DESC)`,
 
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_payments_provider_payment_unique
+    ON billing_payments(provider, provider_payment_id)
+    WHERE provider_payment_id IS NOT NULL`,
+
   `CREATE INDEX IF NOT EXISTS idx_billing_events_user_created
     ON billing_events(user_id, created_at DESC)`,
 

@@ -48,6 +48,11 @@ function isValidActivationCode(code, settings = {}) {
   return (settings.activationCodes || []).includes(normalized);
 }
 
+function paymentAlreadyUsedByAnotherUser(existingPayment, userId) {
+  if (!existingPayment) return false;
+  return String(existingPayment.user_id || '') !== String(userId || '');
+}
+
 async function isAdminUser(userId, settings = {}) {
   if (!userId) return false;
   const result = await db.query('SELECT email, role FROM users WHERE id = $1 LIMIT 1', [userId]);
@@ -184,6 +189,48 @@ async function markPaidAccess(userId, amountHalalas, note = '') {
   return account;
 }
 
+async function confirmProviderPayment(userId, payment, note = '') {
+  const providerPaymentId = String(payment.providerPaymentId || payment.id || '').trim();
+  if (!providerPaymentId) throw new Error('Missing provider payment id');
+
+  const existing = await db.query(
+    'SELECT user_id FROM billing_payments WHERE provider = $1 AND provider_payment_id = $2 LIMIT 1',
+    ['moyasar', providerPaymentId],
+  );
+  if (paymentAlreadyUsedByAnotherUser(existing.rows[0], userId)) {
+    throw new Error('Payment was already used by another account');
+  }
+
+  const account = await setAccess(userId, 'active', 'paid', note || 'moyasar');
+  await db.query(
+    `INSERT INTO billing_payments (
+       user_id, provider, provider_payment_id, amount_halalas, currency, status, method, activation_type, raw_payload
+     )
+     VALUES ($1, 'moyasar', $2, $3, $4, $5, $6, 'paid', $7::jsonb)
+     ON CONFLICT DO NOTHING`,
+    [
+      userId,
+      providerPaymentId,
+      payment.amount,
+      payment.currency,
+      payment.status,
+      payment.method,
+      JSON.stringify(payment.raw || payment),
+    ],
+  );
+  await db.query('UPDATE billing_accounts SET last_payment_at = NOW() WHERE user_id = $1', [userId]);
+  await appendLedgerSafe(userId, {
+    amountHalalas: payment.amount,
+    currency: payment.currency,
+    method: payment.method,
+    providerPaymentId,
+    status: payment.status,
+    activationType: 'paid',
+    note: note || 'moyasar',
+  });
+  return account;
+}
+
 async function suspendAccess(userId, note = '') {
   return setAccess(userId, 'suspended', 'admin_suspended', note);
 }
@@ -216,6 +263,7 @@ async function activateWithCode(userId, code, settings = {}) {
 module.exports = {
   activateWithCode,
   buildAdminCustomerRow,
+  confirmProviderPayment,
   getUserBillingState,
   grantFreeAccess,
   halalasToSar,
@@ -225,6 +273,7 @@ module.exports = {
   listAdminCustomers,
   markPaidAccess,
   normalizeAccessStatus,
+  paymentAlreadyUsedByAnotherUser,
   reactivateAccess,
   suspendAccess,
   updateReceivable,

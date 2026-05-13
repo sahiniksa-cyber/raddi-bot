@@ -18,6 +18,7 @@ test('shouldBypassBillingApiGate allows auth billing and admin routes', () => {
   assert.equal(shouldBypassBillingApiGate('/api/auth/login'), true);
   assert.equal(shouldBypassBillingApiGate('/api/billing/state'), true);
   assert.equal(shouldBypassBillingApiGate('/api/admin/customers'), true);
+  assert.equal(shouldBypassBillingApiGate('/api/health'), true);
   assert.equal(shouldBypassBillingApiGate('/api/status'), false);
   assert.equal(shouldBypassBillingApiGate('/api/config'), false);
 });

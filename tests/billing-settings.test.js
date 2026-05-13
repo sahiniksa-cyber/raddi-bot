@@ -25,6 +25,9 @@ test('getBillingSettings parses billing and owner settings', () => {
     MESSAGE_PRICE_HALALAS: '12',
     BILLING_ACCESS_GATE_ENABLED: 'true',
     ADMIN_ACTIVATION_CODES: ' FREE123, owner-pass ',
+    MOYASAR_PUBLISHABLE_KEY: 'pk_test_123',
+    MOYASAR_SECRET_KEY: 'sk_test_123',
+    APP_BASE_URL: 'https://example.com/',
   });
 
   assert.equal(settings.adminSecretPath, '/private-owner');
@@ -33,6 +36,9 @@ test('getBillingSettings parses billing and owner settings', () => {
   assert.equal(settings.messagePriceHalalas, 12);
   assert.equal(settings.accessGateEnabled, true);
   assert.deepEqual(settings.activationCodes, ['FREE123', 'owner-pass']);
+  assert.equal(settings.moyasar.publishableKey, 'pk_test_123');
+  assert.equal(settings.moyasar.secretKey, 'sk_test_123');
+  assert.equal(settings.appBaseUrl, 'https://example.com');
 });
 
 test('getBillingSettings uses safe defaults', () => {
@@ -43,4 +49,5 @@ test('getBillingSettings uses safe defaults', () => {
   assert.equal(settings.messagePriceHalalas, 0);
   assert.equal(settings.currency, 'SAR');
   assert.equal(settings.accessGateEnabled, true);
+  assert.equal(settings.moyasar.enabled, false);
 });

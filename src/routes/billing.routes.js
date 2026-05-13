@@ -1,7 +1,17 @@
 'use strict';
 
 const express = require('express');
-const { activateWithCode, getUserBillingState } = require('../services/billing/billing-service');
+const {
+  activateWithCode,
+  confirmProviderPayment,
+  getUserBillingState,
+} = require('../services/billing/billing-service');
+const {
+  buildCallbackUrl,
+  fetchMoyasarPayment,
+  isPaidPlatformAccessPayment,
+  normalizeMoyasarPayment,
+} = require('../services/billing/moyasar-client');
 
 function createBillingRoutes(deps = {}) {
   const router = express.Router();
@@ -16,6 +26,11 @@ function createBillingRoutes(deps = {}) {
           platformAccessPriceHalalas: settings.platformAccessPriceHalalas,
           messagePriceHalalas: settings.messagePriceHalalas,
           currency: settings.currency,
+          moyasarEnabled: Boolean(settings.moyasar?.enabled),
+          moyasarPublishableKey: settings.moyasar?.publishableKey || '',
+          moyasarApplePayLabel: settings.moyasar?.applePayLabel || 'Raddi',
+          callbackUrl: buildCallbackUrl(settings, req),
+          userId: req.session.userId,
         },
         state: await getUserBillingState(req.session.userId, settings),
       });
@@ -31,6 +46,25 @@ function createBillingRoutes(deps = {}) {
       res.json({ success: true });
     } catch (err) {
       next(err);
+    }
+  });
+
+  router.get('/billing/callback', requireAuth, async (req, res, next) => {
+    try {
+      const rawPayment = await fetchMoyasarPayment(req.query.id, settings);
+      if (!isPaidPlatformAccessPayment(rawPayment, settings)) {
+        return res.redirect('/billing?payment=failed');
+      }
+
+      const payment = normalizeMoyasarPayment(rawPayment);
+      if (payment.userId && payment.userId !== req.session.userId) {
+        return res.redirect('/billing?payment=mismatch');
+      }
+
+      await confirmProviderPayment(req.session.userId, payment, 'moyasar checkout');
+      return res.redirect('/?payment=paid');
+    } catch (err) {
+      return next(err);
     }
   });
 
