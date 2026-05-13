@@ -12,6 +12,10 @@ const { DEFAULT_CONFIG } = require('../../../lib/constants');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
 const { resolveWhatsappEngine } = require('./engine-config');
+const {
+  buildPersistSessionStateQuery,
+  buildRuntimeAuthMetadata,
+} = require('./session-state-persistence');
 
 function isDirectoryUsable(dir) {
   try {
@@ -216,50 +220,18 @@ class RuntimeBot {
       lastDisconnected: ['disconnected', 'reconnecting', 'error'].includes(status),
     };
 
-    const result = await db.query(
-      `INSERT INTO whatsapp_sessions (
-         user_id, phone, status, session_path, desired_state, auth_state,
-         last_qr_at, last_connected_at, last_disconnected_at, last_error, reconnect_count
-       )
-       VALUES (
-         $1, $2, $3, $4, $5, $6::jsonb,
-         CASE WHEN $7 THEN NOW() ELSE NULL END,
-         CASE WHEN $8 THEN NOW() ELSE NULL END,
-         CASE WHEN $9 THEN NOW() ELSE NULL END,
-         $10, $11
-       )
-       ON CONFLICT (user_id) DO UPDATE SET
-         phone = COALESCE(EXCLUDED.phone, whatsapp_sessions.phone),
-         status = EXCLUDED.status,
-         session_path = EXCLUDED.session_path,
-         desired_state = EXCLUDED.desired_state,
-         auth_state = EXCLUDED.auth_state,
-         last_qr_at = CASE WHEN $7 THEN NOW() ELSE whatsapp_sessions.last_qr_at END,
-         last_connected_at = CASE WHEN $8 THEN NOW() ELSE whatsapp_sessions.last_connected_at END,
-         last_disconnected_at = CASE WHEN $9 THEN NOW() ELSE whatsapp_sessions.last_disconnected_at END,
-         last_error = EXCLUDED.last_error,
-         reconnect_count = EXCLUDED.reconnect_count
-       RETURNING desired_state, status, updated_at`,
-      [
-        this.userId,
-        state.phone || this.connection.phone || null,
-        status,
-        this.sessionStoragePath,
-        desiredState,
-        JSON.stringify({
-          ready: !!state.ready,
-          qrVersion: state.qrVersion || 0,
-          authFailureCount: state.authFailureCount || 0,
-          heartbeatFailures: state.heartbeatFailures || 0,
-          updatedAt: new Date().toISOString(),
-        }),
-        nowFields.lastQr,
-        nowFields.lastConnected,
-        nowFields.lastDisconnected,
-        state.error || null,
-        state.reconnectCount || 0,
-      ],
-    );
+    const query = buildPersistSessionStateQuery({
+      userId: this.userId,
+      phone: state.phone || this.connection.phone || null,
+      status,
+      sessionPath: this.sessionStoragePath,
+      desiredState,
+      runtimeAuthState: buildRuntimeAuthMetadata(state),
+      nowFields,
+      lastError: state.error || null,
+      reconnectCount: state.reconnectCount || 0,
+    });
+    const result = await db.query(query.text, query.values);
     this.lastPersistedSession = result.rows[0] || this.lastPersistedSession;
   }
 
