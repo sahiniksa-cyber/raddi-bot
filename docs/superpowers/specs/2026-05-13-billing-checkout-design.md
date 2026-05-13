@@ -92,6 +92,25 @@ Activation codes allow the owner to grant access without payment. The code flow:
 
 This supports owner access, test accounts, and free customer access without bypassing audit history.
 
+## Owner Admin Console
+
+Add a private owner-only console for managing customers and billing access. The console is served from a configurable secret path instead of a public navigation link:
+
+`ADMIN_SECRET_PATH=/owner-control-<private-slug>`
+
+The route also requires a logged-in admin account. A user is admin when `users.role = 'admin'` or their email is listed in `ADMIN_EMAILS`. The first registered user already becomes `admin`, and `ADMIN_EMAILS` gives the owner a recovery/configuration path.
+
+The admin console shows:
+- Customer name and email.
+- WhatsApp connection state and phone if known.
+- Platform access state: active, unpaid, suspended, free.
+- Last paid amount and date.
+- Message usage amount due, shown as a simple receivable field.
+- Internal note.
+- Actions: grant free access, mark paid, suspend access, reactivate access, update amount due, append note.
+
+If an owner suspends access, the customer can still log in but is redirected to billing and cannot use the dashboard until access is reactivated or paid.
+
 ## Security
 
 - Never store full card numbers or CVV.
@@ -99,6 +118,7 @@ This supports owner access, test accounts, and free customer access without bypa
 - Validate Moyasar webhook signatures or shared secret if available in the selected webhook configuration.
 - Billing endpoints require login except public provider callback/webhook endpoints.
 - Dashboard routes check billing state before serving `/`.
+- The owner admin console has two gates: the secret path and an admin authenticated session.
 
 ## Testing
 
@@ -110,4 +130,6 @@ Add tests for:
 - Webhook success activates platform access.
 - Excel ledger write is called after successful payment and free activation.
 - Excel write failure does not revoke access.
-
+- Admin secret path returns 404 when the path is wrong.
+- Non-admin users cannot open the owner console even if they know the secret path.
+- Admin actions can suspend, reactivate, mark paid, and grant free access.
