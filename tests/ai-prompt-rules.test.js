@@ -25,9 +25,10 @@ test('long custom instructions do not contradict embedded product knowledge when
     products: [],
   });
 
-  const prompt = ai.buildSystemPrompt([], {});
+  const prompt = ai.buildSystemPrompt([{ role: 'user', content: 'كم سعر ادوبي شهر؟' }], {});
 
   assert.match(prompt, /أدوبي كريتيف كلاود/);
+  assert.match(prompt, /المنتجات المطابقة لسؤال العميل/);
   assert.doesNotMatch(prompt, /لا توجد منتجات مضافة/);
   assert.doesNotMatch(prompt, /نظّم المعلومات/);
   assert.match(prompt, /لا تخترع/);

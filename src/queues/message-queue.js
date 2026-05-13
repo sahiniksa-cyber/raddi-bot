@@ -6,6 +6,7 @@ const { Queue, QueueEvents } = require('bullmq');
 
 const db = require('../db/client');
 const { createRedisConnection } = require('./redis');
+const { normalizeOutgoingJobKey } = require('./outgoing-job-key');
 
 const QUEUE_NAMES = Object.freeze({
   incomingMessages: process.env.INCOMING_MESSAGES_QUEUE || 'incoming-messages',
@@ -122,7 +123,7 @@ async function enqueueAiReply(payload, options = {}) {
 
 async function enqueueOutgoingWhatsapp(payload, options = {}) {
   const { outgoingWhatsapp } = getQueues();
-  const jobKey = options.jobKey || payload.replyMessageId || payload.messageId;
+  const jobKey = normalizeOutgoingJobKey(options.jobKey || payload.replyMessageId || payload.messageId, payload);
   await recordJob(QUEUE_NAMES.outgoingWhatsapp, jobKey, payload, payload);
   return outgoingWhatsapp.add('send-whatsapp-message', payload, {
     jobId: jobKey || undefined,

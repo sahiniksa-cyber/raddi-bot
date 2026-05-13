@@ -2015,7 +2015,7 @@ async function doScan(){
   finally{btn.disabled=false;btn.textContent='🔍 فحص';}
 }
 
-function doImport(){
+async function doImport(){
   if(!scannedData)return;
   if(scannedData.storeName&&!document.getElementById('storeName').value)
     document.getElementById('storeName').value=scannedData.storeName;
@@ -2024,6 +2024,27 @@ function doImport(){
   if(scannedData.products.length>0){
     document.getElementById('prodContainer').innerHTML='';
     scannedData.products.forEach(p=>addProd(p.name,p.description,p.price));
+    try{
+      const r=await fetch('/api/products/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        products:scannedData.products,
+        storeName:document.getElementById('storeName').value.trim(),
+        storeDescription:document.getElementById('storeDesc').value.trim()
+      })});
+      if(r.status===401){window.location.href='/login';return;}
+      const d=await r.json();
+      if(d.success){
+        config={...config,products:d.products,storeName:document.getElementById('storeName').value.trim(),storeDescription:document.getElementById('storeDesc').value.trim()};
+        document.getElementById('prodContainer').innerHTML='';
+        d.products.forEach(p=>addProd(p.name,p.description,p.price));
+        toast(`✅ تم ترتيب وحفظ ${d.productCount||d.products.length} منتج`);
+        return;
+      }
+      toast('❌ '+d.message,true);
+      return;
+    }catch(_){
+      toast('❌ تعذر حفظ المنتجات',true);
+      return;
+    }
     toast(`✅ تم استيراد ${scannedData.products.length} منتج — اضغط حفظ`);
   } else {
     toast('⚠️ لا توجد منتجات للاستيراد',true);

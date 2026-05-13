@@ -5,6 +5,7 @@ const { Worker } = require('bullmq');
 const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, getQueues } = require('../queues/message-queue');
+const { normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -51,13 +52,18 @@ async function getPersistedJobCreatedAt(jobKey) {
   return result.rows[0]?.created_at ? new Date(result.rows[0].created_at).getTime() : null;
 }
 
+function shouldSkipStaleOutgoingPayload(payload = {}, ageMs, maxAgeMs) {
+  if (payload.escalation) return false;
+  return maxAgeMs > 0 && ageMs > maxAgeMs;
+}
+
 async function skipStaleOutgoingJob(job, { replyMessageId }) {
   const maxAgeMs = parseInt(process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || '600000', 10);
   if (maxAgeMs <= 0) return false;
 
   const createdAt = await getPersistedJobCreatedAt(job.id) || job.timestamp || Date.now();
   const ageMs = Date.now() - createdAt;
-  if (ageMs <= maxAgeMs) return false;
+  if (!shouldSkipStaleOutgoingPayload(job.data || {}, ageMs, maxAgeMs)) return false;
 
   const message = `expired stale outgoing reply age=${Math.round(ageMs / 1000)}s`;
   await markReplyMessage(replyMessageId, 'expired', {
@@ -185,8 +191,12 @@ async function requeuePersistedOutgoingJobs(limit = 200) {
 
   const { outgoingWhatsapp } = getQueues();
   for (const row of result.rows) {
-    const existing = row.job_key ? await outgoingWhatsapp.getJob(row.job_key).catch(() => null) : null;
+    const safeJobKey = normalizeOutgoingJobKey(row.job_key, row.payload);
+    const existing = safeJobKey ? await outgoingWhatsapp.getJob(safeJobKey).catch(() => null) : null;
     if (existing) {
+      if (safeJobKey && safeJobKey !== row.job_key) {
+        await updatePersistedJobKey(row.job_key, safeJobKey).catch(() => {});
+      }
       const state = await existing.getState().catch(() => null);
       if (state === 'failed') {
         await existing.retry('failed').catch(() => {});
@@ -194,7 +204,7 @@ async function requeuePersistedOutgoingJobs(limit = 200) {
       continue;
     }
     await outgoingWhatsapp.add('send-whatsapp-message', row.payload, {
-      jobId: row.job_key || undefined,
+      jobId: safeJobKey || undefined,
       attempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS || '3', 10),
       backoff: {
         type: 'exponential',
@@ -203,8 +213,25 @@ async function requeuePersistedOutgoingJobs(limit = 200) {
     }).catch((err) => {
       if (!/already exists/i.test(err.message)) throw err;
     });
+    if (safeJobKey && safeJobKey !== row.job_key) {
+      await updatePersistedJobKey(row.job_key, safeJobKey).catch(() => {});
+    }
   }
   console.log(`${new Date().toISOString()} [${WORKER_NAME}] requeued ${result.rows.length} persisted outgoing job(s)`);
+}
+
+async function updatePersistedJobKey(oldJobKey, newJobKey) {
+  if (!db.isConfigured() || !oldJobKey || !newJobKey || oldJobKey === newJobKey) return;
+  await db.query(
+    `UPDATE jobs
+     SET job_key = $3, updated_at = NOW()
+     WHERE queue_name = $1 AND job_key = $2
+       AND NOT EXISTS (
+         SELECT 1 FROM jobs existing
+         WHERE existing.queue_name = $1 AND existing.job_key = $3
+       )`,
+    [QUEUE_NAMES.outgoingWhatsapp, oldJobKey, newJobKey],
+  );
 }
 
 function createOutgoingWhatsappWorker({ getUserBot }) {
@@ -259,5 +286,7 @@ module.exports = {
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
   sendWhatsappReply,
+  shouldSkipStaleOutgoingPayload,
+  updatePersistedJobKey,
   waitForConnectedBot,
 };

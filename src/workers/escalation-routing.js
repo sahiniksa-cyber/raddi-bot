@@ -70,6 +70,8 @@ function resolveEscalationContact(config = {}, contactName, inboundText = '') {
 }
 
 function cleanCustomerJid(sender) {
+  const raw = String(sender || '').trim();
+  if (raw.endsWith('@lid')) return raw;
   return cleanDigits(sender) || String(sender || '').trim();
 }
 
@@ -116,4 +118,3 @@ module.exports = {
   normalizeEscalationPhone,
   prepareEscalation,
 };
-

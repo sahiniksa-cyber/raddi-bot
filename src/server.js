@@ -17,7 +17,10 @@ const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bot');
+const { organizeProductsForConfig } = require('./services/products/product-import');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
+const { isPrivateUrl } = require('../lib/helpers');
+const storeScanner = require('../lib/store-scanner');
 
 function resolveDataDir() {
   const configured = (process.env.DATA_DIR || '').trim();
@@ -135,6 +138,44 @@ function createApp() {
     bot.config = merged;
     await bot.saveConfig();
     res.json({ success: true });
+  }));
+  app.post('/api/scan-store', requireAuth, asyncRoute(async (req, res) => {
+    const bot = await getUserBot(req.session.userId);
+    const { url, sallaToken, zidToken, zidManagerToken } = req.body || {};
+    const targetUrl = String(url || '').trim();
+    if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
+      return res.status(400).json({ success: false, message: 'رابط غير صحيح' });
+    }
+    if (isPrivateUrl(targetUrl)) {
+      return res.status(400).json({ success: false, message: 'رابط غير مسموح' });
+    }
+
+    const result = await storeScanner.scanStore(targetUrl, {
+      sallaToken,
+      zidToken,
+      zidManagerToken,
+      logger: bot.logger,
+    });
+    const organized = organizeProductsForConfig(bot.config, result.products || []);
+    res.json({
+      success: true,
+      ...result,
+      products: organized.products,
+      productCount: organized.products.length,
+    });
+  }));
+  app.post('/api/products/import', requireAuth, asyncRoute(async (req, res) => {
+    const bot = await getUserBot(req.session.userId);
+    const incoming = req.body || {};
+    const organized = organizeProductsForConfig(bot.config, incoming.products || []);
+    bot.config = {
+      ...bot.config,
+      products: organized.products,
+      storeName: incoming.storeName || bot.config.storeName,
+      storeDescription: incoming.storeDescription || incoming.storeDesc || bot.config.storeDescription,
+    };
+    await bot.saveConfig();
+    res.json({ success: true, products: bot.config.products, productCount: bot.config.products.length });
   }));
   app.post('/api/clear', requireAuth, asyncRoute(async (req, res) => {
     await db.query('DELETE FROM conversations WHERE user_id = $1', [req.session.userId]);

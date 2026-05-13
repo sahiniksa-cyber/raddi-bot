@@ -7,6 +7,7 @@ const { Worker } = require('bullmq');
 const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, enqueueOutgoingWhatsapp } = require('../queues/message-queue');
+const { buildEscalationJobKey } = require('../queues/outgoing-job-key');
 const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
@@ -234,7 +235,7 @@ async function processAiReply(job) {
         escalationSummary: escalation.ownerMessage.summary,
         customerSender: conversation.sender,
       }, {
-        jobKey: `${replyMessageId}:escalation`,
+        jobKey: buildEscalationJobKey(replyMessageId),
       });
     }
 
