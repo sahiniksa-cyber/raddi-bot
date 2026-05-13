@@ -31,7 +31,7 @@ function textFromBaileysMessage(message = {}) {
 
 function normalizeOutboundJid(target) {
   const raw = String(target || '').trim();
-  if (raw.endsWith('@s.whatsapp.net') || raw.endsWith('@g.us')) return raw;
+  if (raw.endsWith('@s.whatsapp.net') || raw.endsWith('@g.us') || raw.endsWith('@lid')) return raw;
   const clean = raw.replace('@c.us', '').replace(/[^\d]/g, '');
   return clean ? `${clean}@s.whatsapp.net` : raw;
 }
@@ -331,4 +331,4 @@ class BaileysConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { BaileysConnectionManager };
+module.exports = { BaileysConnectionManager, normalizeOutboundJid };
