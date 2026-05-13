@@ -100,6 +100,62 @@ const statements = [
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
 
+  `CREATE TABLE IF NOT EXISTS billing_accounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    platform_access_status TEXT NOT NULL DEFAULT 'unpaid',
+    activation_source TEXT NOT NULL DEFAULT 'none',
+    message_price_halalas INTEGER NOT NULL DEFAULT 0,
+    receivable_halalas INTEGER NOT NULL DEFAULT 0,
+    auto_renew_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    provider_customer_id TEXT,
+    internal_note TEXT NOT NULL DEFAULT '',
+    access_activated_at TIMESTAMPTZ,
+    access_suspended_at TIMESTAMPTZ,
+    last_payment_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS billing_payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL DEFAULT 'manual',
+    provider_payment_id TEXT,
+    amount_halalas INTEGER NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'SAR',
+    status TEXT NOT NULL DEFAULT 'pending',
+    method TEXT NOT NULL DEFAULT 'manual',
+    activation_type TEXT NOT NULL DEFAULT 'paid',
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS billing_payment_methods (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    provider_method_id TEXT NOT NULL,
+    brand TEXT,
+    last4 TEXT,
+    exp_month INTEGER,
+    exp_year INTEGER,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(provider, provider_method_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS billing_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
   `CREATE TABLE IF NOT EXISTS app_sessions (
     sid TEXT PRIMARY KEY,
     sess JSONB NOT NULL,
@@ -138,6 +194,15 @@ const statements = [
     ON jobs(queue_name, job_key)
     WHERE job_key IS NOT NULL`,
 
+  `CREATE INDEX IF NOT EXISTS idx_billing_accounts_status
+    ON billing_accounts(platform_access_status)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_billing_payments_user_created
+    ON billing_payments(user_id, created_at DESC)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_billing_events_user_created
+    ON billing_events(user_id, created_at DESC)`,
+
   `CREATE INDEX IF NOT EXISTS idx_app_sessions_expire
     ON app_sessions(expire)`,
 
@@ -172,6 +237,21 @@ const statements = [
   `DROP TRIGGER IF EXISTS trg_jobs_updated_at ON jobs`,
   `CREATE TRIGGER trg_jobs_updated_at
     BEFORE UPDATE ON jobs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `DROP TRIGGER IF EXISTS trg_billing_accounts_updated_at ON billing_accounts`,
+  `CREATE TRIGGER trg_billing_accounts_updated_at
+    BEFORE UPDATE ON billing_accounts
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `DROP TRIGGER IF EXISTS trg_billing_payments_updated_at ON billing_payments`,
+  `CREATE TRIGGER trg_billing_payments_updated_at
+    BEFORE UPDATE ON billing_payments
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `DROP TRIGGER IF EXISTS trg_billing_payment_methods_updated_at ON billing_payment_methods`,
+  `CREATE TRIGGER trg_billing_payment_methods_updated_at
+    BEFORE UPDATE ON billing_payment_methods
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
 ];
 

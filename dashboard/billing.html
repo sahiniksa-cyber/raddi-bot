@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>تفعيل المنصة</title>
+  <style>
+    body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#f7faf9;color:#14213d;display:grid;place-items:center;min-height:100vh;padding:18px}
+    .box{width:min(620px,100%);background:#fff;border:1px solid #dfe7e3;border-radius:10px;padding:28px;box-shadow:0 18px 55px rgba(20,33,61,.08)}
+    h1{margin:0 0 8px;font-size:24px}.muted{color:#64748b;line-height:1.8}.price{font-size:38px;font-weight:900;margin:24px 0 8px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}button,input{border-radius:8px;border:1px solid #dfe7e3;padding:12px 14px;font:inherit}
+    input{flex:1;min-width:220px;direction:ltr}button{cursor:pointer;font-weight:800;background:#13251f;color:#fff}.ghost{background:#fff;color:#13251f}
+    .note{background:#f1f8f5;border:1px solid #cfe8dd;padding:13px;border-radius:8px;margin-top:18px;color:#36594a;line-height:1.8}
+  </style>
+</head>
+<body>
+  <main class="box">
+    <h1>تفعيل استخدام المنصة</h1>
+    <p class="muted">شراء المنصة يتم مرة واحدة. بعد التفعيل تقدر تستخدم لوحة التحكم وربط الواتساب والردود الذكية.</p>
+    <div class="price">1750 ريال</div>
+    <p class="muted">قد يتم احتساب تكلفة شهرية حسب عدد الرسائل المرسلة، وتظهر لك كتوضيح منفصل.</p>
+    <div class="note">الدفع الإلكتروني Apple Pay والبطاقة سيتم تفعيله من إعدادات مزود الدفع. حالياً يمكن للمالك تفعيل حسابك أو تسجيل الدفع من لوحة الإدارة.</div>
+    <div class="row">
+      <input id="code" placeholder="كود تفعيل من المالك">
+      <button class="ghost" onclick="applyCode()">تفعيل بالكود</button>
+    </div>
+    <div class="row">
+      <button onclick="location.href='/login'">تسجيل الدخول</button>
+    </div>
+  </main>
+<script>
+async function applyCode(){
+  const code=document.getElementById('code').value.trim();
+  if(!code){alert('اكتب كود التفعيل');return}
+  const r=await fetch('/api/billing/activate-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+  const d=await r.json();
+  if(d.success){location.href='/'}
+  else alert(d.message||'كود التفعيل غير صحيح');
+}
+</script>
+</body>
+</html>

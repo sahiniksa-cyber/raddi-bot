@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>لوحة الإدارة</title>
+  <style>
+    :root{--bg:#f7faf9;--panel:#fff;--text:#14213d;--muted:#64748b;--border:#dfe7e3;--green:#0f9f6e;--red:#d94b4b;--amber:#d18b00;--blue:#2563eb}
+    *{box-sizing:border-box}body{margin:0;font-family:Tahoma,Arial,sans-serif;background:var(--bg);color:var(--text)}
+    header{height:72px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:#fff;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2}
+    h1{font-size:20px;margin:0}.sub{font-size:12px;color:var(--muted);margin-top:5px}
+    main{max-width:1320px;margin:0 auto;padding:24px}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+    .stat{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px}.stat b{display:block;font-size:24px;margin-top:6px}.stat span{font-size:12px;color:var(--muted)}
+    .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px}.toolbar input{min-width:260px;padding:11px 13px;border:1px solid var(--border);border-radius:8px;background:#fff}
+    .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:12px;border-bottom:1px solid var(--border);text-align:right;vertical-align:top}th{font-size:12px;color:var(--muted);background:#fbfdfc}
+    .chip{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;font-size:12px;font-weight:700}
+    .active,.free,.connected{background:#e7f8f0;color:var(--green)}.unpaid,.stopped{background:#eef2f7;color:#475569}.suspended,.disconnected{background:#fdecec;color:var(--red)}.waiting_qr,.reconnecting{background:#fff5dc;color:var(--amber)}
+    .actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{border:1px solid var(--border);background:#fff;border-radius:7px;padding:7px 9px;cursor:pointer;font-weight:700;font-size:12px}.actions button:hover{border-color:#9fb0aa}
+    .actions .good{color:var(--green)}.actions .bad{color:var(--red)}.actions .blue{color:var(--blue)}
+    textarea{width:180px;height:56px;resize:vertical;border:1px solid var(--border);border-radius:7px;padding:8px;font-family:inherit}
+    .amount{width:92px;border:1px solid var(--border);border-radius:7px;padding:8px;direction:ltr}.empty{padding:32px;text-align:center;color:var(--muted)}
+    .toast{position:fixed;bottom:18px;left:18px;background:#12251f;color:#fff;border-radius:8px;padding:11px 14px;opacity:0;transform:translateY(8px);transition:.18s}.toast.show{opacity:1;transform:translateY(0)}.toast.err{background:#9d2b2b}
+    @media(max-width:900px){main{padding:12px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.panel{overflow:auto}table{min-width:980px}header{padding:0 16px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>لوحة الإدارة الخاصة</h1>
+      <div class="sub">إدارة العملاء، الدفع، الإيقاف، والتفعيل اليدوي</div>
+    </div>
+    <button onclick="location.href='/'">فتح المنصة</button>
+  </header>
+
+  <main>
+    <section class="stats">
+      <div class="stat"><span>كل العملاء</span><b id="stTotal">0</b></div>
+      <div class="stat"><span>مفعلين</span><b id="stActive">0</b></div>
+      <div class="stat"><span>غير مدفوع</span><b id="stUnpaid">0</b></div>
+      <div class="stat"><span>موقوفين</span><b id="stSuspended">0</b></div>
+    </section>
+
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="بحث بالاسم أو البريد" oninput="render()">
+      <button onclick="loadCustomers()">تحديث</button>
+    </div>
+
+    <section class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>العميل</th>
+            <th>واتساب</th>
+            <th>الوصول</th>
+            <th>آخر دفع</th>
+            <th>مستحقات الرسائل</th>
+            <th>ملاحظة داخلية</th>
+            <th>إجراءات</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="7" class="empty">جاري التحميل...</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+  <div class="toast" id="toast"></div>
+
+<script>
+let customers=[];
+const esc=s=>String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+function chip(value){return `<span class="chip ${esc(value)}">${esc(label(value))}</span>`}
+function label(value){
+  return {active:'مدفوع',free:'مجاني',unpaid:'غير مدفوع',suspended:'موقوف',connected:'متصل',stopped:'متوقف',waiting_qr:'ينتظر باركود',reconnecting:'يعيد الاتصال',disconnected:'مفصول'}[value]||value||'غير معروف';
+}
+function toast(msg,err=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show'+(err?' err':'');setTimeout(()=>t.className='toast',2600)}
+async function loadCustomers(){
+  try{
+    const r=await fetch('/api/admin/customers');
+    if(r.status===401){location.href='/login';return}
+    if(!r.ok){document.getElementById('rows').innerHTML='<tr><td colspan="7" class="empty">غير مصرح</td></tr>';return}
+    const d=await r.json();customers=d.customers||[];render();
+  }catch(_){toast('تعذر تحميل العملاء',true)}
+}
+function render(){
+  const q=document.getElementById('search').value.trim().toLowerCase();
+  const list=customers.filter(c=>!q||c.email.includes(q)||String(c.name||'').toLowerCase().includes(q));
+  document.getElementById('stTotal').textContent=customers.length;
+  document.getElementById('stActive').textContent=customers.filter(c=>c.accessActive).length;
+  document.getElementById('stUnpaid').textContent=customers.filter(c=>c.accessStatus==='unpaid').length;
+  document.getElementById('stSuspended').textContent=customers.filter(c=>c.accessStatus==='suspended').length;
+  if(!list.length){document.getElementById('rows').innerHTML='<tr><td colspan="7" class="empty">لا توجد نتائج</td></tr>';return}
+  document.getElementById('rows').innerHTML=list.map(c=>`
+    <tr>
+      <td><b>${esc(c.name||'بدون اسم')}</b><div class="sub">${esc(c.email)}</div></td>
+      <td>${chip(c.whatsappStatus)}<div class="sub">${esc(c.whatsappPhone||'')}</div></td>
+      <td>${chip(c.accessStatus)}<div class="sub">${esc(c.activationSource||'')}</div></td>
+      <td>${c.lastPaymentAt?new Date(c.lastPaymentAt).toLocaleString('ar-SA'):'-'}</td>
+      <td><input class="amount" id="amount-${c.userId}" value="${esc(c.receivableSar)}"> ر.س</td>
+      <td><textarea id="note-${c.userId}">${esc(c.internalNote)}</textarea></td>
+      <td><div class="actions">
+        <button class="good" onclick="act('${c.userId}','grant_free')">تفعيل مجاني</button>
+        <button class="blue" onclick="act('${c.userId}','mark_paid',1750)">تسجيل دفع 1750</button>
+        <button class="blue" onclick="saveDue('${c.userId}')">حفظ المستحق</button>
+        <button onclick="act('${c.userId}','reactivate')">إعادة تفعيل</button>
+        <button class="bad" onclick="act('${c.userId}','suspend')">إيقاف</button>
+      </div></td>
+    </tr>`).join('');
+}
+async function act(userId,action,amountSar=0){
+  const note=document.getElementById('note-'+userId)?.value||'';
+  const amountHalalas=Math.round(Number(amountSar||0)*100);
+  try{
+    const r=await fetch(`/api/admin/customers/${userId}/action`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,note,amountHalalas})});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل الإجراء');
+    toast('تم التنفيذ');await loadCustomers();
+  }catch(e){toast(e.message,true)}
+}
+function saveDue(userId){
+  const sar=Number(document.getElementById('amount-'+userId).value||0);
+  act(userId,'update_receivable',sar);
+}
+loadCustomers();
+</script>
+</body>
+</html>

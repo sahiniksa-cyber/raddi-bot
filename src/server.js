@@ -13,10 +13,14 @@ const db = require('./db/client');
 const { migrate } = require('./db/migrations/init');
 const { PostgresSessionStore } = require('./db/session-store');
 const { createAuthRoutes } = require('./routes/auth.routes');
+const { createAdminRoutes } = require('./routes/admin.routes');
+const { createBillingRoutes } = require('./routes/billing.routes');
 const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bot');
+const { createBillingAccessGate } = require('./middleware/billing-access');
+const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
 const { isPrivateUrl } = require('../lib/helpers');
@@ -66,6 +70,7 @@ function createApp() {
   ensureDatabaseConfigured();
 
   const app = express();
+  const billingSettings = getBillingSettings();
   app.set('trust proxy', 1);
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -102,6 +107,7 @@ function createApp() {
   const routeDeps = {
     dashboardDir: path.join(process.cwd(), 'dashboard'),
     requireAuth,
+    billingSettings,
     storageStatus: {
       path: DATA_DIR,
       persistent: DATA_DIR !== process.cwd(),
@@ -112,6 +118,10 @@ function createApp() {
   };
   app.use(createHealthRoutes(routeDeps));
   app.use(createAuthRoutes(routeDeps));
+  app.use(createAdminRoutes(routeDeps));
+  app.use(createBillingRoutes(routeDeps));
+  app.get('/billing', requireAuth, (req, res) => res.sendFile(path.join(routeDeps.dashboardDir, 'billing.html')));
+  app.get('/', requireAuth, createBillingAccessGate({ settings: billingSettings }), (req, res, next) => next());
   app.use(createDashboardRoutes(routeDeps));
   app.use(createQueueRoutes(routeDeps));
 
