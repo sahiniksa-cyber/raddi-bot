@@ -82,6 +82,7 @@ async function getUserBillingState(userId, settings = {}) {
     activationSource: account.activation_source,
     receivableHalalas: Number(account.receivable_halalas || 0),
     messagePriceHalalas: Number(account.message_price_halalas || 0),
+    autoRenewEnabled: !!account.auto_renew_enabled,
   };
 }
 
@@ -254,6 +255,18 @@ async function updateReceivable(userId, receivableHalalas, note = '') {
   return result.rows[0];
 }
 
+async function updateAutoRenew(userId, enabled) {
+  const result = await db.query(
+    `INSERT INTO billing_accounts (user_id, auto_renew_enabled)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET auto_renew_enabled = EXCLUDED.auto_renew_enabled
+     RETURNING *`,
+    [userId, !!enabled],
+  );
+  await recordBillingEvent(userId, 'auto_renew_updated', { enabled: !!enabled });
+  return result.rows[0];
+}
+
 async function activateWithCode(userId, code, settings = {}) {
   if (!isValidActivationCode(code, settings)) return { activated: false };
   await grantFreeAccess(userId, 'activation code');
@@ -276,5 +289,6 @@ module.exports = {
   paymentAlreadyUsedByAnotherUser,
   reactivateAccess,
   suspendAccess,
+  updateAutoRenew,
   updateReceivable,
 };

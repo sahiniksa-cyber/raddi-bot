@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ردّي — بوت الواتس أب</title>
+<link rel="stylesheet" href="https://cdn.moyasar.com/mpf/1.15.0/moyasar.css">
+<script src="https://cdn.moyasar.com/mpf/1.15.0/moyasar.js"></script>
 <style>
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Light.otf') format('opentype');font-weight:300}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Regular.otf') format('opentype');font-weight:400}
@@ -749,6 +751,7 @@ body{background-attachment:scroll}
     <button class="tab active" onclick="goTab('connect')" id="tab-connect">📱 الربط</button>
     <button class="tab" onclick="goTab('settings')" id="tab-settings">⚙️ الإعدادات</button>
     <button class="tab" onclick="goTab('train')" id="tab-train">🎓 دربني</button>
+    <button class="tab" onclick="goTab('pricing')" id="tab-pricing">💳 تسعير</button>
     <button class="tab" onclick="goTab('account')" id="tab-account">👤 حسابي</button>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
@@ -1345,6 +1348,46 @@ body{background-attachment:scroll}
 </div>
 
 <!-- ══ ACCOUNT VIEW ══ -->
+<div class="view" id="view-pricing">
+<div style="max-width:1060px;margin:0 auto;padding:28px 16px">
+  <div class="g2" style="align-items:start">
+    <div class="panel">
+      <div class="phdr">تفعيل المنصة</div>
+      <div class="pbdy">
+        <div style="font-size:34px;font-weight:900;color:var(--green2);margin-bottom:6px" id="pricingPrice">1750 ريال</div>
+        <div class="hint" style="line-height:1.8">شراء المنصة يتم مرة واحدة. بعد التفعيل تقدر تستخدم الربط والإعدادات والتدريب والردود الذكية.</div>
+        <div style="margin-top:14px;padding:12px 14px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:11px;color:var(--green2);font-size:13px;line-height:1.8">
+          قد يتم احتساب تكلفة شهرية حسب عدد الرسائل، وتظهر كمستحقات رسائل في حسابك.
+        </div>
+        <div style="margin-top:16px">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:700">
+            <input type="checkbox" id="pricingAutoRenew" onchange="toggleAutoRenew(this.checked)" style="min-width:auto;flex:0">
+            تفعيل السحب التلقائي لتكلفة الرسائل على البطاقة
+          </label>
+          <div class="hint" style="margin-top:6px">يتم حفظ البطاقة لدى مزود الدفع فقط، وليس داخل المنصة.</div>
+        </div>
+        <div style="margin-top:16px">
+          <label>كود تفعيل من المالك</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="pricingCode" placeholder="مثال: L93" dir="ltr" style="flex:1;min-width:180px">
+            <button class="ghost-btn" onclick="applyBillingCode()">تفعيل بالكود</button>
+          </div>
+        </div>
+        <div id="pricingMsg" style="display:none;margin-top:12px;padding:11px 13px;border-radius:11px;font-size:13px;line-height:1.7"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="phdr">الدفع بالبطاقة أو Apple Pay</div>
+      <div class="pbdy">
+        <div class="hint" style="line-height:1.8">ادفع من نفس المنصة. بعد نجاح العملية يرجعك النظام ويفعل حسابك تلقائياً بعد التحقق من Moyasar.</div>
+        <div id="pricingPayStatus" style="margin:12px 0;padding:11px 13px;border-radius:11px;background:var(--card-soft);border:1px solid var(--border);font-size:13px;color:var(--text-soft)">جاري تجهيز الدفع...</div>
+        <div class="mysr-form"></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
 <div class="view" id="view-account">
 <div style="max-width:540px;margin:0 auto;padding:28px 16px">
 
@@ -1365,6 +1408,28 @@ body{background-attachment:scroll}
       <div style="margin-top:8px;padding:11px 14px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:11px;font-size:13px;color:var(--green2);font-weight:600">
         🔒 بياناتك مشفرة ومحفوظة بأمان — لا يمكن لأحد رؤية كلمة مرورك
       </div>
+    </div>
+  </div>
+
+  <!-- Billing Info -->
+  <div class="panel">
+    <div class="phdr">حالة الاشتراك</div>
+    <div class="pbdy">
+      <div class="g2">
+        <div>
+          <label>حالة المنصة</label>
+          <input type="text" id="accBillingStatus" disabled value="...">
+        </div>
+        <div>
+          <label>مستحقات الرسائل</label>
+          <input type="text" id="accBillingDue" disabled value="0 ريال">
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <label>السحب التلقائي</label>
+        <input type="text" id="accAutoRenew" disabled value="غير مفعل">
+      </div>
+      <button class="ghost-btn" style="margin-top:12px" onclick="goTab('pricing')">فتح التسعير والدفع</button>
     </div>
   </div>
 
@@ -1477,18 +1542,103 @@ body{background-attachment:scroll}
 
 <script>
 let config = {}, lastStatus = '', scannedData = null;
+let billingState = null, billingSettings = null, moyasarReady = false;
 
 // ── NAV ──
 function goTab(t){
+  if (billingState && !billingState.accessActive && !billingState.accessBypass && !['pricing','account'].includes(t)) {
+    t = 'pricing';
+    showPricingMessage('فعّل المنصة أولاً بالدفع أو كود التفعيل.', true);
+  }
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+t).classList.add('active');
   document.getElementById('tab-'+t).classList.add('active');
+  if (t === 'pricing') initMoyasarCheckout();
 }
 
 // ── SCREENS ──
 const SCRS=['stopped','waiting','qr','connecting','connected','disconnected','error'];
 function showSc(n){SCRS.forEach(s=>{const e=document.getElementById('sc-'+s);if(e)e.style.display=s===n?'flex':'none';})}
+
+function formatSar(halalas){return (Number(halalas||0)/100).toLocaleString('ar-SA',{minimumFractionDigits:0,maximumFractionDigits:2})+' ريال'}
+function billingActive(){return !!(billingState?.accessActive||billingState?.accessBypass)}
+function showPricingMessage(text,err=false){
+  const el=document.getElementById('pricingMsg');if(!el)return;
+  el.textContent=text;el.style.display='block';
+  el.style.background=err?'var(--red-bg)':'var(--green-bg)';
+  el.style.border='1px solid '+(err?'var(--red-border)':'var(--green-border)');
+  el.style.color=err?'var(--red)':'var(--green2)';
+}
+function updateBillingUi(){
+  const status=document.getElementById('accBillingStatus');
+  const due=document.getElementById('accBillingDue');
+  const auto=document.getElementById('accAutoRenew');
+  if(status)status.value=billingActive()?'مفعل':'غير مفعل';
+  if(due)due.value=formatSar(billingState?.receivableHalalas||0);
+  if(auto)auto.value=billingState?.autoRenewEnabled?'مفعل':'غير مفعل';
+  const autoBox=document.getElementById('pricingAutoRenew');
+  if(autoBox)autoBox.checked=!!billingState?.autoRenewEnabled;
+  const price=document.getElementById('pricingPrice');
+  if(price)price.textContent=formatSar(billingSettings?.platformAccessPriceHalalas||175000);
+}
+async function loadBillingState(){
+  const r=await fetch('/api/billing/state');
+  if(r.status===401){location.href='/login';return false}
+  const d=await r.json();
+  billingState=d.state||{};billingSettings=d.settings||{};
+  updateBillingUi();
+  const params=new URLSearchParams(location.search);
+  if(params.get('payment')==='paid')showPricingMessage('تم الدفع وتفعيل الحساب بنجاح.');
+  if(!billingActive()){
+    goTab(params.get('tab')==='account'?'account':'pricing');
+    return false;
+  }
+  const requested=params.get('tab');
+  if(requested&&document.getElementById('view-'+requested))goTab(requested);
+  return true;
+}
+function initMoyasarCheckout(){
+  const status=document.getElementById('pricingPayStatus');if(!status||moyasarReady)return;
+  if(!billingSettings?.moyasarEnabled){
+    status.textContent='الدفع الإلكتروني ينتظر مفاتيح Moyasar من المالك. تقدر تستخدم كود التفعيل إذا كان عندك.';
+    status.style.background='var(--red-bg)';status.style.color='var(--red)';status.style.border='1px solid var(--red-border)';
+    return;
+  }
+  if(!window.Moyasar){status.textContent='تعذر تحميل نموذج الدفع. حدّث الصفحة وحاول مرة ثانية.';return;}
+  moyasarReady=true;status.textContent='اختر البطاقة أو Apple Pay.';
+  Moyasar.init({
+    element: '.mysr-form',
+    amount: billingSettings.platformAccessPriceHalalas,
+    currency: billingSettings.currency||'SAR',
+    description: 'Raddi platform access',
+    publishable_api_key: billingSettings.moyasarPublishableKey,
+    callback_url: billingSettings.callbackUrl,
+    supported_networks:['visa','mastercard','mada'],
+    methods:['creditcard','applepay'],
+    fixed_width:false,
+    metadata:{user_id:billingSettings.userId||''},
+    credit_card:{save_card:!!billingState?.autoRenewEnabled},
+    apple_pay:{country:'SA',label:billingSettings.moyasarApplePayLabel||'Raddi',validate_merchant_url:'https://api.moyasar.com/v1/applepay/initiate'}
+  });
+}
+async function toggleAutoRenew(enabled){
+  const r=await fetch('/api/billing/auto-renew',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||!d.success){showPricingMessage('تعذر تحديث السحب التلقائي.',true);return;}
+  billingState.autoRenewEnabled=!!enabled;updateBillingUi();
+  showPricingMessage(enabled?'تم تفعيل خيار السحب التلقائي.':'تم إيقاف خيار السحب التلقائي.');
+}
+async function applyBillingCode(){
+  const code=document.getElementById('pricingCode')?.value.trim();
+  if(!code){showPricingMessage('اكتب كود التفعيل.',true);return;}
+  const r=await fetch('/api/billing/activate-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+  const d=await r.json();
+  if(!d.success){showPricingMessage(d.message||'كود التفعيل غير صحيح.',true);return;}
+  showPricingMessage('تم التفعيل بنجاح.');
+  await loadBillingState();
+  if(billingActive())goTab('connect');
+}
 
 // ── BOT ──
 function _disableBtn(btn, ms){
@@ -2334,10 +2484,17 @@ async function checkStorageStatus(){
 }
 
 // ── INIT ──
-loadConf();poll();loadCosts();loadUserInfo();loadPausedChats();checkStorageStatus();
-setInterval(()=>{if(!document.hidden)loadPausedChats();}, 30000);
-setInterval(()=>{if(!document.hidden)poll();}, 4000);
-setInterval(()=>{if(!document.hidden)loadCosts();}, 30000);
+async function initDashboard(){
+  await loadUserInfo();
+  const active=await loadBillingState();
+  if(active){
+    loadConf();poll();loadCosts();loadPausedChats();checkStorageStatus();
+  }
+}
+initDashboard();
+setInterval(()=>{if(!document.hidden&&billingActive())loadPausedChats();}, 30000);
+setInterval(()=>{if(!document.hidden&&billingActive())poll();}, 4000);
+setInterval(()=>{if(!document.hidden&&billingActive())loadCosts();}, 30000);
 </script>
 </body>
 </html>

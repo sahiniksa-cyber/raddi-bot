@@ -4,8 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  shouldBypassBillingApiGate,
+  shouldAllowBillingView,
   shouldEnableBillingGate,
+  shouldBypassBillingApiGate,
 } = require('../src/middleware/billing-access');
 
 test('shouldEnableBillingGate is enabled unless explicitly false', () => {
@@ -21,4 +22,8 @@ test('shouldBypassBillingApiGate allows auth billing and admin routes', () => {
   assert.equal(shouldBypassBillingApiGate('/api/health'), true);
   assert.equal(shouldBypassBillingApiGate('/api/status'), false);
   assert.equal(shouldBypassBillingApiGate('/api/config'), false);
+});
+
+test('shouldAllowBillingView keeps the main page available for unpaid users', () => {
+  assert.equal(shouldAllowBillingView({ accessActive: false, accessBypass: false }), true);
 });

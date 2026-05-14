@@ -15,6 +15,10 @@ function shouldBypassBillingApiGate(path = '') {
   ].some(prefix => String(path || '').startsWith(prefix));
 }
 
+function shouldAllowBillingView() {
+  return true;
+}
+
 function createBillingAccessGate({ settings }) {
   return async function billingAccessGate(req, res, next) {
     try {
@@ -51,6 +55,7 @@ function createBillingApiGate({ settings }) {
 module.exports = {
   createBillingAccessGate,
   createBillingApiGate,
+  shouldAllowBillingView,
   shouldBypassBillingApiGate,
   shouldEnableBillingGate,
 };

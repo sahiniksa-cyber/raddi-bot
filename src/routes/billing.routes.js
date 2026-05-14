@@ -5,6 +5,8 @@ const {
   activateWithCode,
   confirmProviderPayment,
   getUserBillingState,
+  isAdminUser,
+  updateAutoRenew,
 } = require('../services/billing/billing-service');
 const {
   buildCallbackUrl,
@@ -20,6 +22,7 @@ function createBillingRoutes(deps = {}) {
 
   router.get('/api/billing/state', requireAuth, async (req, res, next) => {
     try {
+      const accessBypass = await isAdminUser(req.session.userId, settings);
       res.json({
         success: true,
         settings: {
@@ -32,7 +35,10 @@ function createBillingRoutes(deps = {}) {
           callbackUrl: buildCallbackUrl(settings, req),
           userId: req.session.userId,
         },
-        state: await getUserBillingState(req.session.userId, settings),
+        state: {
+          ...(await getUserBillingState(req.session.userId, settings)),
+          accessBypass,
+        },
       });
     } catch (err) {
       next(err);
@@ -43,6 +49,15 @@ function createBillingRoutes(deps = {}) {
     try {
       const result = await activateWithCode(req.session.userId, req.body?.code, settings);
       if (!result.activated) return res.status(400).json({ success: false, message: 'كود التفعيل غير صحيح' });
+      res.json({ success: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/api/billing/auto-renew', requireAuth, async (req, res, next) => {
+    try {
+      await updateAutoRenew(req.session.userId, !!req.body?.enabled);
       res.json({ success: true });
     } catch (err) {
       next(err);
