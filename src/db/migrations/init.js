@@ -11,6 +11,7 @@ const statements = [
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL DEFAULT '',
+    phone TEXT,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     email_verified BOOLEAN NOT NULL DEFAULT TRUE,
@@ -18,6 +19,8 @@ const statements = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`,
 
   `CREATE TABLE IF NOT EXISTS bot_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -206,6 +209,33 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_billing_events_user_created
     ON billing_events(user_id, created_at DESC)`,
+
+  `ALTER TABLE billing_accounts
+    ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ`,
+
+  `CREATE TABLE IF NOT EXISTS coupons (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code TEXT UNIQUE NOT NULL,
+    type TEXT NOT NULL DEFAULT 'free_activation',
+    discount_percent INT DEFAULT 0,
+    max_uses INT DEFAULT 1,
+    uses_count INT DEFAULT 0,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS ai_usage (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd NUMERIC(12, 8) NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_ai_usage_user_created
+    ON ai_usage(user_id, created_at DESC)`,
 
   `CREATE INDEX IF NOT EXISTS idx_app_sessions_expire
     ON app_sessions(expire)`,

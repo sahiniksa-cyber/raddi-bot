@@ -31,7 +31,7 @@ function createBillingRoutes(deps = {}) {
           currency: settings.currency,
           moyasarEnabled: Boolean(settings.moyasar?.enabled),
           moyasarPublishableKey: settings.moyasar?.publishableKey || '',
-          moyasarApplePayLabel: settings.moyasar?.applePayLabel || 'Raddi',
+          moyasarApplePayLabel: settings.moyasar?.applePayLabel || 'Jwab',
           callbackUrl: buildCallbackUrl(settings, req),
           userId: req.session.userId,
         },

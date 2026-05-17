@@ -1,7 +1,7 @@
 {
-  "name": "raddi-whatsapp-bot",
+  "name": "jwab-whatsapp-bot",
   "version": "1.0.0",
-  "description": "ردّي — بوت واتساب ذكي لخدمة العملاء",
+  "description": "جواب — بوت واتساب ذكي لخدمة العملاء",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

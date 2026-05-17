@@ -2,6 +2,7 @@
 
 const path = require('path');
 const express = require('express');
+const db = require('../db/client');
 
 const {
   grantFreeAccess,
@@ -9,6 +10,7 @@ const {
   listAdminCustomers,
   markPaidAccess,
   reactivateAccess,
+  setAccessExpiry,
   suspendAccess,
   updateReceivable,
 } = require('../services/billing/billing-service');
@@ -28,6 +30,7 @@ function createAdminRoutes(deps = {}) {
 
   async function requireOwner(req, res, next) {
     try {
+      if (req.session?.isAdmin === true) return next();
       if (!req.session?.userId) {
         if (req.path.startsWith('/api/')) return res.status(401).json({ success: false, message: 'غير مصرح' });
         return res.redirect('/login');
@@ -42,6 +45,22 @@ function createAdminRoutes(deps = {}) {
       return next(err);
     }
   }
+
+  // Admin login page
+  router.get('/admin-login', (req, res) => {
+    res.sendFile(path.join(dashboardDir, 'admin-login.html'));
+  });
+
+  // Admin login API
+  router.post('/api/admin/login', (req, res) => {
+    const { password } = req.body || {};
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    if (!adminPassword || password !== adminPassword) {
+      return res.status(401).json({ success: false, message: 'كلمة مرور خاطئة' });
+    }
+    req.session.isAdmin = true;
+    return res.json({ success: true, redirect: settings.adminSecretPath });
+  });
 
   router.get(settings.adminSecretPath, requireAuth, requireOwner, (req, res) => {
     res.sendFile(path.join(dashboardDir, 'admin.html'));
@@ -69,6 +88,61 @@ function createAdminRoutes(deps = {}) {
       else if (action === 'update_receivable') await updateReceivable(userId, amountHalalas, note);
       else return res.status(400).json({ success: false, message: 'إجراء غير معروف' });
 
+      res.json({ success: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Set access days for a customer
+  router.post('/api/admin/customers/:userId/set-days', requireAuth, requireOwner, async (req, res, next) => {
+    try {
+      const { userId } = req.params;
+      const days = parseInt(req.body?.days, 10) || 0;
+      const note = String(req.body?.note || '').trim();
+      if (!days) return res.status(400).json({ success: false, message: 'عدد الأيام غير صحيح' });
+      await setAccessExpiry(userId, days, note);
+      res.json({ success: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Coupon CRUD
+  router.get('/api/admin/coupons', requireAuth, requireOwner, async (req, res, next) => {
+    try {
+      const result = await db.query('SELECT * FROM coupons ORDER BY created_at DESC');
+      res.json({ success: true, coupons: result.rows });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/api/admin/coupons', requireAuth, requireOwner, async (req, res, next) => {
+    try {
+      const { code, type, discountPercent, maxUses } = req.body || {};
+      if (!code || !code.trim()) return res.status(400).json({ success: false, message: 'كود الكوبون مطلوب' });
+      const validTypes = ['free_activation', 'discount_percent'];
+      const couponType = validTypes.includes(type) ? type : 'free_activation';
+      const discount = parseInt(discountPercent, 10) || 0;
+      const max = parseInt(maxUses, 10) || 1;
+      await db.query(
+        'INSERT INTO coupons (code, type, discount_percent, max_uses) VALUES ($1, $2, $3, $4)',
+        [code.trim(), couponType, discount, max]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      if (err.code === '23505') {
+        return res.status(409).json({ success: false, message: 'هذا الكود موجود مسبقاً' });
+      }
+      next(err);
+    }
+  });
+
+  router.delete('/api/admin/coupons/:id', requireAuth, requireOwner, async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      await db.query('UPDATE coupons SET active = FALSE WHERE id = $1', [id]);
       res.json({ success: true });
     } catch (err) {
       next(err);

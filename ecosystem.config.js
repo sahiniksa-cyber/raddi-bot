@@ -1,6 +1,6 @@
 module.exports = {
   apps: [{
-    name: 'raddi-bot',
+    name: 'jwab-bot',
     script: 'index.js',
     watch: false,
     autorestart: true,

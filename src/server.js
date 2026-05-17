@@ -19,12 +19,10 @@ const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bot');
-const { createBillingApiGate } = require('./middleware/billing-access');
+const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
-const { isPrivateUrl } = require('../lib/helpers');
-const storeScanner = require('../lib/store-scanner');
 
 function resolveDataDir() {
   const configured = (process.env.DATA_DIR || '').trim();
@@ -81,7 +79,7 @@ function createApp() {
   app.use(bodyParser.json({ limit: '2mb' }));
 
   const sessionConfig = {
-    name: 'raddi.sid',
+    name: 'jwab.sid',
     secret: sessionSecret(),
     resave: false,
     saveUninitialized: false,
@@ -120,8 +118,8 @@ function createApp() {
   app.use(createAuthRoutes(routeDeps));
   app.use(createAdminRoutes(routeDeps));
   app.use(createBillingRoutes(routeDeps));
-  app.get('/billing', requireAuth, (req, res) => res.redirect('/?tab=pricing'));
-  app.get('/', requireAuth, (req, res, next) => next());
+  app.get('/billing', requireAuth, (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'billing.html')));
+  app.get('/', requireAuth, createBillingAccessGate({ settings: billingSettings }), (req, res, next) => next());
   app.use(createDashboardRoutes(routeDeps));
   app.use('/api', createBillingApiGate({ settings: billingSettings }));
   app.use(createQueueRoutes(routeDeps));
@@ -150,31 +148,6 @@ function createApp() {
     await bot.saveConfig();
     res.json({ success: true });
   }));
-  app.post('/api/scan-store', requireAuth, asyncRoute(async (req, res) => {
-    const bot = await getUserBot(req.session.userId);
-    const { url, sallaToken, zidToken, zidManagerToken } = req.body || {};
-    const targetUrl = String(url || '').trim();
-    if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
-      return res.status(400).json({ success: false, message: 'رابط غير صحيح' });
-    }
-    if (isPrivateUrl(targetUrl)) {
-      return res.status(400).json({ success: false, message: 'رابط غير مسموح' });
-    }
-
-    const result = await storeScanner.scanStore(targetUrl, {
-      sallaToken,
-      zidToken,
-      zidManagerToken,
-      logger: bot.logger,
-    });
-    const organized = organizeProductsForConfig(bot.config, result.products || []);
-    res.json({
-      success: true,
-      ...result,
-      products: organized.products,
-      productCount: organized.products.length,
-    });
-  }));
   app.post('/api/products/import', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const incoming = req.body || {};
@@ -193,10 +166,36 @@ function createApp() {
     res.json({ success: true });
   }));
 
-  app.get('/api/costs', requireAuth, asyncRoute(async (req, res) => res.json((await getUserBot(req.session.userId)).costsData)));
+  app.get('/api/costs', requireAuth, asyncRoute(async (req, res) => {
+    const userId = req.session.userId;
+    // Read reset timestamp from bot's in-memory state
+    const bot = await getUserBot(userId);
+    const resetAt = bot._costsResetAt || null;
+
+    // Query persistent AI usage from DB
+    let query = 'SELECT model, SUM(input_tokens)::int AS input_tokens, SUM(output_tokens)::int AS output_tokens, SUM(cost_usd)::float AS cost_usd, COUNT(*)::int AS calls FROM ai_usage WHERE user_id = $1';
+    const params = [userId];
+    if (resetAt) {
+      query += ' AND created_at > $2';
+      params.push(resetAt);
+    }
+    query += ' GROUP BY model';
+    const result = await db.query(query, params);
+
+    let totalCalls = 0, totalInputTokens = 0, totalOutputTokens = 0, totalCostUSD = 0;
+    const byModel = {};
+    for (const row of result.rows) {
+      totalCalls += row.calls;
+      totalInputTokens += row.input_tokens;
+      totalOutputTokens += row.output_tokens;
+      totalCostUSD += row.cost_usd;
+      byModel[row.model] = { calls: row.calls, inputTokens: row.input_tokens, outputTokens: row.output_tokens, costUSD: row.cost_usd };
+    }
+    res.json({ totalCalls, totalInputTokens, totalOutputTokens, totalCostUSD, byModel, resetAt });
+  }));
   app.post('/api/costs/reset', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
-    bot.costsData = { totalCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUSD: 0, byModel: {} };
+    bot._costsResetAt = new Date().toISOString();
     res.json({ success: true });
   }));
   app.get('/api/paused-chats', requireAuth, (req, res) => res.json({ success: true, paused: [] }));
@@ -249,7 +248,7 @@ async function main() {
   const outgoingWorker = process.env.OUTGOING_WORKER_DISABLED === 'true'
     ? null
     : createOutgoingWhatsappWorker({ getUserBot });
-  const server = app.listen(PORT, () => console.log(`Raddi src server listening on ${PORT}`));
+  const server = app.listen(PORT, () => console.log(`Jwab src server listening on ${PORT}`));
 
   const shutdown = async (signal) => {
     console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);

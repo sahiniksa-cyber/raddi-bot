@@ -63,6 +63,23 @@
         <tbody id="rows"><tr><td colspan="7" class="empty">جاري التحميل...</td></tr></tbody>
       </table>
     </section>
+    <h2 style="margin-top:32px;font-size:18px">🎟️ الكوبونات</h2>
+    <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
+      <input id="cpCode" placeholder="كود الكوبون" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:140px">
+      <select id="cpType" style="padding:10px;border:1px solid var(--border);border-radius:8px">
+        <option value="free_activation">تفعيل مجاني</option>
+        <option value="discount_percent">خصم نسبة</option>
+      </select>
+      <input id="cpDiscount" type="number" placeholder="%" style="width:60px;padding:10px;border:1px solid var(--border);border-radius:8px">
+      <input id="cpMaxUses" type="number" placeholder="عدد الاستخدام" value="1" style="width:100px;padding:10px;border:1px solid var(--border);border-radius:8px">
+      <button onclick="createCoupon()" style="padding:10px 16px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">إضافة</button>
+    </div>
+    <section class="panel" style="margin-bottom:32px">
+      <table>
+        <thead><tr><th>الكود</th><th>النوع</th><th>الخصم</th><th>الاستخدام</th><th>الحالة</th><th>حذف</th></tr></thead>
+        <tbody id="couponRows"><tr><td colspan="6" class="empty">جاري التحميل...</td></tr></tbody>
+      </table>
+    </section>
   </main>
   <div class="toast" id="toast"></div>
 
@@ -104,6 +121,8 @@ function render(){
         <button class="blue" onclick="saveDue('${c.userId}')">حفظ المستحق</button>
         <button onclick="act('${c.userId}','reactivate')">إعادة تفعيل</button>
         <button class="bad" onclick="act('${c.userId}','suspend')">إيقاف</button>
+        <input class="amount" id="days-${c.userId}" placeholder="أيام" style="width:60px">
+        <button class="blue" onclick="setDays('${c.userId}')">تحديد أيام</button>
       </div></td>
     </tr>`).join('');
 }
@@ -120,7 +139,58 @@ function saveDue(userId){
   const sar=Number(document.getElementById('amount-'+userId).value||0);
   act(userId,'update_receivable',sar);
 }
+async function setDays(userId){
+  const days=parseInt(document.getElementById('days-'+userId)?.value)||0;
+  if(!days){toast('أدخل عدد الأيام',true);return}
+  const note=document.getElementById('note-'+userId)?.value||'';
+  try{
+    const r=await fetch(`/api/admin/customers/${userId}/set-days`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({days,note})});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم تحديد '+days+' يوم');await loadCustomers();
+  }catch(e){toast(e.message,true)}
+}
+let coupons=[];
+async function loadCoupons(){
+  try{
+    const r=await fetch('/api/admin/coupons');
+    if(!r.ok)return;
+    const d=await r.json();coupons=d.coupons||[];renderCoupons();
+  }catch(_){}
+}
+function renderCoupons(){
+  const tbody=document.getElementById('couponRows');
+  if(!coupons.length){tbody.innerHTML='<tr><td colspan="6" class="empty">لا توجد كوبونات</td></tr>';return}
+  tbody.innerHTML=coupons.map(c=>`<tr>
+    <td><b>${esc(c.code)}</b></td>
+    <td>${c.type==='free_activation'?'تفعيل مجاني':'خصم '+c.discount_percent+'%'}</td>
+    <td>${c.discount_percent||'-'}%</td>
+    <td>${c.uses_count}/${c.max_uses}</td>
+    <td>${c.active?'<span class="chip active">فعال</span>':'<span class="chip suspended">محذوف</span>'}</td>
+    <td><button class="bad" onclick="deleteCoupon('${c.id}')">حذف</button></td>
+  </tr>`).join('');
+}
+async function createCoupon(){
+  const code=document.getElementById('cpCode').value.trim();
+  if(!code){toast('أدخل كود الكوبون',true);return}
+  const type=document.getElementById('cpType').value;
+  const discountPercent=parseInt(document.getElementById('cpDiscount').value)||0;
+  const maxUses=parseInt(document.getElementById('cpMaxUses').value)||1;
+  try{
+    const r=await fetch('/api/admin/coupons',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,type,discountPercent,maxUses})});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم إنشاء الكوبون');document.getElementById('cpCode').value='';loadCoupons();
+  }catch(e){toast(e.message,true)}
+}
+async function deleteCoupon(id){
+  if(!confirm('حذف هذا الكوبون؟'))return;
+  try{
+    const r=await fetch('/api/admin/coupons/'+id,{method:'DELETE'});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم الحذف');loadCoupons();
+  }catch(e){toast(e.message,true)}
+}
 loadCustomers();
+loadCoupons();
 </script>
 </body>
 </html>

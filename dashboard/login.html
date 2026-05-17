@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ردّي — تسجيل الدخول</title>
+<title>جواب — تسجيل الدخول</title>
 <style>
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Light.otf') format('opentype');font-weight:300}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Regular.otf') format('opentype');font-weight:400}
@@ -405,7 +405,7 @@ input:focus{
 <body>
 
 <div class="logo-wrap">
-  <span class="logo">ردّي</span>
+  <span class="logo">جواب</span>
   <div class="logo-sub">بوت الواتس أب الذكي لمتجرك</div>
 </div>
 
@@ -450,7 +450,12 @@ input:focus{
     <div class="form-group">
       <label>الاسم</label>
       <input type="text" id="regName" placeholder="اسمك" autocomplete="name"
-             onkeydown="if(event.key==='Enter')document.getElementById('regEmail').focus()">
+             onkeydown="if(event.key==='Enter')document.getElementById('regPhone').focus()">
+    </div>
+    <div class="form-group">
+      <label>رقم الجوال</label>
+      <input type="tel" id="regPhone" placeholder="05xxxxxxxx" dir="ltr"
+             autocomplete="tel" onkeydown="if(event.key==='Enter')document.getElementById('regEmail').focus()">
     </div>
     <div class="form-group">
       <label>الإيميل</label>
@@ -680,6 +685,7 @@ async function doLogin() {
 // ── REGISTER ──
 async function doRegister() {
   const name  = document.getElementById('regName').value.trim();
+  const phone = document.getElementById('regPhone').value.trim();
   const email = document.getElementById('regEmail').value.trim();
   const pass  = document.getElementById('regPass').value;
   if (!name || !email || !pass) { showErr('جميع الحقول مطلوبة'); return; }
@@ -688,7 +694,7 @@ async function doRegister() {
   try {
     const r = await fetch('/api/auth/register', { method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name, email, password: pass }) });
+      body: JSON.stringify({ name, phone, email, password: pass }) });
     const d = await r.json();
     if (d.success) {
       if (d.verified) {

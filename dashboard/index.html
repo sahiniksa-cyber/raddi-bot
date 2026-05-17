@@ -3,9 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ردّي — بوت الواتس أب</title>
-<link rel="stylesheet" href="https://cdn.moyasar.com/mpf/1.15.0/moyasar.css">
-<script src="https://cdn.moyasar.com/mpf/1.15.0/moyasar.js"></script>
+<title>جواب — بوت الواتس أب</title>
 <style>
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Light.otf') format('opentype');font-weight:300}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Regular.otf') format('opentype');font-weight:400}
@@ -155,22 +153,6 @@ html[dir="rtl"] select{background-position:left 14px center}
 .key-get-btn{padding:11px 16px;border-radius:10px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .18s;flex-shrink:0}
 .key-get-btn:hover{background:var(--green);color:#fff;border-color:var(--green)}
 
-/* Store Scanner */
-.scan-bar{display:flex;gap:8px}
-.scan-bar input{margin-bottom:0;flex:1}
-.scan-btn{padding:11px 20px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .18s;flex-shrink:0;box-shadow:0 1px 2px rgba(22,163,74,.25)}
-.scan-btn:hover{transform:translateY(-1px)}
-.scan-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
-.scan-result{background:var(--green-bg);border:1px solid var(--green-border);border-radius:13px;padding:14px;margin-top:14px;display:none}
-.scan-result.show{display:block}
-.scan-result-hdr{font-size:13px;font-weight:800;color:var(--green2);margin-bottom:10px}
-.scan-prods{display:flex;flex-direction:column;gap:5px;max-height:280px;overflow-y:auto}
-.sp{display:flex;align-items:center;justify-content:space-between;background:#fff;border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:12px;gap:8px}
-.sp-name{font-weight:700;color:var(--text-2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sp-price{color:var(--green2);font-weight:800;white-space:nowrap}
-.import-btn{width:100%;padding:11px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;margin-top:12px;transition:all .18s;box-shadow:0 1px 2px rgba(22,163,74,.25)}
-.import-btn:hover{transform:translateY(-1px)}
-
 /* Keywords & Products */
 .kw-row{display:flex;gap:8px;margin-bottom:8px;align-items:flex-start}
 .kw-row input,.kw-row textarea{margin-bottom:0}
@@ -213,11 +195,6 @@ html[dir="rtl"] select{background-position:left 14px center}
 .enhance-btn:disabled{opacity:.5;cursor:wait}
 label{display:flex;align-items:center}
 
-/* TOKEN TEST BUTTON */
-.test-token-btn{padding:9px 14px;border-radius:9px;border:1px solid var(--indigo-border);background:var(--indigo-bg);color:var(--indigo);font-family:var(--font);font-size:12px;font-weight:700;cursor:pointer;transition:all .18s;margin-top:-6px;margin-bottom:8px}
-.test-token-btn:hover{background:var(--indigo);color:#fff;border-color:var(--indigo)}
-.token-row{display:flex;gap:8px;align-items:flex-end}
-.token-row input{flex:1}
 
 /* HEALTH CHECK */
 .health-btn{display:flex;align-items:center;gap:8px;padding:13px 20px;border-radius:13px;border:none;background:linear-gradient(135deg,var(--sky-soft),var(--sky));color:#fff;font-family:var(--font);font-size:14px;font-weight:800;cursor:pointer;transition:all .18s;width:100%;justify-content:center;margin-bottom:16px;box-shadow:0 2px 4px rgba(2,132,199,.25)}
@@ -590,12 +567,12 @@ input:focus,textarea:focus,select:focus,.chips:focus-within{
   box-shadow:0 0 0 4px rgba(39,183,122,.12),0 12px 26px rgba(35,44,64,.06)!important;
 }
 
-button,.green-btn,.red-btn,.ghost-btn,.ctrl-start,.ctrl-stop,.save-btn,.add-btn,.health-btn,.test-send,.train-start-btn,.train-send,.train-apply,.scan-btn,.import-btn,.test-token-btn,.key-get-btn,.prod-del,.chip-add{
+button,.green-btn,.red-btn,.ghost-btn,.ctrl-start,.ctrl-stop,.save-btn,.add-btn,.health-btn,.test-send,.train-start-btn,.train-send,.train-apply,.key-get-btn,.prod-del,.chip-add{
   border-radius:999px!important;
   transition:transform .18s ease,box-shadow .18s ease,background .18s ease,color .18s ease!important;
 }
 
-button:hover,.green-btn:hover,.red-btn:hover,.ghost-btn:hover,.ctrl-start:hover,.ctrl-stop:hover,.save-btn:hover,.add-btn:hover,.health-btn:hover,.test-send:hover,.train-start-btn:hover,.train-send:hover,.train-apply:hover,.scan-btn:hover,.import-btn:hover,.test-token-btn:hover,.key-get-btn:hover,.prod-del:hover,.chip-add:hover{
+button:hover,.green-btn:hover,.red-btn:hover,.ghost-btn:hover,.ctrl-start:hover,.ctrl-stop:hover,.save-btn:hover,.add-btn:hover,.health-btn:hover,.test-send:hover,.train-start-btn:hover,.train-send:hover,.train-apply:hover,.key-get-btn:hover,.prod-del:hover,.chip-add:hover{
   transform:translateY(-1px);
 }
 
@@ -606,7 +583,7 @@ button:hover,.green-btn:hover,.red-btn:hover,.ghost-btn:hover,.ctrl-start:hover,
   box-shadow:0 14px 30px rgba(26,26,26,.18)!important;
 }
 
-.red-btn,.ghost-btn,.ctrl-stop,.add-btn,.scan-btn,.import-btn,.test-token-btn,.key-get-btn,.prod-del,.chip-add{
+.red-btn,.ghost-btn,.ctrl-stop,.add-btn,.key-get-btn,.prod-del,.chip-add{
   background:rgba(255,255,255,.68)!important;
   color:#1a1a1a!important;
   border:1px solid rgba(26,26,26,.08)!important;
@@ -746,12 +723,12 @@ body{background-attachment:scroll}
 <body>
 
 <div class="topbar">
-  <div class="logo">ردّي</div>
+  <div class="logo">جواب</div>
   <div class="nav-tabs">
     <button class="tab active" onclick="goTab('connect')" id="tab-connect">📱 الربط</button>
     <button class="tab" onclick="goTab('settings')" id="tab-settings">⚙️ الإعدادات</button>
     <button class="tab" onclick="goTab('train')" id="tab-train">🎓 دربني</button>
-    <button class="tab" onclick="goTab('pricing')" id="tab-pricing">💳 تسعير</button>
+    <button class="tab" onclick="goTab('pricing')" id="tab-pricing">📞 التفعيل</button>
     <button class="tab" onclick="goTab('account')" id="tab-account">👤 حسابي</button>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
@@ -780,7 +757,7 @@ body{background-attachment:scroll}
   <div class="cscreen" id="sc-stopped">
     <div class="stop-card">
       <span class="big-icon">🤖</span>
-      <div class="ctitle">ردّي — بوت الواتس أب</div>
+      <div class="ctitle">جواب — بوت الواتس أب</div>
       <div class="csub">اضغط تشغيل لبدء البوت وربطه بواتس أب متجرك</div>
       <button class="green-btn" style="font-size:17px;padding:15px 44px;margin-top:4px" onclick="botStart(this)">▶ تشغيل البوت</button>
     </div>
@@ -789,7 +766,7 @@ body{background-attachment:scroll}
   <div class="cscreen" id="sc-waiting" style="display:none">
     <div class="ccard">
       <div class="spin"></div>
-      <div class="ctitle">جاري تشغيل ردّي...</div>
+      <div class="ctitle">جاري تشغيل جواب...</div>
       <div class="csub">انتظر ثوانٍ حتى يظهر الباركود</div>
       <div class="logs-box" id="logsBox"></div>
       <button class="ghost-btn" style="margin-top:14px;width:100%" onclick="botStop(this)">⏹ إيقاف</button>
@@ -830,7 +807,7 @@ body{background-attachment:scroll}
   <div class="cscreen" id="sc-connected" style="display:none">
     <div class="conn-card">
       <span class="big-icon">✅</span>
-      <div class="ctitle" style="color:var(--green2)">ردّي متصل ويعمل!</div>
+      <div class="ctitle" style="color:var(--green2)">جواب متصل ويشتغل!</div>
       <div class="csub">البوت يرد الآن على عملاء متجرك تلقائياً</div>
       <div class="phone-pill" id="phonePill">—</div><br>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">
@@ -993,51 +970,6 @@ body{background-attachment:scroll}
           <button class="enhance-btn" onclick="enhanceText('welcomeMsg','welcome')" type="button">✨ تحسين بالذكاء</button>
         </label>
         <textarea id="welcomeMsg" rows="2" placeholder="أهلاً! كيف أقدر أساعدك؟ 😊"></textarea>
-      </div>
-    </div>
-  </div>
-
-  <!-- Store Scanner -->
-  <div class="panel">
-    <div class="phdr">🔍 فاحص المتجر — سلة، زد، وأي متجر</div>
-    <div class="pbdy">
-      <p class="hint" style="margin:0 0 10px">أدخل رابط متجرك (سلة / زد / شوبيفاي / أي متجر) وسيقرأ ردّي المنتجات تلقائياً</p>
-      <div class="scan-bar">
-        <input type="url" id="scanUrl" placeholder="https://متجرك.salla.sa أو متجرك.zid.store" dir="ltr">
-        <button class="scan-btn" id="scanBtn" onclick="doScan()">🔍 فحص</button>
-      </div>
-
-      <!-- Advanced API tokens (collapsible) -->
-      <details style="margin-top:12px;background:var(--card-soft);border-radius:11px;padding:12px 14px;border:1px solid var(--border)">
-        <summary style="cursor:pointer;font-size:13px;font-weight:700;color:var(--text-muted);list-style:none;display:flex;align-items:center;gap:6px">
-          <span>⚙️ توكن API (للنتائج الدقيقة من سلة/زد)</span>
-          <span style="margin-right:auto;font-size:11px;color:var(--text-dim)">اختياري</span>
-        </summary>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
-          <p class="hint" style="margin-bottom:10px">إذا عندك تطبيق في سلة أو زد، الصق توكن الوصول هنا للحصول على بيانات أدق</p>
-
-          <label style="margin-top:6px">🛒 توكن سلة (Salla Access Token)</label>
-          <div class="token-row">
-            <input type="password" id="sallaToken" placeholder="من تطبيقك في Salla Partners" dir="ltr">
-            <button class="test-token-btn" onclick="testToken('salla')" id="testSallaBtn">اختبر ✓</button>
-          </div>
-          <div class="hint">احصل عليه من <a href="https://salla.partners/" target="_blank">salla.partners</a> → تطبيقاتي → التوكن</div>
-
-          <label style="margin-top:10px">🟣 توكن زد (Zid Access Token)</label>
-          <input type="password" id="zidToken" placeholder="من تطبيقك في Zid Partners" dir="ltr">
-          <label>🔐 Manager Token (لزد فقط)</label>
-          <div class="token-row">
-            <input type="password" id="zidManagerToken" placeholder="X-Manager-Token" dir="ltr">
-            <button class="test-token-btn" onclick="testToken('zid')" id="testZidBtn">اختبر ✓</button>
-          </div>
-          <div class="hint">احصل عليه من <a href="https://web.zid.sa/partners" target="_blank">web.zid.sa/partners</a> → تطبيقاتي → التوكن</div>
-        </div>
-      </details>
-
-      <div class="scan-result" id="scanResult">
-        <div class="scan-result-hdr" id="scanHdr"></div>
-        <div class="scan-prods" id="scanProds"></div>
-        <button class="import-btn" onclick="doImport()">⬇ استيراد المنتجات إلى البوت</button>
       </div>
     </div>
   </div>
@@ -1317,7 +1249,7 @@ body{background-attachment:scroll}
   <div id="trainHero" class="train-hero">
     <div style="font-size:54px;margin-bottom:12px">🎓</div>
     <h2>دربني — أنا أعلّم البوت أسلوبك</h2>
-    <p>سأسألك <strong>25 سؤالاً</strong> عن طريقة ردّك مع العملاء.<br>من إجاباتك فقط، سأبني للبوت برومنت كامل يحاكي أسلوبك بالضبط — بدون أي إعدادات يدوية.</p>
+    <p>سأسألك أسئلة عميقة عن طريقة تعاملك مع العملاء.<br>من إجاباتك فقط، سأبني للبوت برومنت كامل يحاكي أسلوبك بالضبط — بدون أي إعدادات يدوية.</p>
     <button class="train-start-btn" onclick="startTraining()">▶ ابدأ التدريب</button>
   </div>
 
@@ -1349,40 +1281,23 @@ body{background-attachment:scroll}
 
 <!-- ══ ACCOUNT VIEW ══ -->
 <div class="view" id="view-pricing">
-<div style="max-width:1060px;margin:0 auto;padding:28px 16px">
-  <div class="g2" style="align-items:start">
-    <div class="panel">
-      <div class="phdr">تفعيل المنصة</div>
-      <div class="pbdy">
-        <div style="font-size:34px;font-weight:900;color:var(--green2);margin-bottom:6px" id="pricingPrice">1750 ريال</div>
-        <div class="hint" style="line-height:1.8">شراء المنصة يتم مرة واحدة. بعد التفعيل تقدر تستخدم الربط والإعدادات والتدريب والردود الذكية.</div>
-        <div style="margin-top:14px;padding:12px 14px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:11px;color:var(--green2);font-size:13px;line-height:1.8">
-          قد يتم احتساب تكلفة شهرية حسب عدد الرسائل، وتظهر كمستحقات رسائل في حسابك.
-        </div>
-        <div style="margin-top:16px">
-          <label style="display:flex;align-items:center;gap:8px;font-weight:700">
-            <input type="checkbox" id="pricingAutoRenew" onchange="toggleAutoRenew(this.checked)" style="min-width:auto;flex:0">
-            تفعيل السحب التلقائي لتكلفة الرسائل على البطاقة
-          </label>
-          <div class="hint" style="margin-top:6px">يتم حفظ البطاقة لدى مزود الدفع فقط، وليس داخل المنصة.</div>
-        </div>
-        <div style="margin-top:16px">
-          <label>كود تفعيل من المالك</label>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input id="pricingCode" placeholder="مثال: L93" dir="ltr" style="flex:1;min-width:180px">
-            <button class="ghost-btn" onclick="applyBillingCode()">تفعيل بالكود</button>
-          </div>
-        </div>
-        <div id="pricingMsg" style="display:none;margin-top:12px;padding:11px 13px;border-radius:11px;font-size:13px;line-height:1.7"></div>
+<div style="max-width:600px;margin:0 auto;padding:28px 16px">
+  <div class="panel">
+    <div class="phdr">تفعيل المنصة</div>
+    <div class="pbdy" style="text-align:center;padding:36px 24px">
+      <div style="font-size:54px;margin-bottom:16px">📞</div>
+      <div style="font-size:22px;font-weight:900;color:var(--text);margin-bottom:12px">تواصل مع خدمة العملاء</div>
+      <div class="hint" style="line-height:1.9;font-size:14px;max-width:420px;margin:0 auto 24px">
+        لتفعيل المنصة والاطلاع على تفاصيل الاشتراك والأسعار، تواصل مع فريق خدمة العملاء وسيتم تزويدك بكود التفعيل.
       </div>
-    </div>
-    <div class="panel">
-      <div class="phdr">الدفع بالبطاقة أو Apple Pay</div>
-      <div class="pbdy">
-        <div class="hint" style="line-height:1.8">ادفع من نفس المنصة. بعد نجاح العملية يرجعك النظام ويفعل حسابك تلقائياً بعد التحقق من Moyasar.</div>
-        <div id="pricingPayStatus" style="margin:12px 0;padding:11px 13px;border-radius:11px;background:var(--card-soft);border:1px solid var(--border);font-size:13px;color:var(--text-soft)">جاري تجهيز الدفع...</div>
-        <div class="mysr-form"></div>
+      <div style="background:var(--green-bg);border:1px solid var(--green-border);border-radius:14px;padding:18px;margin-bottom:20px">
+        <div style="font-size:13px;color:var(--green2);font-weight:700;margin-bottom:8px">عندك كود تفعيل؟</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+          <input id="pricingCode" placeholder="أدخل كود التفعيل" dir="ltr" style="flex:1;min-width:180px;max-width:260px">
+          <button class="ghost-btn" onclick="applyBillingCode()">تفعيل</button>
+        </div>
       </div>
+      <div id="pricingMsg" style="display:none;margin-top:12px;padding:11px 13px;border-radius:11px;font-size:13px;line-height:1.7"></div>
     </div>
   </div>
 </div>
@@ -1429,7 +1344,7 @@ body{background-attachment:scroll}
         <label>السحب التلقائي</label>
         <input type="text" id="accAutoRenew" disabled value="غير مفعل">
       </div>
-      <button class="ghost-btn" style="margin-top:12px" onclick="goTab('pricing')">فتح التسعير والدفع</button>
+      <button class="ghost-btn" style="margin-top:12px" onclick="goTab('pricing')">صفحة التفعيل</button>
     </div>
   </div>
 
@@ -1541,20 +1456,19 @@ body{background-attachment:scroll}
 <div class="toast" id="toast"></div>
 
 <script>
-let config = {}, lastStatus = '', scannedData = null;
-let billingState = null, billingSettings = null, moyasarReady = false;
+let config = {}, lastStatus = '';
+let billingState = null, billingSettings = null;
 
 // ── NAV ──
 function goTab(t){
   if (billingState && !billingState.accessActive && !billingState.accessBypass && !['pricing','account'].includes(t)) {
     t = 'pricing';
-    showPricingMessage('فعّل المنصة أولاً بالدفع أو كود التفعيل.', true);
+    showPricingMessage('فعّل المنصة أولاً — تواصل مع خدمة العملاء للحصول على كود التفعيل.', true);
   }
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+t).classList.add('active');
   document.getElementById('tab-'+t).classList.add('active');
-  if (t === 'pricing') initMoyasarCheckout();
 }
 
 // ── SCREENS ──
@@ -1577,10 +1491,6 @@ function updateBillingUi(){
   if(status)status.value=billingActive()?'مفعل':'غير مفعل';
   if(due)due.value=formatSar(billingState?.receivableHalalas||0);
   if(auto)auto.value=billingState?.autoRenewEnabled?'مفعل':'غير مفعل';
-  const autoBox=document.getElementById('pricingAutoRenew');
-  if(autoBox)autoBox.checked=!!billingState?.autoRenewEnabled;
-  const price=document.getElementById('pricingPrice');
-  if(price)price.textContent=formatSar(billingSettings?.platformAccessPriceHalalas||175000);
 }
 async function loadBillingState(){
   const r=await fetch('/api/billing/state');
@@ -1597,37 +1507,6 @@ async function loadBillingState(){
   const requested=params.get('tab');
   if(requested&&document.getElementById('view-'+requested))goTab(requested);
   return true;
-}
-function initMoyasarCheckout(){
-  const status=document.getElementById('pricingPayStatus');if(!status||moyasarReady)return;
-  if(!billingSettings?.moyasarEnabled){
-    status.textContent='الدفع الإلكتروني ينتظر مفاتيح Moyasar من المالك. تقدر تستخدم كود التفعيل إذا كان عندك.';
-    status.style.background='var(--red-bg)';status.style.color='var(--red)';status.style.border='1px solid var(--red-border)';
-    return;
-  }
-  if(!window.Moyasar){status.textContent='تعذر تحميل نموذج الدفع. حدّث الصفحة وحاول مرة ثانية.';return;}
-  moyasarReady=true;status.textContent='اختر البطاقة أو Apple Pay.';
-  Moyasar.init({
-    element: '.mysr-form',
-    amount: billingSettings.platformAccessPriceHalalas,
-    currency: billingSettings.currency||'SAR',
-    description: 'Raddi platform access',
-    publishable_api_key: billingSettings.moyasarPublishableKey,
-    callback_url: billingSettings.callbackUrl,
-    supported_networks:['visa','mastercard','mada'],
-    methods:['creditcard','applepay'],
-    fixed_width:false,
-    metadata:{user_id:billingSettings.userId||''},
-    credit_card:{save_card:!!billingState?.autoRenewEnabled},
-    apple_pay:{country:'SA',label:billingSettings.moyasarApplePayLabel||'Raddi',validate_merchant_url:'https://api.moyasar.com/v1/applepay/initiate'}
-  });
-}
-async function toggleAutoRenew(enabled){
-  const r=await fetch('/api/billing/auto-renew',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
-  const d=await r.json().catch(()=>({}));
-  if(!r.ok||!d.success){showPricingMessage('تعذر تحديث السحب التلقائي.',true);return;}
-  billingState.autoRenewEnabled=!!enabled;updateBillingUi();
-  showPricingMessage(enabled?'تم تفعيل خيار السحب التلقائي.':'تم إيقاف خيار السحب التلقائي.');
 }
 async function applyBillingCode(){
   const code=document.getElementById('pricingCode')?.value.trim();
@@ -2002,23 +1881,6 @@ async function enhanceText(fieldId,type){
   finally{btns.forEach(b=>b.disabled=false);}
 }
 
-// ── TEST TOKEN ──
-async function testToken(type){
-  const btn=document.getElementById(type==='salla'?'testSallaBtn':'testZidBtn');
-  const token=document.getElementById(type==='salla'?'sallaToken':'zidManagerToken').value.trim();
-  const managerToken=type==='zid'?document.getElementById('zidManagerToken').value.trim():'';
-  const t=type==='zid'?document.getElementById('zidToken').value.trim():token;
-  if(!t){toast('❌ أدخل التوكن أولاً',true);return;}
-  btn.disabled=true;btn.textContent='⏳ يفحص...';
-  try{
-    const r=await fetch('/api/test-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,token:t,managerToken})});
-    const d=await r.json();
-    if(d.success){btn.textContent='✅ صحيح';btn.style.background='rgba(37,211,102,.18)';btn.style.color='var(--green)';btn.style.borderColor='rgba(37,211,102,.35)';toast('✅ '+d.message+(d.storeName?' — '+d.storeName:''));}
-    else{btn.textContent='❌ خطأ';btn.style.background='rgba(239,68,68,.12)';btn.style.color='#ef4444';btn.style.borderColor='rgba(239,68,68,.25)';toast('❌ '+d.message,true);}
-  }catch(_){btn.textContent='❌ خطأ';toast('❌ تعذر الاتصال',true);}
-  finally{btn.disabled=false;setTimeout(()=>{btn.textContent='اختبر ✓';btn.style.cssText='';},6000);}
-}
-
 // ── HEALTH CHECK ──
 async function runHealthCheck(){
   const btn=document.getElementById('healthBtn');
@@ -2132,75 +1994,6 @@ async function saveConf(){
   }catch(_){toast('❌ تعذر الحفظ',true);}
 }
 
-// ── STORE SCANNER ──
-async function doScan(){
-  const url=document.getElementById('scanUrl').value.trim();
-  if(!url||!url.startsWith('http')){toast('❌ أدخل رابط صحيح يبدأ بـ https://',true);return;}
-  const sallaToken=document.getElementById('sallaToken').value.trim();
-  const zidToken=document.getElementById('zidToken').value.trim();
-  const zidManagerToken=document.getElementById('zidManagerToken').value.trim();
-  const btn=document.getElementById('scanBtn');
-  btn.disabled=true;btn.textContent='⏳ جاري الفحص...';
-  document.getElementById('scanResult').classList.remove('show');
-  try{
-    const d=await fetch('/api/scan-store',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,sallaToken,zidToken,zidManagerToken})}).then(r=>r.json());
-    if(!d.success){toast('❌ '+d.message,true);return;}
-    scannedData=d;
-    const platformName={salla:'سلة',zid:'زد',shopify:'شوبيفاي',woocommerce:'ووكومرس',generic:'عام'}[d.platform]||'';
-    const apiTag=d.usedAPI?' (API ✓)':'';
-    document.getElementById('scanHdr').innerHTML=`✅ وُجد <b>${d.products.length}</b> منتج${platformName?' · المنصة: '+platformName:''}${apiTag}${d.storeName?' · '+esc(d.storeName):''}`;
-    const c=document.getElementById('scanProds');c.innerHTML='';
-    if(d.products.length===0){
-      c.innerHTML='<div style="color:#64748b;font-size:12px;padding:8px;line-height:1.7">لم يُعثر على منتجات.<br>• تأكد أن الرابط صفحة منتجات (وليس الصفحة الرئيسية)<br>• أو أضف توكن API من سلة/زد للحصول على نتائج أدق</div>';
-    } else {
-      d.products.forEach(p=>{
-        const el=document.createElement('div');el.className='sp';
-        el.innerHTML=`<span class="sp-name">${esc(p.name)}</span><span class="sp-price">${esc(p.price||'')}</span>`;
-        c.appendChild(el);
-      });
-    }
-    document.getElementById('scanResult').classList.add('show');
-    toast(`✅ تم فحص ${d.products.length} منتج`);
-  }catch(_){toast('❌ تعذر الوصول للموقع',true);}
-  finally{btn.disabled=false;btn.textContent='🔍 فحص';}
-}
-
-async function doImport(){
-  if(!scannedData)return;
-  if(scannedData.storeName&&!document.getElementById('storeName').value)
-    document.getElementById('storeName').value=scannedData.storeName;
-  if(scannedData.storeDesc&&!document.getElementById('storeDesc').value)
-    document.getElementById('storeDesc').value=scannedData.storeDesc;
-  if(scannedData.products.length>0){
-    document.getElementById('prodContainer').innerHTML='';
-    scannedData.products.forEach(p=>addProd(p.name,p.description,p.price));
-    try{
-      const r=await fetch('/api/products/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-        products:scannedData.products,
-        storeName:document.getElementById('storeName').value.trim(),
-        storeDescription:document.getElementById('storeDesc').value.trim()
-      })});
-      if(r.status===401){window.location.href='/login';return;}
-      const d=await r.json();
-      if(d.success){
-        config={...config,products:d.products,storeName:document.getElementById('storeName').value.trim(),storeDescription:document.getElementById('storeDesc').value.trim()};
-        document.getElementById('prodContainer').innerHTML='';
-        d.products.forEach(p=>addProd(p.name,p.description,p.price));
-        toast(`✅ تم ترتيب وحفظ ${d.productCount||d.products.length} منتج`);
-        return;
-      }
-      toast('❌ '+d.message,true);
-      return;
-    }catch(_){
-      toast('❌ تعذر حفظ المنتجات',true);
-      return;
-    }
-    toast(`✅ تم استيراد ${scannedData.products.length} منتج — اضغط حفظ`);
-  } else {
-    toast('⚠️ لا توجد منتجات للاستيراد',true);
-  }
-}
-
 function toast(m,e=false){const t=document.getElementById('toast');t.textContent=m;t.className='toast show'+(e?' err':'');setTimeout(()=>t.className='toast',3500);}
 
 // ── COSTS ──
@@ -2209,10 +2002,10 @@ async function loadCosts(){
     const d=await fetch('/api/costs').then(r=>r.json());
     const usd=d.totalCostUSD||0;
     const calls=d.totalCalls||0;
-    // تكلفة AI الحقيقية بالريال (دولار × 3.75 فقط — بدون هامش ربح)
-    const sarTotal=(usd*3.75).toFixed(4);
-    const sarPerMsg=calls>0?((usd/calls)*3.75).toFixed(4):'—';
-    document.getElementById('stCost').textContent=(usd*3.75).toFixed(3)+' ر.س';
+    // تكلفة AI الحقيقية بالريال (دولار × 150)
+    const sarTotal=(usd*150).toFixed(2);
+    const sarPerMsg=calls>0?((usd/calls)*150).toFixed(2):'—';
+    document.getElementById('stCost').textContent=(usd*150).toFixed(2)+' ر.س';
     document.getElementById('stCostCalls').textContent=calls?`(${calls})` :'';
     document.getElementById('costTotal').textContent=sarTotal+' ر.س';
     document.getElementById('costTotalSAR').textContent='بالريال السعودي';
@@ -2224,8 +2017,8 @@ async function loadCosts(){
     for(const[m,v] of Object.entries(d.byModel||{})){
       const row=document.createElement('div');
       row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:var(--card-soft);border:1px solid var(--border);border-radius:9px;padding:9px 13px;font-size:12px;gap:10px;flex-wrap:wrap';
-      const mSar=((v.costUSD||0)*3.75).toFixed(4);
-      const perMsg=v.calls>0?(((v.costUSD||0)/v.calls)*3.75).toFixed(4):'—';
+      const mSar=((v.costUSD||0)*150).toFixed(2);
+      const perMsg=v.calls>0?(((v.costUSD||0)/v.calls)*150).toFixed(2):'—';
       row.innerHTML=`<span style="color:var(--text);font-weight:700">${esc(m)}</span><span style="color:var(--text-soft)">${v.calls} رسالة</span><span style="color:var(--indigo);font-size:11px;font-weight:600">${perMsg} ر.س/رسالة</span><span style="color:var(--amber);font-weight:800">${mSar} ر.س</span>`;
       bm.appendChild(row);
     }
@@ -2237,47 +2030,45 @@ async function resetCosts(){
   loadCosts();toast('✅ تم تصفير التكلفة');
 }
 
-// ── TRAINING SESSION (4 مراحل، 25 سؤال) ──
+// ── TRAINING SESSION (4 مراحل، أسئلة عميقة) ──
 const TRAIN_PHASES = [
-  { title: 'المرحلة 1 — متجرك وعملاؤك', icon: '🏪', color: '#0ea5e9' },
-  { title: 'المرحلة 2 — أسلوب كتابتك', icon: '✍️', color: '#a855f7' },
-  { title: 'المرحلة 3 — مواقف حقيقية', icon: '🎯', color: '#f59e0b' },
-  { title: 'المرحلة 4 — قواعدك الخاصة', icon: '📋', color: '#25d366' },
+  { title: 'المرحلة 1 — فهم عملاؤك', icon: '🧠', color: '#0ea5e9' },
+  { title: 'المرحلة 2 — أسلوبك الحقيقي', icon: '✍️', color: '#a855f7' },
+  { title: 'المرحلة 3 — مواقف صعبة', icon: '🔥', color: '#f59e0b' },
+  { title: 'المرحلة 4 — حدودك وقراراتك', icon: '⚖️', color: '#25d366' },
 ];
 
 const TRAIN_QS=[
-  // Phase 1
-  {phase:0, q:'ما اسم متجرك وش تبيع بالتحديد؟', hint:'صف منتجاتك أو خدماتك بوضوح'},
-  {phase:0, q:'من هم عملاؤك المعتادون؟ (شباب؟ أهل؟ شركات؟ نساء؟)', hint:'كلما وصفتهم أكثر، فهم البوت أكثر'},
-  {phase:0, q:'ما أكثر سؤال يتكرر من العملاء يومياً؟', hint:'مثال: "كم السعر؟" أو "هل التوصيل مجاني؟"'},
-  {phase:0, q:'ما أكثر مشكلة تواجهها مع العملاء؟', hint:'مثال: يسألون بدون ما يشترون، يطلبون خصومات كثيرة'},
-  {phase:0, q:'ما سياسات التوصيل والإرجاع عندك؟', hint:'اكتب التفاصيل — هذه معلومات يسأل عنها العملاء دايماً'},
-  {phase:0, q:'شو يميز متجرك عن المنافسين؟ ليش يشتري منك العميل؟', hint:'الجودة؟ السعر؟ الخدمة؟ التوصيل السريع؟'},
+  // Phase 1 — فهم عميق للعملاء
+  {phase:0, q:'وصف لي عميلك المثالي — اللي يجي يشتري ويرجع مرة ثانية. كيف يتكلم؟ وش يهمه أكثر شي؟', hint:'فكر في أفضل عميل تعاملت معه وصفه بالتفصيل'},
+  {phase:0, q:'وش الفرق بين العميل اللي يشتري من أول محادثة والعميل اللي يطنش؟ وش تسوي مختلف مع كل واحد؟', hint:'فكر في آخر 10 محادثات — اللي اشترى واللي ما اشترى'},
+  {phase:0, q:'لو عميل راسلك الساعة 2 الليل — وش تحس إنه يتوقع منك؟ وكيف تبي البوت يتعامل معه بهالوقت؟', hint:'التوقعات تختلف حسب الوقت — وضح الفرق'},
+  {phase:0, q:'وش أكثر شي يخلي العميل يثق فيك ويحس إنك فاهمه — من أول رسالة؟', hint:'فكر في اللحظة اللي العميل قال فيها "تمام أبيه" — وش سويت قبلها؟'},
+  {phase:0, q:'لو جاك عميل يسأل نفس السؤال اللي سأله 50 عميل قبله — كيف ترد عليه بحيث يحس إنك مهتم فيه شخصياً؟', hint:'الفرق بين رد آلي ورد إنساني — وش يخليه إنساني؟'},
 
-  // Phase 2
-  {phase:1, q:'كيف ترحب بالعميل لو راسلك أول مرة؟', hint:'اكتب مثال حرفي — كأنك رادّ الحين'},
-  {phase:1, q:'كيف تودّع العميل نهاية المحادثة؟', hint:'اكتب عبارة الوداع اللي تستخدمها دايماً'},
-  {phase:1, q:'طول ردودك عادةً: جملة واحدة؟ جملتين؟ فقرة؟', hint:'مثال: "قصير — جملتين كافيتين"'},
-  {phase:1, q:'تستخدم إيموجي؟ كم وأي نوع؟', hint:'مثال: "إيموجي واحد في الآخر 😊" أو "بدون إيموجي"'},
-  {phase:1, q:'اللهجة: سعودي؟ خليجي؟ مصري؟ فصيح؟', hint:'مثال: "سعودي خفيف — مو ثقيل"'},
-  {phase:1, q:'في عبارات تقولها دايماً؟ اذكرها حرفياً', hint:'مثال: "يسعدني"، "تفضل"، "أكيد"، "خلاص أسوّيها"'},
-  {phase:1, q:'في كلمات أو أسلوب تتجنبه تماماً؟', hint:'مثال: لا "مستحيل"، لا إنجليزي، ما أكذب على العميل'},
+  // Phase 2 — أسلوب التواصل الحقيقي
+  {phase:1, q:'اكتب لي رسالة ترحيب حقيقية — بالضبط كذا كأنك فاتح الواتس ورادّ على عميل جديد الحين', hint:'لا تفكر كثير — اكتب أول شي يجي في بالك'},
+  {phase:1, q:'عميل سألك سؤال وجاوبته، بعدها سكت 5 دقائق. تراسله مرة ثانية ولا تنتظر؟ لو تراسله وش تقول؟', hint:'وضح فلسفتك في المتابعة — متى تدفع ومتى تنتظر'},
+  {phase:1, q:'كيف تفرق بين ردك على عميل يسأل سؤال بسيط (مثل "كم السعر") وعميل يشرح مشكلة طويلة؟', hint:'الطول، النبرة، التفاصيل — وش يتغير؟'},
+  {phase:1, q:'لو عميل أرسل لك رسالة صوتية أو صورة — كيف تتعامل معها عادةً؟ وش تقول له؟', hint:'البوت ما يفهم صوتيات — كيف تبيه يتصرف؟'},
+  {phase:1, q:'اكتب لي 3 ردود مختلفة على "شكراً" من العميل — بالضبط كذا كأنك ترسلها', hint:'التنويع يخلي البوت يبان طبيعي — اكتب 3 نسخ مختلفة'},
+  {phase:1, q:'وش الحد بين إنك تكون ودي ومحترم وبين إنك تكون "زايد" وتخلي العميل يحس بالإزعاج؟', hint:'وضح الخط الأحمر — متى الود يصير مبالغة؟'},
 
-  // Phase 3
-  {phase:2, q:'عميل قال "كم السعر؟" — وش تقول بالضبط؟', hint:'اكتب الرد الكامل اللي ترسله فعلاً'},
-  {phase:2, q:'عميل قال "غالي عليّ" أو طلب خصم — كيف تتعامل؟', hint:'هل تعطي خصم؟ تشرح القيمة؟ تتجنبه؟'},
-  {phase:2, q:'المنتج اللي يبيه ما عندك — كيف ترد؟', hint:'مثال: "آسف ما عندنا، بس عندنا بديل..."'},
-  {phase:2, q:'سأل عن وقت التوصيل — وش تقول؟', hint:'اكتب الرد الاعتيادي حرفياً'},
-  {phase:2, q:'العميل متضايق أو يشكو — كيف تتصرف؟', hint:'صف طريقتك مع العميل الصعب خطوة بخطوة'},
-  {phase:2, q:'"هل أنت بوت أو إنسان؟" — كيف تجاوب؟', hint:'اكتب الرد الحرفي اللي تقوله'},
-  {phase:2, q:'سألك سؤالاً ما تعرف إجابته — كيف تتصرف؟', hint:'مثال: "أبشر أتأكد وأرد عليك"'},
-  {phase:2, q:'عميل جديد قال "عرّفني بكم" — كيف ترد؟', hint:'اكتب رد تعريفي حقيقي كأنك ترسله الحين'},
+  // Phase 3 — مواقف صعبة وحقيقية
+  {phase:2, q:'عميل قال "والله عند المنافس أرخص" — بالضبط كيف ترد؟ اكتب الرد الحرفي', hint:'لا تقول "أشرح القيمة" — اكتب الرد الفعلي كلمة كلمة'},
+  {phase:2, q:'عميل يفاصل ويقول "نزّل السعر وأشتري الحين" — وش حدودك؟ كيف ترفض بدون ما تخسره؟', hint:'اكتب الرد اللي ترسله عادةً في هالموقف'},
+  {phase:2, q:'عميل أرسل رسالة غاضبة وقال "خربتوا طلبي" أو "وين الشحنة تأخرت" — اكتب أول رد ترسله', hint:'أول 10 ثواني هي اللي تحدد إذا العميل يهدى أو يزيد'},
+  {phase:2, q:'عميل يسألك عن شي ما تعرف إجابته وأنت مشغول — وش تقول؟ وكم تأخذ وقت قبل ما ترد عليه؟', hint:'وضح طريقتك بالتأجيل بدون ما العميل يحس إنك مهمله'},
+  {phase:2, q:'عميل يرسل رسائل كثيرة ورا بعض بدون ما ينتظر ردك — كيف تتعامل معه؟', hint:'هل ترد على كل رسالة؟ تجمعها برد واحد؟ تطلب منه ينتظر؟'},
+  {phase:2, q:'عميل يقول "أبي أرجع المنتج" أو يطلب استرجاع — وش أول شي تقوله؟ وكيف تتعامل لو ما ينطبق عليه الشرط؟', hint:'اكتب ردين: واحد لو ينطبق عليه، وواحد لو ما ينطبق'},
+  {phase:2, q:'عميل سألك "هل أنت بوت؟" — كيف ترد بطريقة ما تكذب فيها وما تخسر ثقته؟', hint:'اكتب الرد الحرفي — هالسؤال يجي كثير ولازم الرد يكون طبيعي'},
 
-  // Phase 4
-  {phase:3, q:'في شي ما تبيه البوت يقوله أبداً؟', hint:'مثال: لا يعطي أسعار بدون ما يعرف احتياج العميل'},
-  {phase:3, q:'متى يجب تحويل العميل لك مباشرة؟', hint:'مثال: طلبات كبيرة، شكاوى حادة، طلبات خاصة'},
-  {phase:3, q:'في عروض أو معلومات خاصة تبي البوت يذكرها؟', hint:'مثال: شحن مجاني فوق 200 ريال، خصم 10% للطلب الأول'},
-  {phase:3, q:'آخر شيء: أي تفصيل أو عادة يميّزك في التعامل؟', hint:'أي شيء يجيك في بالك — حتى لو تبدو صغيرة'},
+  // Phase 4 — حدود وقرارات
+  {phase:3, q:'وش الأشياء اللي ما تبي البوت يقولها مهما صار؟ ليش بالضبط؟', hint:'فكر في شي لو البوت قاله ممكن يضرك — أسعار؟ وعود؟ معلومات خاصة؟'},
+  {phase:3, q:'متى بالضبط لازم البوت يوقف ويحولّ المحادثة لك أنت شخصياً؟ وش العلامات؟', hint:'حدد السيناريوهات — مبلغ معين؟ نوع مشكلة؟ كلمات معينة يقولها العميل؟'},
+  {phase:3, q:'لو عميل طلب شي مخصص أو غير موجود — تبي البوت يقول "ما عندنا" ويوقف؟ أو يقترح بديل؟ أو يحولّك؟', hint:'كل خيار له تأثير على المبيعات — وش فلسفتك؟'},
+  {phase:3, q:'وش أهم 3 معلومات تبي البوت يعرفها عن متجرك ويذكرها بشكل طبيعي في المحادثات؟', hint:'العروض؟ الميزة التنافسية؟ سياسة معينة؟ — حدد الأهم'},
+  {phase:3, q:'آخر شي — لو تقدر تقول للبوت جملة وحدة يمشي عليها في كل محادثة، وش تكون؟', hint:'القاعدة الذهبية — الشي اللي لو ماشي عليه كل شي يمشي صح'},
 ];
 
 let trainStep=0, trainAnswers=[];

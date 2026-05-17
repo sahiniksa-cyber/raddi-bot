@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const db = require('../../db/client');
 const Logger = require('../../../lib/logger');
 const AIClient = require('../../../lib/ai-client');
-const { DEFAULT_CONFIG } = require('../../../lib/constants');
+const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../../lib/constants');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
 const { resolveWhatsappEngine } = require('./engine-config');
@@ -102,7 +102,7 @@ class RuntimeBot {
       ? path.join(this.dataDir, 'session')
       : null;
     const connectionDataDir = engine === 'whatsapp-web'
-      ? path.join(process.env.WA_RUNTIME_SESSION_DIR || path.join(os.tmpdir(), 'raddi-wa-sessions'), userId)
+      ? path.join(process.env.WA_RUNTIME_SESSION_DIR || path.join(os.tmpdir(), 'jwab-wa-sessions'), userId)
       : this.dataDir;
     try {
       fs.mkdirSync(connectionDataDir, { recursive: true });
@@ -405,6 +405,16 @@ class RuntimeBot {
     this.costsData.byModel[model].calls++;
     this.costsData.byModel[model].inputTokens += inputTokens || 0;
     this.costsData.byModel[model].outputTokens += outputTokens || 0;
+
+    // Persist to DB for accurate cross-process counting
+    if (db.isConfigured() && this.userId) {
+      const prices = MODEL_PRICES[model] || { in: 0.5, out: 1.5 };
+      const costUsd = ((inputTokens * prices.in) + (outputTokens * prices.out)) / 1_000_000;
+      db.query(
+        'INSERT INTO ai_usage (user_id, model, input_tokens, output_tokens, cost_usd) VALUES ($1, $2, $3, $4, $5)',
+        [this.userId, model, inputTokens || 0, outputTokens || 0, costUsd],
+      ).catch(() => {});
+    }
   }
 
   scheduleWhatsappSessionBackup(reason = 'connected') {
@@ -456,7 +466,7 @@ function cleanupRuntimeStorage(rootDir, currentUserId = '') {
   }
 
   try {
-    const tmpRoot = path.join(os.tmpdir(), 'raddi-wa-sessions');
+    const tmpRoot = path.join(os.tmpdir(), 'jwab-wa-sessions');
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   } catch (_) {}
 }

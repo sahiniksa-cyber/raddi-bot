@@ -9,7 +9,7 @@ const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, enqueueOutgoingWhatsapp } = require('../queues/message-queue');
 const { buildEscalationJobKey } = require('../queues/outgoing-job-key');
 const AIClient = require('../../lib/ai-client');
-const { DEFAULT_CONFIG } = require('../../lib/constants');
+const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { resolveReplyDelayMs } = require('./reply-delay');
@@ -56,6 +56,21 @@ async function updateJobStatus(queueName, jobKey, fields) {
      SET ${assignments.join(', ')}, updated_at = NOW()
      WHERE queue_name = $1 AND job_key = $2`,
     values,
+  );
+}
+
+function computeCostUsd(model, inputTokens, outputTokens) {
+  const prices = MODEL_PRICES[model] || MODEL_PRICES[model.replace(/^(openai|anthropic|google)\//, '')] || { in: 0.5, out: 1.5 };
+  return ((inputTokens * prices.in) + (outputTokens * prices.out)) / 1_000_000;
+}
+
+async function recordAiUsage({ userId, model, inputTokens, outputTokens }) {
+  if (!db.isConfigured() || !userId) return;
+  const costUsd = computeCostUsd(model, inputTokens, outputTokens);
+  await db.query(
+    `INSERT INTO ai_usage (user_id, model, input_tokens, output_tokens, cost_usd)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userId, model, inputTokens || 0, outputTokens || 0, costUsd],
   );
 }
 
@@ -185,7 +200,9 @@ async function processAiReply(job) {
     });
 
     const ai = new AIClient(config, logger, {
-      record: async () => {},
+      record: async (model, inputTokens, outputTokens) => {
+        await recordAiUsage({ userId, model, inputTokens, outputTokens }).catch(() => {});
+      },
     });
 
     const reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0 }) || '').trim();

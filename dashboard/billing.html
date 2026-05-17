@@ -3,92 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>تفعيل المنصة</title>
-  <link rel="stylesheet" href="https://cdn.moyasar.com/mpf/1.15.0/moyasar.css">
-  <script src="https://cdn.moyasar.com/mpf/1.15.0/moyasar.js"></script>
+  <title>تفعيل المنصة — جواب</title>
   <style>
-    body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#eef6f1;color:#14213d;min-height:100vh;padding:18px}
-    .wrap{width:min(1060px,100%);margin:0 auto;display:grid;grid-template-columns:.9fr 1.1fr;gap:18px;align-items:start}
-    .box,.pay{background:#fff;border:1px solid #dfe7e3;border-radius:10px;padding:28px;box-shadow:0 18px 55px rgba(20,33,61,.08)}
-    h1{margin:0 0 8px;font-size:25px}.muted{color:#64748b;line-height:1.8}.price{font-size:42px;font-weight:900;margin:24px 0 8px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}button,input{border-radius:8px;border:1px solid #dfe7e3;padding:12px 14px;font:inherit}
-    input{flex:1;min-width:220px;direction:ltr}button{cursor:pointer;font-weight:800;background:#13251f;color:#fff}.ghost{background:#fff;color:#13251f}
-    .note,.status{background:#f1f8f5;border:1px solid #cfe8dd;padding:13px;border-radius:8px;margin-top:18px;color:#36594a;line-height:1.8}
-    .status.err{background:#fff1f1;border-color:#f3cccc;color:#8a2e2e}.mysr-form{margin-top:14px}.hidden{display:none}
-    @media(max-width:850px){.wrap{grid-template-columns:1fr}.box,.pay{padding:20px}}
+    body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#f9f9fb;color:#14213d;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:24px;padding:48px 36px;max-width:480px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(20,33,61,.08)}
+    .icon{font-size:64px;margin-bottom:18px}
+    h1{margin:0 0 12px;font-size:24px;font-weight:900;color:#1a1a1a}
+    .desc{color:#64748b;line-height:1.9;font-size:14px;margin-bottom:28px}
+    .code-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:20px;margin-bottom:20px}
+    .code-box label{display:block;font-size:13px;color:#15803d;font-weight:700;margin-bottom:10px}
+    .code-row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+    input{border-radius:10px;border:1px solid #e5e7eb;padding:12px 14px;font:inherit;flex:1;min-width:180px;max-width:240px;direction:ltr;text-align:center;font-size:16px}
+    input:focus{outline:none;border-color:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.12)}
+    button{border-radius:10px;border:1px solid #e5e7eb;padding:12px 20px;font:inherit;cursor:pointer;font-weight:800;background:#1a1a1a;color:#fff;transition:all .18s}
+    button:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(26,26,26,.15)}
+    .ghost{background:#fff;color:#1a1a1a;font-weight:700}
+    .ghost:hover{background:#f8fafc}
+    .status{padding:12px;border-radius:10px;margin-top:14px;font-size:13px;line-height:1.7;display:none}
+    .status.show{display:block}
+    .status.err{background:#fef2f2;border:1px solid #fecaca;color:#dc2626}
+    .status.ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d}
+    .links{margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <section class="box">
-      <h1>تفعيل استخدام المنصة</h1>
-      <p class="muted">شراء المنصة يتم مرة واحدة. بعد التفعيل تقدر تستخدم لوحة التحكم وربط الواتساب والردود الذكية.</p>
-      <div class="price" id="price">1750 ريال</div>
-      <p class="muted">قد يتم احتساب تكلفة شهرية حسب عدد الرسائل المرسلة، وتظهر لك كتوضيح منفصل.</p>
-      <div class="note">إذا عندك كود تفعيل من المالك، استخدمه هنا ويدخل الحساب بدون دفع.</div>
-      <div class="row">
-        <input id="code" placeholder="كود تفعيل من المالك">
-        <button class="ghost" onclick="applyCode()">تفعيل بالكود</button>
+  <div class="card">
+    <div class="icon">📞</div>
+    <h1>المنصة تحتاج تفعيل</h1>
+    <p class="desc">لاستخدام منصة جواب، تواصل مع خدمة العملاء للحصول على كود التفعيل ومعرفة تفاصيل الاشتراك.</p>
+
+    <div class="code-box">
+      <label>عندك كود تفعيل؟</label>
+      <div class="code-row">
+        <input id="code" placeholder="أدخل الكود هنا">
+        <button onclick="applyCode()">تفعيل</button>
       </div>
-      <div class="row">
-        <button onclick="location.href='/login'">تغيير الحساب</button>
-      </div>
-      <div class="status hidden" id="message"></div>
-    </section>
-    <section class="pay">
-      <h1>الدفع</h1>
-      <p class="muted">ادفع بالبطاقة أو Apple Pay من نفس الموقع. بعد نجاح العملية يرجعك النظام ويفعل حسابك تلقائياً.</p>
-      <div id="paymentStatus" class="status">جاري تجهيز الدفع...</div>
-      <div class="mysr-form"></div>
-    </section>
-  </main>
+    </div>
+
+    <div class="status" id="message"></div>
+
+    <div class="links">
+      <button class="ghost" onclick="location.href='/login'">تغيير الحساب</button>
+    </div>
+  </div>
+
 <script>
-let billingSettings=null;
-function showMessage(text,err=false){const el=document.getElementById('message');el.textContent=text;el.className='status'+(err?' err':'')}
-function formatSar(halalas){return (Number(halalas||0)/100).toLocaleString('ar-SA',{minimumFractionDigits:0,maximumFractionDigits:2})+' ريال'}
-async function loadBilling(){
+async function init(){
   const qs=new URLSearchParams(location.search);
-  if(qs.get('payment')==='failed')showMessage('لم تكتمل عملية الدفع. جرّب مرة ثانية أو استخدم بطاقة مختلفة.',true);
-  if(qs.get('payment')==='mismatch')showMessage('عملية الدفع لا تطابق هذا الحساب. سجل دخول بالحساب الصحيح.',true);
   const r=await fetch('/api/billing/state');
   if(r.status===401){location.href='/login';return}
   const d=await r.json();
-  billingSettings=d.settings||{};
-  document.getElementById('price').textContent=formatSar(billingSettings.platformAccessPriceHalalas);
   if(d.state?.accessActive){location.href='/';return}
-  initMoyasar();
 }
-function initMoyasar(){
-  const status=document.getElementById('paymentStatus');
-  if(!billingSettings.moyasarEnabled){
-    status.textContent='الدفع الإلكتروني ينتظر مفاتيح Moyasar من المالك. تقدر تستخدم كود التفعيل إذا كان عندك.';
-    status.className='status err';
-    return;
-  }
-  if(!window.Moyasar){
-    status.textContent='تعذر تحميل نموذج الدفع. حدّث الصفحة وحاول مرة ثانية.';
-    status.className='status err';
-    return;
-  }
-  status.textContent='اختر طريقة الدفع المناسبة لك.';
-  Moyasar.init({
-    element: '.mysr-form',
-    amount: billingSettings.platformAccessPriceHalalas,
-    currency: billingSettings.currency || 'SAR',
-    description: 'Raddi platform access',
-    publishable_api_key: billingSettings.moyasarPublishableKey,
-    callback_url: billingSettings.callbackUrl,
-    supported_networks: ['visa','mastercard','mada'],
-    methods: ['creditcard','applepay'],
-    fixed_width: false,
-    metadata: { user_id: billingSettings.userId || '' },
-    credit_card: { save_card: false },
-    apple_pay: {
-      country: 'SA',
-      label: billingSettings.moyasarApplePayLabel || 'Raddi',
-      validate_merchant_url: 'https://api.moyasar.com/v1/applepay/initiate'
-    }
-  });
+function showMessage(text,err=false){
+  const el=document.getElementById('message');
+  el.textContent=text;
+  el.className='status show'+(err?' err':' ok');
 }
 async function applyCode(){
   const code=document.getElementById('code').value.trim();
@@ -98,7 +68,7 @@ async function applyCode(){
   if(d.success){location.href='/'}
   else showMessage(d.message||'كود التفعيل غير صحيح',true);
 }
-loadBilling().catch(()=>showMessage('تعذر تجهيز صفحة الدفع',true));
+init().catch(()=>showMessage('تعذر تحميل الصفحة',true));
 </script>
 </body>
 </html>

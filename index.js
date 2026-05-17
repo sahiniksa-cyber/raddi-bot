@@ -1,5 +1,5 @@
 /**
- * ردّي — بوت واتساب ذكي لخدمة العملاء
+ * جواب — بوت واتساب ذكي لخدمة العملاء
  *
  * Modular Architecture v2.0
  * ─────────────────────────
@@ -600,10 +600,10 @@ async function sendVerificationEmail(email, name, code) {
   const from = process.env.SMTP_FROM || process.env.SMTP_USER;
   try {
     await transport.sendMail({
-      from: `"ردّي" <${from}>`, to: email,
-      subject: `${code} — رمز التحقق من ردّي`,
+      from: `"جواب" <${from}>`, to: email,
+      subject: `${code} — رمز التحقق من جواب`,
       html: `<div dir="rtl" style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:28px;background:#0a0e1a;color:#e2e8f0;border-radius:16px">
-        <h2 style="color:#25d366;margin-bottom:6px">ردّي 🤖</h2>
+        <h2 style="color:#25d366;margin-bottom:6px">جواب 🤖</h2>
         <p style="color:#94a3b8;margin-bottom:20px">مرحباً ${name}،</p>
         <p style="margin-bottom:16px">رمز التحقق من حسابك:</p>
         <div style="background:#1e293b;border:2px solid #25d366;border-radius:12px;padding:20px;text-align:center;margin-bottom:20px">
@@ -1207,8 +1207,8 @@ app.post('/api/train-analyze', async (req, res) => {
 // ██  SERVER START
 // ══════════════════════════════════════════════════════════════════════
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('🌐 ردّي — لوحة التحكم: http://localhost:' + PORT));
-console.log('🚀 ردّي جاهز — اضغط "تشغيل البوت" للبدء');
+app.listen(PORT, () => console.log('🌐 جواب — لوحة التحكم: http://localhost:' + PORT));
+console.log('🚀 جواب جاهز — اضغط "تشغيل البوت" للبدء');
 
 // ─── AUTO-FIX CONNECTING STATUS ──────────────────────────────────────
 setInterval(async () => {

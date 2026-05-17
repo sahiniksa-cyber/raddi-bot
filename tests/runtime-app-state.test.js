@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const { RuntimeBot } = require('../src/services/bot/runtime-bot');
 
 test('appState exposes connection diagnostics used by dashboard and workers', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'raddi-runtime-state-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-runtime-state-'));
   const bot = new RuntimeBot('user-1', {
     dataDir: tmp,
     logger: {

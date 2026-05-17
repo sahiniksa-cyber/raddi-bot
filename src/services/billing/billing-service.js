@@ -22,6 +22,24 @@ function halalasToSar(value) {
 
 function buildAdminCustomerRow(row = {}) {
   const accessStatus = normalizeAccessStatus(row.platform_access_status);
+  let accessActive = isActiveAccess(accessStatus);
+
+  // Check expiry
+  const accessExpiresAt = row.access_expires_at || null;
+  if (accessActive && accessExpiresAt) {
+    const expiresAt = new Date(accessExpiresAt);
+    if (expiresAt <= new Date()) {
+      accessActive = false;
+    }
+  }
+
+  // Calculate remaining days
+  let remainingDays = null;
+  if (accessExpiresAt) {
+    const diff = new Date(accessExpiresAt) - new Date();
+    remainingDays = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+  }
+
   return {
     userId: row.id || row.user_id,
     name: row.name || '',
@@ -29,7 +47,7 @@ function buildAdminCustomerRow(row = {}) {
     role: row.role || 'user',
     createdAt: row.created_at || null,
     accessStatus,
-    accessActive: isActiveAccess(accessStatus),
+    accessActive,
     activationSource: row.activation_source || 'none',
     receivableHalalas: Number(row.receivable_halalas || 0),
     receivableSar: halalasToSar(row.receivable_halalas),
@@ -39,6 +57,8 @@ function buildAdminCustomerRow(row = {}) {
     lastPaymentAt: row.last_payment_at || null,
     whatsappStatus: row.whatsapp_status || 'stopped',
     whatsappPhone: row.whatsapp_phone || '',
+    accessExpiresAt,
+    remainingDays,
   };
 }
 
@@ -76,13 +96,24 @@ async function ensureBillingAccount(userId, settings = {}) {
 
 async function getUserBillingState(userId, settings = {}) {
   const account = await ensureBillingAccount(userId, settings);
+  let accessActive = isActiveAccess(account.platform_access_status);
+
+  // Check if access has expired
+  if (accessActive && account.access_expires_at) {
+    const expiresAt = new Date(account.access_expires_at);
+    if (expiresAt <= new Date()) {
+      accessActive = false;
+    }
+  }
+
   return {
     accessStatus: normalizeAccessStatus(account.platform_access_status),
-    accessActive: isActiveAccess(account.platform_access_status),
+    accessActive,
     activationSource: account.activation_source,
     receivableHalalas: Number(account.receivable_halalas || 0),
     messagePriceHalalas: Number(account.message_price_halalas || 0),
     autoRenewEnabled: !!account.auto_renew_enabled,
+    accessExpiresAt: account.access_expires_at || null,
   };
 }
 
@@ -96,6 +127,7 @@ async function listAdminCustomers() {
        COALESCE(ba.message_price_halalas, 0) AS message_price_halalas,
        COALESCE(ba.internal_note, '') AS internal_note,
        ba.last_payment_at,
+       ba.access_expires_at,
        COALESCE(ws.status, 'stopped') AS whatsapp_status,
        COALESCE(ws.phone, '') AS whatsapp_phone
      FROM users u
@@ -267,7 +299,48 @@ async function updateAutoRenew(userId, enabled) {
   return result.rows[0];
 }
 
+async function setAccessExpiry(userId, days, note = '') {
+  const expiresAt = days ? new Date(Date.now() + days * 24 * 60 * 60 * 1000) : null;
+  const result = await db.query(
+    `INSERT INTO billing_accounts (user_id, access_expires_at, internal_note)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id) DO UPDATE SET
+       access_expires_at = EXCLUDED.access_expires_at,
+       internal_note = CASE WHEN EXCLUDED.internal_note = '' THEN billing_accounts.internal_note ELSE EXCLUDED.internal_note END
+     RETURNING *`,
+    [userId, expiresAt, note],
+  );
+  await recordBillingEvent(userId, 'access_expiry_set', { days, expiresAt, note });
+  return result.rows[0];
+}
+
+async function redeemCoupon(userId, code) {
+  const result = await db.query(
+    `SELECT * FROM coupons WHERE code = $1 AND active = TRUE LIMIT 1`,
+    [String(code || '').trim()],
+  );
+  const coupon = result.rows[0];
+  if (!coupon) return { redeemed: false };
+  if (coupon.uses_count >= coupon.max_uses) return { redeemed: false };
+
+  // Increment uses
+  await db.query('UPDATE coupons SET uses_count = uses_count + 1 WHERE id = $1', [coupon.id]);
+
+  // Grant access based on type
+  if (coupon.type === 'free_activation' || coupon.type === 'discount_percent') {
+    await grantFreeAccess(userId, `coupon:${coupon.code}`);
+  }
+
+  await recordBillingEvent(userId, 'coupon_redeemed', { couponId: coupon.id, code: coupon.code, type: coupon.type });
+  return { redeemed: true, type: coupon.type };
+}
+
 async function activateWithCode(userId, code, settings = {}) {
+  // First check coupons table
+  const couponResult = await redeemCoupon(userId, code);
+  if (couponResult.redeemed) return { activated: true };
+
+  // Fall back to static activation codes
   if (!isValidActivationCode(code, settings)) return { activated: false };
   await grantFreeAccess(userId, 'activation code');
   return { activated: true };
@@ -288,6 +361,8 @@ module.exports = {
   normalizeAccessStatus,
   paymentAlreadyUsedByAnotherUser,
   reactivateAccess,
+  redeemCoupon,
+  setAccessExpiry,
   suspendAccess,
   updateAutoRenew,
   updateReceivable,

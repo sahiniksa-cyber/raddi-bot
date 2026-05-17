@@ -52,6 +52,7 @@ function createAuthController() {
     async register(req, res) {
       try {
         const name = String(req.body.name || '').trim();
+        const phone = String(req.body.phone || '').trim();
         const email = String(req.body.email || '').trim().toLowerCase();
         const password = String(req.body.password || '');
         if (!name || !email || password.length < 8) {
@@ -66,10 +67,10 @@ function createAuthController() {
         const hash = await bcrypt.hash(password, 12);
         const id = uuidv4();
         const result = await db.query(
-          `INSERT INTO users (id, email, name, password_hash, role, email_verified)
-           VALUES ($1, $2, $3, $4, $5, TRUE)
+          `INSERT INTO users (id, email, name, phone, password_hash, role, email_verified)
+           VALUES ($1, $2, $3, $4, $5, $6, TRUE)
            RETURNING id, email, name, role`,
-          [id, email, name, hash, role],
+          [id, email, name, phone || null, hash, role],
         );
 
         req.session.userId = id;

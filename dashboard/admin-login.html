@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>دخول الإدارة</title>
+  <style>
+    :root{--bg:#f7faf9;--panel:#fff;--text:#14213d;--muted:#64748b;--border:#dfe7e3;--green:#0f9f6e;--red:#d94b4b}
+    *{box-sizing:border-box}body{margin:0;font-family:Tahoma,Arial,sans-serif;background:var(--bg);color:var(--text);
+      min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:40px 32px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,.06)}
+    h1{font-size:22px;margin:0 0 8px;text-align:center}
+    .sub{font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px}
+    label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px}
+    input[type=password]{width:100%;padding:13px 14px;border:1px solid var(--border);border-radius:10px;font-size:15px;direction:ltr;outline:none}
+    input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(15,159,110,.1)}
+    .btn{width:100%;padding:14px;border:none;border-radius:10px;background:var(--green);color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:18px;font-family:inherit}
+    .btn:hover{opacity:.9}.btn:disabled{opacity:.5;cursor:not-allowed}
+    .error{background:#fdecec;border:1px solid #fecaca;border-radius:10px;padding:11px 14px;font-size:13px;color:var(--red);margin-bottom:14px;display:none;text-align:center}
+    .error.show{display:block}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>لوحة الإدارة</h1>
+    <div class="sub">أدخل كلمة مرور المالك للدخول</div>
+    <div class="error" id="errBox"></div>
+    <div>
+      <label>كلمة المرور</label>
+      <input type="password" id="passInput" placeholder="••••••••" autofocus
+             onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn" id="loginBtn" onclick="doLogin()">دخول</button>
+  </div>
+<script>
+async function doLogin(){
+  const pass=document.getElementById('passInput').value;
+  if(!pass){showErr('أدخل كلمة المرور');return}
+  const btn=document.getElementById('loginBtn');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
+    const d=await r.json();
+    if(d.success){location.href=d.redirect||'/'}
+    else showErr(d.message||'كلمة مرور خاطئة');
+  }catch(_){showErr('تعذر الاتصال بالسيرفر')}
+  finally{btn.disabled=false}
+}
+function showErr(m){const b=document.getElementById('errBox');b.textContent=m;b.className='error show'}
+</script>
+</body>
+</html>

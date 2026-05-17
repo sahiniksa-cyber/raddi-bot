@@ -56,7 +56,7 @@ function getBillingSettings(env = process.env) {
       publishableKey,
       secretKey,
       webhookSecret: String(env.MOYASAR_WEBHOOK_SECRET || '').trim(),
-      applePayLabel: String(env.MOYASAR_APPLE_PAY_LABEL || 'Raddi').trim() || 'Raddi',
+      applePayLabel: String(env.MOYASAR_APPLE_PAY_LABEL || 'Jwab').trim() || 'Jwab',
     },
   };
 }
