@@ -64,6 +64,32 @@ async function getUserBot(userId) {
   return botCache.get(userId);
 }
 
+function createStartupApp(state = {}) {
+  const app = express();
+  app.set('trust proxy', 1);
+
+  app.get('/health', (req, res) => {
+    res.json({
+      ok: true,
+      ready: !!state.ready,
+      phase: state.phase || 'starting',
+      ts: Date.now(),
+    });
+  });
+
+  app.use((req, res, next) => {
+    if (state.app) return state.app(req, res, next);
+    return res.status(503).json({
+      success: false,
+      message: 'الخادم يجهز، حاول بعد لحظات',
+      ready: false,
+      phase: state.phase || 'starting',
+    });
+  });
+
+  return app;
+}
+
 function createApp() {
   ensureDatabaseConfigured();
 
@@ -258,17 +284,46 @@ async function retryMigrate(maxAttempts = 5, delayMs = 3000) {
 async function main() {
   console.log(`${new Date().toISOString()} [server] starting Jwab server...`);
 
-  // Step 1: Run database migrations with retry
-  await retryMigrate();
-
-  cleanupRuntimeStorage(DATA_DIR);
-
-  // Step 2: Create Express app and start listening FIRST (so healthcheck works)
-  const app = createApp();
-  const server = app.listen(PORT, () => console.log(`${new Date().toISOString()} [server] Jwab listening on port ${PORT}`));
-
-  // Step 3: Start outgoing worker AFTER server is up (non-blocking)
+  const startupState = {
+    app: null,
+    ready: false,
+    phase: 'starting',
+  };
+  const app = createStartupApp(startupState);
+  const server = app.listen(PORT, () => console.log(`${new Date().toISOString()} [server] Jwab health listening on port ${PORT}`));
   let outgoingWorker = null;
+
+  const shutdown = async (signal, exitCode = 0) => {
+    console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);
+    server.close(() => {});
+    await outgoingWorker?.close?.().catch(() => {});
+    await db.close().catch(() => {});
+    process.exit(exitCode);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  try {
+    startupState.phase = 'migrating';
+    await retryMigrate();
+
+    startupState.phase = 'loading_app';
+    cleanupRuntimeStorage(DATA_DIR);
+    startupState.app = createApp();
+    startupState.ready = true;
+    startupState.phase = 'ready';
+    console.log(`${new Date().toISOString()} [server] Jwab app ready on port ${PORT}`);
+  } catch (err) {
+    startupState.ready = false;
+    startupState.phase = 'failed';
+    startupState.error = err.message;
+    console.error(`${new Date().toISOString()} [server] startup failed: ${err.stack || err.message}`);
+    await shutdown('startup-failed', 1);
+    return;
+  }
+
+  // Start outgoing worker after the dashboard is available.
   if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {
     try {
       outgoingWorker = createOutgoingWhatsappWorker({ getUserBot });
@@ -278,17 +333,6 @@ async function main() {
       // Don't crash — the web server should still serve healthchecks and the dashboard
     }
   }
-
-  const shutdown = async (signal) => {
-    console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);
-    server.close(() => {});
-    await outgoingWorker?.close?.().catch(() => {});
-    await db.close().catch(() => {});
-    process.exit(0);
-  };
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 if (require.main === module) {
@@ -298,4 +342,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createApp, getUserBot };
+module.exports = { createApp, createStartupApp, getUserBot };
