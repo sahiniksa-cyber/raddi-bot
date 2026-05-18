@@ -447,10 +447,15 @@ class RuntimeBot {
 function cleanupRuntimeStorage(rootDir, currentUserId = '') {
   const usersRoot = path.join(rootDir, 'data');
   const removeTargets = [];
+  const engine = resolveWhatsappEngine(process.env);
+  const removeLegacyWhatsappWebData = engine !== 'whatsapp-web';
 
   const scanUserDir = (userDir) => {
     removeTargets.push(path.join(userDir, 'baileys-session'));
     removeTargets.push(path.join(userDir, '.waweb-cache'));
+    removeTargets.push(path.join(userDir, '.wwebjs_cache'));
+    removeTargets.push(path.join(userDir, '.wwebjs_auth'));
+    if (removeLegacyWhatsappWebData) removeTargets.push(path.join(userDir, 'session'));
   };
 
   try {
