@@ -265,6 +265,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
       if (socketGeneration !== this._socketGeneration) return;
+      if (this.ready || this.status === 'connected') return;
       this._running = false;
       this.start(retryCount + 1).catch((err) => {
         this.log('error', 'connection', `Baileys reconnect failed: ${err.message}`, err);
@@ -301,6 +302,7 @@ class BaileysConnectionManager extends EventEmitter {
       clearTimeout(this._retryTimer);
       this._retryTimer = null;
       this.ready = true;
+      this.lastProbeState = 'CONNECTED';
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
       this.qr = null;
       this.lastError = null;

@@ -147,3 +147,44 @@ test('Baileys manager ignores customer messages older than the current startup w
 
   assert.deepEqual(ingested, []);
 });
+
+test('Baileys manager does not reconnect from a stale timer after it is connected', async () => {
+  const manager = createManager();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  let scheduledCallback = null;
+  let startCalls = 0;
+
+  global.setTimeout = (callback) => {
+    scheduledCallback = callback;
+    return { unref: () => {} };
+  };
+  global.clearTimeout = () => {};
+
+  try {
+    manager._running = true;
+    manager._socketGeneration = 1;
+    manager.status = 'connected';
+    manager.ready = true;
+    manager.sock = {
+      end: () => {},
+      ws: { close: () => {} },
+    };
+    manager.client = { sendMessage: async () => {} };
+    manager.start = async () => {
+      startCalls++;
+      return true;
+    };
+
+    manager.scheduleReconnect(0, 'connectionReplaced', 1);
+
+    manager.status = 'connected';
+    manager.ready = true;
+    await scheduledCallback();
+
+    assert.equal(startCalls, 0);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
