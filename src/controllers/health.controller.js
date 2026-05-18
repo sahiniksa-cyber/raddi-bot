@@ -1,7 +1,30 @@
 'use strict';
 
+const path = require('path');
+
 const db = require('../db/client');
 const redis = require('../queues/redis');
+const { inspectStorageRoot } = require('../services/storage/volume-inspector');
+
+function uniqueRoots(values = []) {
+  return [...new Set(values
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+    .map(value => path.resolve(value)))];
+}
+
+function storageDiagnostics(storageStatus = {}) {
+  const roots = uniqueRoots([
+    storageStatus.path,
+    storageStatus.sessionRoot,
+    process.env.RAILWAY_VOLUME_MOUNT_PATH,
+    process.env.DATA_DIR,
+    path.join(process.cwd(), 'data'),
+    '/data',
+  ]);
+
+  return roots.map(root => inspectStorageRoot(root, { maxEntries: 12 }));
+}
 
 function createHealthController({ storageStatus = null } = {}) {
   return {
@@ -10,7 +33,15 @@ function createHealthController({ storageStatus = null } = {}) {
     },
 
     storage(req, res) {
-      res.json(storageStatus || { persistent: false, warning: 'storageStatus dependency not provided' });
+      const payload = storageStatus || { persistent: false, warning: 'storageStatus dependency not provided' };
+      if (req.query?.inspect !== '1') return res.json(payload);
+      if (!req.session?.userId) {
+        return res.status(401).json({ success: false, message: 'غير مصرح' });
+      }
+      return res.json({
+        ...payload,
+        diagnostics: storageDiagnostics(payload),
+      });
     },
 
     async readiness(req, res) {
