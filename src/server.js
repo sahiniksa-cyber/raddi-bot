@@ -73,6 +73,8 @@ function createStartupApp(state = {}) {
       ok: true,
       ready: !!state.ready,
       phase: state.phase || 'starting',
+      migration: state.migration || null,
+      migrationError: state.migrationError || null,
       ts: Date.now(),
     });
   });
@@ -281,6 +283,24 @@ async function retryMigrate(maxAttempts = 5, delayMs = 3000) {
   }
 }
 
+async function runPostStartupTasks(startupState) {
+  try {
+    cleanupRuntimeStorage(DATA_DIR);
+  } catch (err) {
+    console.error(`${new Date().toISOString()} [server] runtime storage cleanup failed: ${err.message}`);
+  }
+
+  try {
+    startupState.migration = 'running';
+    await retryMigrate();
+    startupState.migration = 'completed';
+  } catch (err) {
+    startupState.migration = 'failed';
+    startupState.migrationError = err.message;
+    console.error(`${new Date().toISOString()} [server] background migration failed: ${err.stack || err.message}`);
+  }
+}
+
 async function main() {
   console.log(`${new Date().toISOString()} [server] starting Jwab server...`);
 
@@ -305,11 +325,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 
   try {
-    startupState.phase = 'migrating';
-    await retryMigrate();
-
     startupState.phase = 'loading_app';
-    cleanupRuntimeStorage(DATA_DIR);
     startupState.app = createApp();
     startupState.ready = true;
     startupState.phase = 'ready';
@@ -322,6 +338,10 @@ async function main() {
     await shutdown('startup-failed', 1);
     return;
   }
+
+  runPostStartupTasks(startupState).catch((err) => {
+    console.error(`${new Date().toISOString()} [server] post-startup task failed: ${err.stack || err.message}`);
+  });
 
   // Start outgoing worker after the dashboard is available.
   if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {

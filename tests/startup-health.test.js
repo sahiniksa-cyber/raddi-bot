@@ -45,3 +45,17 @@ test('startup app holds non-health traffic until the full app is ready', async (
     await close(server);
   }
 });
+
+test('startup app delegates non-health traffic after the full app is attached', async () => {
+  const state = { ready: true, startedAt: 123 };
+  state.app = (req, res) => res.status(204).end();
+  const app = createStartupApp(state);
+  const server = await listen(app);
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/status`);
+
+    assert.equal(res.status, 204);
+  } finally {
+    await close(server);
+  }
+});
