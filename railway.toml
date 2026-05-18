@@ -5,6 +5,6 @@ dockerfilePath = "Dockerfile"
 [deploy]
 startCommand = "npm run start:all"
 restartPolicyType = "ALWAYS"
-restartPolicyMaxRetries = -1
+restartPolicyMaxRetries = 100
 healthcheckPath = "/health"
 healthcheckTimeout = 120
