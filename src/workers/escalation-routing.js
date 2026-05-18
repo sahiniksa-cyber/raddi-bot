@@ -14,6 +14,13 @@ function normalizeEscalationPhone(phone) {
   return `${digits}@c.us`;
 }
 
+function normalizeEscalationTarget(target) {
+  const raw = String(target || '').trim();
+  if (!raw) return null;
+  if (raw.endsWith('@g.us') || raw.endsWith('@c.us') || raw.endsWith('@s.whatsapp.net') || raw.endsWith('@lid')) return raw;
+  return normalizeEscalationPhone(raw);
+}
+
 function extractEscalationRequest(reply) {
   const text = String(reply || '');
   const match = text.match(MARKER_RE);
@@ -93,11 +100,12 @@ function prepareEscalation({ reply, config = {}, customerSender, inboundText }) 
   const shouldSend = explicit || ruleMatched;
   const customerReply = explicit?.customerReply || String(reply || '').trim();
 
-  if (!shouldSend || !contact?.phone) {
+  const contactTarget = contact?.target || contact?.jid || contact?.groupJid || contact?.phone;
+  if (!shouldSend || !contactTarget) {
     return { customerReply, ownerMessage: null };
   }
 
-  const target = normalizeEscalationPhone(contact.phone);
+  const target = normalizeEscalationTarget(contactTarget);
   if (!target) return { customerReply, ownerMessage: null };
 
   const summary = explicit?.summary || `قاعدة التحويل: ${contact.when || contact.role || contact.name || 'متابعة مطلوبة'}`;
@@ -116,5 +124,6 @@ module.exports = {
   buildEscalationNotification,
   extractEscalationRequest,
   normalizeEscalationPhone,
+  normalizeEscalationTarget,
   prepareEscalation,
 };

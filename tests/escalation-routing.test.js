@@ -64,6 +64,25 @@ test('prepareEscalation can route by contact rule when the model omits the marke
   assert.match(result.ownerMessage.reply, /قاعدة التحويل/);
 });
 
+test('prepareEscalation can send owner notifications to a WhatsApp group JID', () => {
+  const config = {
+    escalationContacts: [
+      { name: 'support', phone: '120363123456789012@g.us', role: 'support group', when: 'refund' },
+    ],
+  };
+
+  const result = prepareEscalation({
+    reply: 'I will check that for you',
+    config,
+    customerSender: '966500000000@s.whatsapp.net',
+    inboundText: 'refund please',
+  });
+
+  assert.equal(result.customerReply, 'I will check that for you');
+  assert.equal(result.ownerMessage.sender, '120363123456789012@g.us');
+  assert.match(result.ownerMessage.reply, /refund/);
+});
+
 test('buildEscalationNotification includes customer and problem details', () => {
   const text = buildEscalationNotification({
     contact: { name: 'محمد', role: 'المالك' },

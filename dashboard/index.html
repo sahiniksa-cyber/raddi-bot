@@ -1925,7 +1925,7 @@ function addEscContact(n='',p='',role='',when=''){
   const c=document.getElementById('escContainer'),el=document.createElement('div');
   el.className='esc-card';
   el.style.cssText='background:var(--card-soft);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:8px';
-  el.innerHTML=`<div class="g2"><div><label>الاسم</label><input type="text" class="esc-name" placeholder="مثال: أحمد" value="${esc(n)}"></div><div><label>رقم الواتساب</label><input type="text" class="esc-phone" placeholder="966501234567" value="${esc(p)}" dir="ltr"></div></div><div class="g2"><div><label>الدور/القسم</label><input type="text" class="esc-role" placeholder="مثال: مدير الشحن" value="${esc(role)}"></div><div><label>متى يُحوَّل إليه</label><input type="text" class="esc-when" placeholder="مثال: مشاكل التوصيل والشحن" value="${esc(when)}"></div></div><button class="prod-del" onclick="this.parentElement.remove()">× حذف</button>`;
+  el.innerHTML=`<div class="g2"><div><label>الاسم</label><input type="text" class="esc-name" placeholder="مثال: أحمد" value="${esc(n)}"></div><div><label>رقم واتساب أو معرف قروب</label><input type="text" class="esc-phone" placeholder="966501234567 أو 120363...@g.us" value="${esc(p)}" dir="ltr"></div></div><div class="g2"><div><label>الدور/القسم</label><input type="text" class="esc-role" placeholder="مثال: مدير الشحن" value="${esc(role)}"></div><div><label>متى يُحوَّل إليه</label><input type="text" class="esc-when" placeholder="مثال: مشاكل التوصيل والشحن" value="${esc(when)}"></div></div><button class="prod-del" onclick="this.parentElement.remove()">× حذف</button>`;
   c.appendChild(el);
 }
 

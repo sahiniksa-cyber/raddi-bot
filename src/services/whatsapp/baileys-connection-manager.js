@@ -52,6 +52,12 @@ function toWhatsappWebMessage(msg) {
   };
 }
 
+function timestampToMs(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return value > 1_000_000_000_000 ? value : value * 1000;
+}
+
 class BaileysConnectionManager extends EventEmitter {
   constructor({
     userId,
@@ -90,6 +96,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._qrWatchdogTimer = null;
     this._version = null;
     this._socketGeneration = 0;
+    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
   }
 
   log(level, stage, message, meta) {
@@ -136,6 +143,7 @@ class BaileysConnectionManager extends EventEmitter {
     this.ready = false;
     this.lastError = null;
     this.qr = null;
+    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
     this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
@@ -325,8 +333,17 @@ class BaileysConnectionManager extends EventEmitter {
 
   handleMessages(event) {
     if (!this._running || !Array.isArray(event?.messages)) return;
+    if (event.type && event.type !== 'notify') {
+      this.log('info', 'message', `ignored Baileys ${event.type} message batch`);
+      return;
+    }
     for (const message of event.messages) {
       const msg = toWhatsappWebMessage(message);
+      const messageTimeMs = timestampToMs(msg.timestamp);
+      if (messageTimeMs && messageTimeMs < this.acceptMessagesAfterMs) {
+        this.log('info', 'message', `ignored stale Baileys message ${msg.id?.id || 'unknown'}`);
+        continue;
+      }
       this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg, source: 'baileys' })
         .then(result => this.emit('message_ingested', result))
         .catch(err => {

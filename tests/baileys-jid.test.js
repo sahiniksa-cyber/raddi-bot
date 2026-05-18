@@ -88,3 +88,62 @@ test('Baileys manager schedules only one reconnect for duplicate close updates',
 
   clearTimeout(manager._retryTimer);
 });
+
+test('Baileys manager ignores history sync message batches', async () => {
+  const ingested = [];
+  const manager = new BaileysConnectionManager({
+    userId: 'user-1',
+    dataDir: __dirname,
+    database: {},
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    ingestService: {
+      ingestWhatsappMessage: async (payload) => {
+        ingested.push(payload);
+        return { accepted: true };
+      },
+    },
+  });
+
+  manager._running = true;
+
+  manager.handleMessages({
+    type: 'append',
+    messages: [{
+      key: { id: 'old-1', remoteJid: '966501234567@s.whatsapp.net' },
+      message: { conversation: 'old customer message' },
+      messageTimestamp: Math.floor(Date.now() / 1000),
+    }],
+  });
+
+  assert.deepEqual(ingested, []);
+});
+
+test('Baileys manager ignores customer messages older than the current startup window', async () => {
+  const ingested = [];
+  const manager = new BaileysConnectionManager({
+    userId: 'user-1',
+    dataDir: __dirname,
+    database: {},
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    ingestService: {
+      ingestWhatsappMessage: async (payload) => {
+        ingested.push(payload);
+        return { accepted: true };
+      },
+    },
+  });
+
+  manager._running = true;
+  manager.acceptMessagesAfterMs = Date.now() - 5_000;
+
+  manager.handleMessages({
+    type: 'notify',
+    messages: [{
+      key: { id: 'old-2', remoteJid: '966501234567@s.whatsapp.net' },
+      message: { conversation: 'old customer message' },
+      messageTimestamp: Math.floor((Date.now() - 60 * 60 * 1000) / 1000),
+    }],
+  });
+
+  assert.deepEqual(ingested, []);
+});
