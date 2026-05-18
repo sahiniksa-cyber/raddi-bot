@@ -241,14 +241,43 @@ function asyncRoute(fn) {
   };
 }
 
+async function retryMigrate(maxAttempts = 5, delayMs = 3000) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await migrate();
+      console.log(`${new Date().toISOString()} [server] database migrations completed (attempt ${attempt})`);
+      return;
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [server] migration attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+      if (attempt === maxAttempts) throw err;
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+}
+
 async function main() {
-  await migrate();
+  console.log(`${new Date().toISOString()} [server] starting Jwab server...`);
+
+  // Step 1: Run database migrations with retry
+  await retryMigrate();
+
   cleanupRuntimeStorage(DATA_DIR);
+
+  // Step 2: Create Express app and start listening FIRST (so healthcheck works)
   const app = createApp();
-  const outgoingWorker = process.env.OUTGOING_WORKER_DISABLED === 'true'
-    ? null
-    : createOutgoingWhatsappWorker({ getUserBot });
-  const server = app.listen(PORT, () => console.log(`Jwab src server listening on ${PORT}`));
+  const server = app.listen(PORT, () => console.log(`${new Date().toISOString()} [server] Jwab listening on port ${PORT}`));
+
+  // Step 3: Start outgoing worker AFTER server is up (non-blocking)
+  let outgoingWorker = null;
+  if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {
+    try {
+      outgoingWorker = createOutgoingWhatsappWorker({ getUserBot });
+      console.log(`${new Date().toISOString()} [server] outgoing whatsapp worker started`);
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [server] outgoing worker failed to start: ${err.message}`);
+      // Don't crash — the web server should still serve healthchecks and the dashboard
+    }
+  }
 
   const shutdown = async (signal) => {
     console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);

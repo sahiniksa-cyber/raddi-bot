@@ -7,4 +7,4 @@ startCommand = "npm run start:all"
 restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 100
 healthcheckPath = "/health"
-healthcheckTimeout = 120
+healthcheckTimeout = 300
