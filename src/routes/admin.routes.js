@@ -62,11 +62,11 @@ function createAdminRoutes(deps = {}) {
     return res.json({ success: true, redirect: settings.adminSecretPath });
   });
 
-  router.get(settings.adminSecretPath, requireAuth, requireOwner, (req, res) => {
+  router.get(settings.adminSecretPath, requireOwner, (req, res) => {
     res.sendFile(path.join(dashboardDir, 'admin.html'));
   });
 
-  router.get('/api/admin/customers', requireAuth, requireOwner, async (req, res, next) => {
+  router.get('/api/admin/customers', requireOwner, async (req, res, next) => {
     try {
       res.json({ success: true, customers: await listAdminCustomers() });
     } catch (err) {
@@ -74,7 +74,7 @@ function createAdminRoutes(deps = {}) {
     }
   });
 
-  router.post('/api/admin/customers/:userId/action', requireAuth, requireOwner, async (req, res, next) => {
+  router.post('/api/admin/customers/:userId/action', requireOwner, async (req, res, next) => {
     try {
       const { userId } = req.params;
       const action = String(req.body?.action || '').trim();
@@ -95,7 +95,7 @@ function createAdminRoutes(deps = {}) {
   });
 
   // Set access days for a customer
-  router.post('/api/admin/customers/:userId/set-days', requireAuth, requireOwner, async (req, res, next) => {
+  router.post('/api/admin/customers/:userId/set-days', requireOwner, async (req, res, next) => {
     try {
       const { userId } = req.params;
       const days = parseInt(req.body?.days, 10) || 0;
@@ -109,7 +109,7 @@ function createAdminRoutes(deps = {}) {
   });
 
   // Coupon CRUD
-  router.get('/api/admin/coupons', requireAuth, requireOwner, async (req, res, next) => {
+  router.get('/api/admin/coupons', requireOwner, async (req, res, next) => {
     try {
       const result = await db.query('SELECT * FROM coupons ORDER BY created_at DESC');
       res.json({ success: true, coupons: result.rows });
@@ -118,7 +118,7 @@ function createAdminRoutes(deps = {}) {
     }
   });
 
-  router.post('/api/admin/coupons', requireAuth, requireOwner, async (req, res, next) => {
+  router.post('/api/admin/coupons', requireOwner, async (req, res, next) => {
     try {
       const { code, type, discountPercent, maxUses } = req.body || {};
       if (!code || !code.trim()) return res.status(400).json({ success: false, message: 'كود الكوبون مطلوب' });
@@ -139,7 +139,7 @@ function createAdminRoutes(deps = {}) {
     }
   });
 
-  router.delete('/api/admin/coupons/:id', requireAuth, requireOwner, async (req, res, next) => {
+  router.delete('/api/admin/coupons/:id', requireOwner, async (req, res, next) => {
     try {
       const { id } = req.params;
       await db.query('UPDATE coupons SET active = FALSE WHERE id = $1', [id]);
