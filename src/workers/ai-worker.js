@@ -13,6 +13,7 @@ const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { resolveReplyDelayMs } = require('./reply-delay');
+const { findAutoReply } = require('../services/bot/platform-features');
 
 const WORKER_NAME = 'ai-worker';
 const CONCURRENCY = parseInt(process.env.AI_WORKER_CONCURRENCY || '2', 10);
@@ -191,6 +192,41 @@ async function processAiReply(job) {
       text: payload.text,
     });
     if (!text.trim()) throw new Error('AI job has empty inbound text');
+
+    const instantReply = findAutoReply(config, text);
+    if (instantReply) {
+      const replyMessageId = await storeAssistantMessage({
+        userId,
+        conversationId: conversation.id,
+        sender: conversation.sender,
+        reply: instantReply,
+        jobId: job.id,
+      });
+
+      await enqueueOutgoingWhatsapp({
+        userId,
+        conversationId: conversation.id,
+        messageId: payload.messageId,
+        providerMessageId: payload.providerMessageId,
+        replyMessageId,
+        sender: conversation.sender,
+        reply: instantReply,
+        replyDelayMs: 0,
+        replyDelayPreset: 'instant-keyword',
+        source: 'auto_reply_keyword',
+      }, {
+        jobKey: String(replyMessageId),
+        delay: 0,
+      });
+
+      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+        status: 'completed',
+        finished_at: new Date(),
+        attempts: job.attemptsMade + 1,
+      });
+
+      return { replyMessageId, queuedForSend: true, source: 'auto_reply_keyword' };
+    }
 
     const history = await buildHistoryForReply({
       database: db,

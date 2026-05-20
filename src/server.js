@@ -22,7 +22,9 @@ const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bo
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
+const { findAutoReply } = require('./services/bot/platform-features');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
+const storeScanner = require('../lib/store-scanner');
 
 function resolveDataDir() {
   const configured = (process.env.DATA_DIR || '').trim();
@@ -53,6 +55,20 @@ function requireAuth(req, res, next) {
   if (req.session?.userId) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ success: false, message: 'غير مصرح', redirect: '/login' });
   return res.redirect('/login');
+}
+
+function isPrivateUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(host)) return true;
+    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
+    if (/^169\.254\./.test(host)) return true;
+    return false;
+  } catch (_) {
+    return true;
+  }
 }
 
 async function getUserBot(userId) {
@@ -230,11 +246,137 @@ function createApp() {
   app.post('/api/paused-chats/resume', requireAuth, (req, res) => res.json({ success: true }));
   app.post('/api/test-chat', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
-    const message = String(req.body.message || '').trim();
-    if (!message) return res.status(400).json({ success: false, message: 'رسالة فارغة' });
-    const reply = await bot.getAIReply([{ role: 'user', content: message }], { maxRetries: 0, isFirstMsg: true });
-    res.json({ success: true, reply, source: 'ai', historyLength: 2 });
+    const { sessionId, reset } = req.body || {};
+    const sid = sessionId || 'default';
+    bot.testConversations ||= new Map();
+    if (reset) {
+      bot.testConversations.delete(sid);
+      return res.json({ success: true, reset: true });
+    }
+
+    const incomingMessage = String(req.body.message || '').trim();
+    if (!incomingMessage) return res.status(400).json({ success: false, message: 'رسالة فارغة' });
+
+    const isFirst = !bot.testConversations.has(sid);
+    if (isFirst) bot.testConversations.set(sid, []);
+    const history = bot.testConversations.get(sid);
+
+    const instantReply = findAutoReply(bot.config, incomingMessage);
+    if (instantReply) {
+      history.push({ role: 'user', content: incomingMessage });
+      history.push({ role: 'assistant', content: instantReply });
+      return res.json({ success: true, reply: instantReply, source: 'keyword', historyLength: history.length });
+    }
+
+    const welcomeMode = bot.config.welcomeMode || 'inline';
+    let welcomeShown = false;
+    if (isFirst && welcomeMode === 'separate' && bot.config.welcomeMessage?.trim()) {
+      history.push({ role: 'assistant', content: bot.config.welcomeMessage.trim() });
+      welcomeShown = true;
+    }
+
+    history.push({ role: 'user', content: incomingMessage });
+    const memSize = Math.max(2, parseInt(bot.config.memoryMessages, 10) || 50);
+    if (history.length > memSize) history.splice(0, history.length - memSize);
+
+    const aiReply = await bot.getAIReply(history, { maxRetries: 0, isFirstMsg: isFirst, latestUserText: incomingMessage });
+    history.push({ role: 'assistant', content: aiReply });
+    return res.json({ success: true, reply: aiReply, source: 'ai', historyLength: history.length, welcomeShown });
   }));
+  app.post('/api/learn-style', requireAuth, asyncRoute(async (req, res) => {
+    const bot = await getUserBot(req.session.userId);
+    const result = await db.query(
+      `SELECT content
+       FROM messages
+       WHERE user_id = $1
+         AND direction = 'outbound'
+         AND role = 'assistant'
+         AND length(trim(content)) > 8
+       ORDER BY created_at DESC
+       LIMIT 80`,
+      [req.session.userId],
+    );
+    const sample = result.rows.map(row => String(row.content || '').trim()).filter(Boolean).reverse();
+    if (sample.length < 5) {
+      return res.json({ success: false, message: `محادثات غير كافية (${sample.length} رد)` });
+    }
+
+    const { openai, model } = bot.buildAIClient();
+    const aiResult = await openai.chat.completions.create({
+      model,
+      max_tokens: 1400,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: 'أنت خبير في تحليل أسلوب ردود خدمة العملاء. استخرج تعليمات عملية دقيقة تجعل البوت يكتب بنفس الأسلوب، مع ذكر النبرة، اللهجة، طول الرد، الإيموجي، الترحيب، الخاتمة، والعبارات التي يجب تجنبها. أعد التعليمات فقط.' },
+        { role: 'user', content: `${sample.length} رد سابق:\n\n${sample.map((reply, i) => `[${i + 1}] ${reply}`).join('\n\n')}` },
+      ],
+    });
+    if (aiResult.usage) bot.recordUsage(model, aiResult.usage.prompt_tokens || 0, aiResult.usage.completion_tokens || 0);
+    const instructions = aiResult.choices[0]?.message?.content?.trim();
+    if (!instructions) return res.json({ success: false, message: 'فشل التحليل' });
+    res.json({ success: true, instructions, sampledCount: sample.length });
+  }));
+
+  app.post('/api/enhance-text', requireAuth, asyncRoute(async (req, res) => {
+    const bot = await getUserBot(req.session.userId);
+    const { text, type, storeName } = req.body || {};
+    const sourceText = String(text || '').trim();
+    if (sourceText.length < 3) return res.status(400).json({ success: false, message: 'النص قصير' });
+
+    const { openai, model } = bot.buildAIClient();
+    const prompts = {
+      welcome: `حسّن رسالة الترحيب لمتجر "${storeName || bot.config.storeName || 'المتجر'}" لتكون واضحة وطبيعية ومناسبة لواتساب. لا تذكر AI أو بوت. أعد النص فقط.`,
+      description: 'حوّل وصف المتجر إلى وصف واضح ومفيد للذكاء الاصطناعي: ماذا يبيع المتجر، لمن، أهم المزايا، وأي حدود مهمة. لا تجعله تسويقياً مبالغاً فيه. أعد الوصف فقط.',
+      instructions: 'حوّل النص إلى تعليمات تشغيل دقيقة للذكاء الاصطناعي يفهم منها الحقائق والقواعد والحدود وطريقة الرد. لا تزيّن الكلام ولا تضف معلومات غير مذكورة. رتّبها كنقاط عملية واضحة. أعد التعليمات فقط.',
+      reply: 'حسّن الرد ليكون طبيعياً وواضحاً على واتساب، بدون Markdown وبدون ادعاءات جديدة. أعد الرد فقط.',
+      general: 'حسّن النص ليكون واضحاً وسهل الفهم للذكاء الاصطناعي، بدون إضافة معلومات غير موجودة. أعد النص فقط.',
+    };
+    const aiResult = await openai.chat.completions.create({
+      model,
+      max_tokens: 700,
+      temperature: 0.4,
+      messages: [
+        { role: 'system', content: prompts[type] || prompts.general },
+        { role: 'user', content: sourceText },
+      ],
+    });
+    if (aiResult.usage) bot.recordUsage(model, aiResult.usage.prompt_tokens || 0, aiResult.usage.completion_tokens || 0);
+    const enhanced = aiResult.choices[0]?.message?.content?.trim()?.replace(/^["'`]|["'`]$/g, '');
+    if (!enhanced) return res.json({ success: false, message: 'فشل التحسين' });
+    res.json({ success: true, text: enhanced });
+  }));
+
+  app.post('/api/scan-store', requireAuth, asyncRoute(async (req, res) => {
+    const bot = await getUserBot(req.session.userId);
+    const { url, sallaToken, zidToken, zidManagerToken } = req.body || {};
+    if (!url || !String(url).startsWith('http')) return res.status(400).json({ success: false, message: 'رابط غير صحيح' });
+    if (isPrivateUrl(url)) return res.status(400).json({ success: false, message: 'رابط غير مسموح' });
+    const result = await storeScanner.scanStore(url, { sallaToken, zidToken, zidManagerToken, logger: bot.logger });
+    res.json({ success: true, ...result });
+  }));
+
+  app.post('/api/train-analyze', requireAuth, asyncRoute(async (req, res) => {
+    const bot = await getUserBot(req.session.userId);
+    const answers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+    if (answers.length < 10) return res.status(400).json({ success: false, message: 'يجب الإجابة على 10 أسئلة على الأقل' });
+
+    const qa = answers.map((answer, i) => `س${i + 1}: ${answer.q}\nج${i + 1}: ${answer.a}`).join('\n\n');
+    const { openai, model } = bot.buildAIClient();
+    const aiResult = await openai.chat.completions.create({
+      model,
+      max_tokens: 1800,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: 'أنت خبير في بناء تعليمات بوت واتساب لخدمة العملاء. بناء على إجابات صاحب المتجر، اكتب برومنت عملي واضح للذكاء الاصطناعي يشمل الشخصية، طريقة الترحيب، اللهجة، طول الرد، الإيموجي، التعامل مع الاعتراضات، الممنوعات، ومتى يتم التصعيد. أعد البرومنت فقط.' },
+        { role: 'user', content: `إجابات صاحب المتجر:\n\n${qa}` },
+      ],
+    });
+    if (aiResult.usage) bot.recordUsage(model, aiResult.usage.prompt_tokens || 0, aiResult.usage.completion_tokens || 0);
+    const instructions = aiResult.choices[0]?.message?.content?.trim();
+    if (!instructions) return res.json({ success: false, message: 'فشل التحليل' });
+    res.json({ success: true, instructions });
+  }));
+
   app.post('/api/health-check', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     res.json({ success: true, checks: [

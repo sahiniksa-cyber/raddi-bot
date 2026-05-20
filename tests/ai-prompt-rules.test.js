@@ -49,3 +49,36 @@ test('prompt makes escalation marker mandatory when escalation contacts exist', 
   assert.match(prompt, /يجب/);
   assert.match(prompt, /0562529945/);
 });
+
+test('long custom instructions still include dashboard reply controls', () => {
+  const ai = createClient({
+    botInstructions: 'تعليمات المالك '.repeat(40),
+    responseLanguage: 'العربية الفصحى السهلة',
+    maxResponseLength: 120,
+    replyStyle: {
+      employeeName: 'سارة',
+      tone: 'رسمي ومحترف',
+      languageStyle: 'standard',
+      useDialect: false,
+      dialect: 'السعودية النجدية',
+      emojiLevel: 'none',
+      replyLength: 'short',
+      useShortReplies: true,
+      greetingPhrases: ['مرحباً بك'],
+      closingPhrases: ['يسعدني خدمتك'],
+      avoidWords: ['بوت'],
+    },
+  });
+
+  const prompt = ai.buildSystemPrompt([{ role: 'user', content: 'السلام عليكم' }], {});
+
+  assert.match(prompt, /تعليمات المالك/);
+  assert.match(prompt, /سارة/);
+  assert.match(prompt, /رسمي ومحترف/);
+  assert.match(prompt, /العربية الفصحى السهلة/);
+  assert.match(prompt, /بدون إيموجي/);
+  assert.match(prompt, /قصير/);
+  assert.match(prompt, /مرحباً بك/);
+  assert.match(prompt, /يسعدني خدمتك/);
+  assert.match(prompt, /120/);
+});
