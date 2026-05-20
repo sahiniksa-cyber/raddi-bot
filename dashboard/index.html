@@ -964,7 +964,12 @@ body{background-attachment:scroll}
         <div><label>اسم المتجر</label><input type="text" id="storeName" placeholder="متجري"></div>
         <div><label>ساعات العمل</label><input type="text" id="workHours" placeholder="السبت-الخميس 9ص-10م"></div>
       </div>
-      <div><label>وصف المتجر</label><input type="text" id="storeDesc" placeholder="ماذا تبيع؟"></div>
+      <div>
+        <label>وصف المتجر
+          <button class="enhance-btn" onclick="enhanceText('storeDesc','description')" type="button">✨ تحسين للذكاء</button>
+        </label>
+        <input type="text" id="storeDesc" placeholder="ماذا تبيع؟">
+      </div>
       <div>
         <label>رسالة الترحيب
           <button class="enhance-btn" onclick="enhanceText('welcomeMsg','welcome')" type="button">✨ تحسين بالذكاء</button>
