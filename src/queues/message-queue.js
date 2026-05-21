@@ -128,7 +128,7 @@ function buildAiReplyQueueOptions(payload = {}, options = {}) {
   const debounce = options.debounce !== false;
   const conversationId = payload.conversationId || options.conversationId;
   const fallbackKey = options.jobKey || payload.messageId || conversationId;
-  const jobKey = debounce && conversationId ? `conversation:${conversationId}` : fallbackKey;
+  const jobKey = debounce && conversationId ? `conversation-${conversationId}` : fallbackKey;
   return {
     jobKey,
     jobId: jobKey,

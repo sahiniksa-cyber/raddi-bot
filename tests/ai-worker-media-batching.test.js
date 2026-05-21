@@ -16,8 +16,9 @@ test('buildAiReplyQueueOptions debounces AI jobs per conversation', () => {
     messageId: 'msg-1',
   });
 
-  assert.equal(options.jobId, 'conversation:conv-1');
-  assert.equal(options.jobKey, 'conversation:conv-1');
+  assert.equal(options.jobId, 'conversation-conv-1');
+  assert.equal(options.jobKey, 'conversation-conv-1');
+  assert.doesNotMatch(options.jobId, /:/);
   assert.equal(options.delay > 0, true);
 });
 

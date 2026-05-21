@@ -138,7 +138,7 @@ class MessageIngestService {
       hasMedia: !!media,
       media,
     }, {
-      jobKey: `conversation:${saved.conversationId}`,
+      jobKey: `conversation-${saved.conversationId}`,
     });
 
     this.logger.info?.('message', `queued inbound message ${providerMessageId} from ${sender}`);

@@ -170,6 +170,7 @@ function createApp() {
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup });
   const wrapConfigController = require('./controllers/config.controller').createConfigController({ getUserBot: syncBotLookup });
+  const wrapConversationsController = require('./controllers/conversations.controller').createConversationsController({ database: db });
 
   app.get('/api/status', requireAuth, asyncRoute(async (req, res) => wrapBotController.status(req, res)));
   app.get('/api/qr', requireAuth, asyncRoute(async (req, res) => wrapBotController.qr(req, res)));
@@ -180,6 +181,7 @@ function createApp() {
   app.post('/api/bot/clear-session', requireAuth, asyncRoute(async (req, res) => wrapBotController.clearSession(req, res)));
   app.post('/api/send-message', requireAuth, asyncRoute(async (req, res) => wrapBotController.sendMessage(req, res)));
   app.get('/api/config', requireAuth, asyncRoute(async (req, res) => wrapConfigController.getConfig(req, res)));
+  app.get('/api/conversations', requireAuth, asyncRoute(async (req, res) => wrapConversationsController.list(req, res)));
   app.post('/api/config', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const incoming = req.body || {};
