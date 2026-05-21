@@ -24,6 +24,7 @@ const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { findAutoReply } = require('./services/bot/platform-features');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
+const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
 const storeScanner = require('../lib/store-scanner');
 
 function resolveDataDir() {
@@ -438,6 +439,10 @@ async function runPostStartupTasks(startupState) {
     startupState.migration = 'running';
     await retryMigrate();
     startupState.migration = 'completed';
+    const recovered = await recoverQueuedAiReplyJobs();
+    if (recovered.recovered > 0) {
+      console.log(`${new Date().toISOString()} [server] recovered ${recovered.recovered} queued AI reply jobs`);
+    }
   } catch (err) {
     startupState.migration = 'failed';
     startupState.migrationError = err.message;
