@@ -14,6 +14,10 @@ const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { resolveReplyDelayMs } = require('./reply-delay');
 const { findAutoReply } = require('../services/bot/platform-features');
+const {
+  OpenAIMediaAnalyzer,
+  buildMediaAnalysisText,
+} = require('../services/ai/openai-media-analysis');
 
 const WORKER_NAME = 'ai-worker';
 const CONCURRENCY = parseInt(process.env.AI_WORKER_CONCURRENCY || '2', 10);
@@ -118,6 +122,102 @@ async function loadInboundMessage({ userId, messageId, text }) {
   return result.rows[0]?.content || '';
 }
 
+async function loadPendingInboundMessages({
+  database = db,
+  userId,
+  conversationId,
+  fallbackMessageId,
+  fallbackText,
+  limit = 20,
+}) {
+  if (!conversationId || !userId) {
+    return fallbackText ? [{ id: fallbackMessageId, content: fallbackText, raw_payload: {} }] : [];
+  }
+
+  const result = await database.query(
+    `WITH last_assistant AS (
+       SELECT MAX(created_at) AS created_at
+       FROM messages
+       WHERE conversation_id = $1
+         AND user_id = $2
+         AND direction = 'outbound'
+         AND role = 'assistant'
+     )
+     SELECT id, content, provider_message_id, raw_payload
+     FROM messages
+     WHERE conversation_id = $1
+       AND user_id = $2
+       AND direction = 'inbound'
+       AND status IN ('queued_for_ai', 'ai_failed')
+       AND created_at > COALESCE((SELECT created_at FROM last_assistant), '-infinity'::timestamptz)
+     ORDER BY created_at ASC
+     LIMIT $3`,
+    [conversationId, userId, limit],
+  );
+
+  if (result.rows.length > 0) return result.rows;
+  return fallbackText ? [{ id: fallbackMessageId, content: fallbackText, raw_payload: {} }] : [];
+}
+
+function buildCombinedInboundText(messages = []) {
+  const parts = messages
+    .map(message => String(message.content || '').trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) return parts[0] || '';
+  return [
+    'رسائل العميل المتتالية. أجب عليها كلها في رد واحد واضح:',
+    ...parts.map((text, index) => `${index + 1}. ${text}`),
+  ].join('\n');
+}
+
+async function enrichInboundMessagesWithMedia({ messages = [], analyzer, recordUsage = null }) {
+  const enriched = [];
+  for (const message of messages) {
+    const raw = message.raw_payload || {};
+    const media = raw.media || null;
+    if (!media?.data || !analyzer) {
+      enriched.push(message);
+      continue;
+    }
+
+    const result = await analyzer.analyze(media, { customerText: message.content });
+    if (result.ok) {
+      if (typeof recordUsage === 'function' && result.usage) {
+        try {
+          await recordUsage(result.model, result.usage.prompt_tokens || 0, result.usage.completion_tokens || 0);
+        } catch (_) {}
+      }
+      enriched.push({
+        ...message,
+        content: buildMediaAnalysisText({
+          kind: media.kind || result.kind,
+          resultText: result.text,
+          caption: media.caption,
+        }),
+      });
+    } else {
+      enriched.push({
+        ...message,
+        content: `${message.content}\n[تعذر تحليل الوسائط تلقائيا: ${result.reason || 'analysis_failed'}]`,
+      });
+    }
+  }
+  return enriched;
+}
+
+async function markInboundMessagesAnswered({ database = db, messageIds = [] }) {
+  const ids = messageIds.filter(Boolean);
+  if (!ids.length || !database.isConfigured?.()) return;
+  await database.query(
+    `UPDATE messages
+     SET status = 'answered_by_ai',
+         raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb
+     WHERE id = ANY($1::uuid[])`,
+    [ids, JSON.stringify({ answeredByAiAt: new Date().toISOString() })],
+  );
+}
+
 async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId }) {
   const result = await db.query(
     `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
@@ -186,11 +286,30 @@ async function processAiReply(job) {
     });
     if (!conversation) throw new Error('Unable to resolve conversation');
 
-    const text = await loadInboundMessage({
+    const fallbackText = await loadInboundMessage({
       userId,
       messageId: payload.messageId,
       text: payload.text,
     });
+    const pendingMessages = await loadPendingInboundMessages({
+      database: db,
+      userId,
+      conversationId: conversation.id,
+      fallbackMessageId: payload.messageId,
+      fallbackText,
+    });
+    const mediaAnalyzer = new OpenAIMediaAnalyzer({
+      apiKey: config.openaiApiKey || process.env.OPENAI_API_KEY || '',
+      logger,
+    });
+    const enrichedMessages = await enrichInboundMessagesWithMedia({
+      messages: pendingMessages,
+      analyzer: mediaAnalyzer,
+      recordUsage: async (model, inputTokens, outputTokens) => {
+        await recordAiUsage({ userId, model, inputTokens, outputTokens }).catch(() => {});
+      },
+    });
+    const text = buildCombinedInboundText(enrichedMessages);
     if (!text.trim()) throw new Error('AI job has empty inbound text');
 
     const instantReply = findAutoReply(config, text);
@@ -292,6 +411,10 @@ async function processAiReply(job) {
       });
     }
 
+    await markInboundMessagesAnswered({
+      messageIds: enrichedMessages.map(message => message.id),
+    });
+
     await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
       status: 'completed',
       finished_at: new Date(),
@@ -356,7 +479,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildCombinedInboundText,
   createWorker,
+  enrichInboundMessagesWithMedia,
+  loadPendingInboundMessages,
   markInboundMessageFailed,
+  markInboundMessagesAnswered,
   processAiReply,
 };

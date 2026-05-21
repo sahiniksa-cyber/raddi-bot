@@ -24,6 +24,8 @@ const DEFAULT_REMOVE_ON_FAIL = {
   count: parseInt(process.env.QUEUE_REMOVE_FAIL_COUNT || '5000', 10),
 };
 
+const DEFAULT_AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '9000', 10);
+
 let connection = null;
 let queues = null;
 let events = null;
@@ -112,13 +114,31 @@ async function enqueueIncomingMessage(payload, options = {}) {
 
 async function enqueueAiReply(payload, options = {}) {
   const { aiReplies } = getQueues();
-  const jobKey = options.jobKey || payload.messageId || payload.conversationId;
+  const queueOptions = buildAiReplyQueueOptions(payload, options);
+  const jobKey = queueOptions.jobKey;
   await recordJob(QUEUE_NAMES.aiReplies, jobKey, payload, payload);
   return aiReplies.add('generate-ai-reply', payload, {
-    jobId: jobKey || undefined,
-    priority: options.priority,
-    delay: options.delay || 0,
+    jobId: queueOptions.jobId || undefined,
+    priority: queueOptions.priority,
+    delay: queueOptions.delay,
   });
+}
+
+function buildAiReplyQueueOptions(payload = {}, options = {}) {
+  const debounce = options.debounce !== false;
+  const conversationId = payload.conversationId || options.conversationId;
+  const fallbackKey = options.jobKey || payload.messageId || conversationId;
+  const jobKey = debounce && conversationId ? `conversation:${conversationId}` : fallbackKey;
+  return {
+    jobKey,
+    jobId: jobKey,
+    priority: options.priority,
+    delay: Number.isFinite(Number(options.delay))
+      ? Number(options.delay)
+      : debounce
+        ? DEFAULT_AI_REPLY_DEBOUNCE_MS
+        : 0,
+  };
 }
 
 async function enqueueOutgoingWhatsapp(payload, options = {}) {
@@ -148,6 +168,7 @@ async function closeQueues() {
 
 module.exports = {
   QUEUE_NAMES,
+  buildAiReplyQueueOptions,
   closeQueues,
   enqueueAiReply,
   enqueueIncomingMessage,

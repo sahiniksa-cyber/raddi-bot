@@ -11,6 +11,26 @@ function textFromWhatsappMessage(msg) {
   return String(msg?.body || '').trim();
 }
 
+function mediaFromWhatsappMessage(msg) {
+  return msg?.media || null;
+}
+
+function mediaKindLabel(media) {
+  const kind = String(media?.kind || media?.type || '').toLowerCase();
+  const mimeType = String(media?.mimeType || media?.mimetype || '').toLowerCase();
+  if (kind.includes('audio') || kind.includes('voice') || kind.includes('ptt') || mimeType.startsWith('audio/')) return 'رسالة صوتية من العميل';
+  if (kind.includes('image') || mimeType.startsWith('image/')) return 'صورة من العميل';
+  return 'ملف من العميل';
+}
+
+function contentFromWhatsappMessage(msg) {
+  const text = textFromWhatsappMessage(msg);
+  if (text) return text;
+  const media = mediaFromWhatsappMessage(msg);
+  if (!media) return '';
+  return `[${mediaKindLabel(media)}]`;
+}
+
 function senderFromWhatsappMessage(msg) {
   return msg?.from || msg?.author || null;
 }
@@ -24,6 +44,7 @@ function toSafeRawPayload(msg) {
     timestamp: msg?.timestamp || null,
     type: msg?.type || null,
     hasMedia: !!msg?.hasMedia,
+    media: mediaFromWhatsappMessage(msg),
     deviceType: msg?.deviceType || null,
   };
 }
@@ -74,7 +95,7 @@ class MessageIngestService {
     if (msg.fromMe) return true;
     if (msg.from === 'status@broadcast') return true;
     if (String(msg.from || '').includes('@g.us')) return true;
-    return !textFromWhatsappMessage(msg);
+    return !contentFromWhatsappMessage(msg);
   }
 
   async ingestWhatsappMessage({ userId, msg, source = 'whatsapp-web.js' }) {
@@ -87,7 +108,8 @@ class MessageIngestService {
     }
 
     const sender = senderFromWhatsappMessage(msg);
-    const text = textFromWhatsappMessage(msg);
+    const text = contentFromWhatsappMessage(msg);
+    const media = mediaFromWhatsappMessage(msg);
     const providerMessageId = messageIdFromWhatsappMessage(msg) || `${userId}:${sender}:${Date.now()}`;
     const rawPayload = { source, ...toSafeRawPayload(msg) };
 
@@ -113,8 +135,10 @@ class MessageIngestService {
       text,
       providerMessageId,
       source,
+      hasMedia: !!media,
+      media,
     }, {
-      jobKey: String(saved.messageId),
+      jobKey: `conversation:${saved.conversationId}`,
     });
 
     this.logger.info?.('message', `queued inbound message ${providerMessageId} from ${sender}`);
@@ -132,6 +156,8 @@ class MessageIngestService {
 module.exports = {
   MessageIngestService,
   messageIdFromWhatsappMessage,
+  mediaFromWhatsappMessage,
   senderFromWhatsappMessage,
   textFromWhatsappMessage,
+  contentFromWhatsappMessage,
 };

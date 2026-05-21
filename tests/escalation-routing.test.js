@@ -20,6 +20,21 @@ test('extractEscalationRequest removes private marker from customer reply', () =
   });
 });
 
+test('buildEscalationNotification applies contact messageTemplate variables', () => {
+  const text = buildEscalationNotification({
+    contact: {
+      name: 'Sarah',
+      role: 'shipping',
+      messageTemplate: 'To {{contactName}} / {{contactRole}}\nCustomer: {{customerPhone}}\nAsked: {{customerMessage}}\nNeed: {{summary}}',
+    },
+    customerSender: '966500000000@s.whatsapp.net',
+    inboundText: 'Where is order 123?',
+    summary: 'Delayed shipment',
+  });
+
+  assert.equal(text, 'To Sarah / shipping\nCustomer: 966500000000\nAsked: Where is order 123?\nNeed: Delayed shipment');
+});
+
 test('normalizeEscalationPhone converts local Saudi numbers to whatsapp-web jid', () => {
   assert.equal(normalizeEscalationPhone('0562529945'), '966562529945@c.us');
   assert.equal(normalizeEscalationPhone('966562529945'), '966562529945@c.us');

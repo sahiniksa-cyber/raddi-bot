@@ -9,6 +9,19 @@ const { findChrome, killChrome } = require('../../../lib/helpers');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
 
+function mediaKindFromWhatsappWebMessage(msg = {}) {
+  const type = String(msg.type || '').toLowerCase();
+  if (type.includes('image')) return 'image';
+  if (type.includes('audio') || type.includes('ptt') || type.includes('voice')) return 'audio';
+  return null;
+}
+
+function normalizeWhatsappWebMime(mimetype, kind) {
+  const raw = String(mimetype || '').split(';')[0].trim().toLowerCase();
+  if (raw) return raw;
+  return kind === 'audio' ? 'audio/ogg' : kind === 'image' ? 'image/jpeg' : '';
+}
+
 class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   constructor({
     userId,
@@ -566,7 +579,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     });
 
     client.on('message', (msg) => {
-      this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg })
+      this.handleIncomingMessage(msg)
         .then(result => this.emit('message_ingested', result))
         .catch(err => {
           this.lastError = err.message;
@@ -575,6 +588,32 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
         });
     });
   }
+
+  async attachMedia(msg) {
+    if (!msg?.hasMedia || typeof msg.downloadMedia !== 'function') return msg;
+    const kind = mediaKindFromWhatsappWebMessage(msg);
+    if (!kind) return msg;
+    try {
+      const media = await msg.downloadMedia();
+      if (!media?.data) return msg;
+      msg.media = {
+        kind,
+        mimeType: normalizeWhatsappWebMime(media.mimetype, kind),
+        data: String(media.data || ''),
+        caption: String(msg.caption || msg.body || '').trim(),
+        sizeBytes: Buffer.from(String(media.data || ''), 'base64').length,
+      };
+    } catch (err) {
+      this.log('warn', 'message', `failed to download WhatsApp media ${msg.id?.id || 'unknown'}: ${err.message}`);
+      msg.media = { kind, mimeType: normalizeWhatsappWebMime('', kind), downloadError: err.message };
+    }
+    return msg;
+  }
+
+  async handleIncomingMessage(msg) {
+    const enriched = await this.attachMedia(msg);
+    return this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg: enriched });
+  }
 }
 
-module.exports = { EnterpriseWhatsAppConnectionManager };
+module.exports = { EnterpriseWhatsAppConnectionManager, mediaKindFromWhatsappWebMessage };
