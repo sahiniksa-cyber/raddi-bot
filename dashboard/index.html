@@ -1938,6 +1938,18 @@ function addEscContact(n='',p='',role='',when=''){
   c.appendChild(el);
 }
 
+const _baseAddEscContact = addEscContact;
+renderEscContacts = function(arr){document.getElementById('escContainer').innerHTML='';(arr||[]).forEach(c=>addEscContact(c.name,c.phone,c.role,c.when,c.messageTemplate));};
+addEscContact = function(n='',p='',role='',when='',messageTemplate=''){
+  _baseAddEscContact(n,p,role,when);
+  const el=document.getElementById('escContainer').lastElementChild;
+  if(!el)return;
+  const box=document.createElement('div');
+  box.innerHTML=`<label>طريقة رسالة التصعيد للفريق</label><textarea class="esc-template" placeholder="مثال: تنبيه للموظف {{contactName}}\nرقم العميل: {{customerPhone}}\nرسالة العميل: {{customerMessage}}\nالمطلوب: {{summary}}">${esc(messageTemplate||'')}</textarea><div class="hint">المتغيرات المتاحة: {{contactName}} {{contactRole}} {{customerPhone}} {{customerMessage}} {{summary}}</div>`;
+  const del=el.querySelector('.prod-del');
+  el.insertBefore(box,del);
+};
+
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 async function saveConf(){
@@ -1948,7 +1960,7 @@ async function saveConf(){
   document.querySelectorAll('.prod-card').forEach(r=>{const n=r.querySelector('.pn')?.value?.trim();if(n)prods.push({name:n,description:r.querySelector('.pd')?.value?.trim()||'',price:r.querySelector('.pp')?.value?.trim()||''});});
   // Escalation contacts
   const escContacts=[];
-  document.querySelectorAll('.esc-card').forEach(r=>{const n=r.querySelector('.esc-name')?.value?.trim(),p=r.querySelector('.esc-phone')?.value?.trim();if(n&&p)escContacts.push({name:n,phone:p,role:r.querySelector('.esc-role')?.value?.trim()||'',when:r.querySelector('.esc-when')?.value?.trim()||''});});
+  document.querySelectorAll('.esc-card').forEach(r=>{const n=r.querySelector('.esc-name')?.value?.trim(),p=r.querySelector('.esc-phone')?.value?.trim();if(n&&p)escContacts.push({name:n,phone:p,role:r.querySelector('.esc-role')?.value?.trim()||'',when:r.querySelector('.esc-when')?.value?.trim()||'',messageTemplate:r.querySelector('.esc-template')?.value?.trim()||''});});
   // Reply style
   const langStyle=document.getElementById('rsLanguage').value;
   const replyStyle={

@@ -82,14 +82,33 @@ function cleanCustomerJid(sender) {
   return cleanDigits(sender) || String(sender || '').trim();
 }
 
+function applyEscalationTemplate(template, values) {
+  return String(template || '').replace(/\{\{\s*(contactName|contactRole|customerPhone|customerMessage|summary)\s*\}\}/g, (_, key) => {
+    return values[key] || '';
+  }).trim();
+}
+
 function buildEscalationNotification({ contact, customerSender, inboundText, summary }) {
   const customer = cleanCustomerJid(customerSender);
+  const customerMessage = String(inboundText || '').trim() || 'غير متوفرة';
+  const problemSummary = String(summary || '').trim() || 'يحتاج متابعة';
+  if (contact?.messageTemplate?.trim()) {
+    const templated = applyEscalationTemplate(contact.messageTemplate, {
+      contactName: contact?.name || '',
+      contactRole: contact?.role || '',
+      customerPhone: customer || 'غير معروف',
+      customerMessage,
+      summary: problemSummary,
+    });
+    if (templated) return templated;
+  }
+
   const role = contact?.role ? ` (${contact.role})` : '';
   return [
     `تنبيه تحويل لخدمة العملاء${contact?.name ? ` - ${contact.name}${role}` : ''}`,
     `رقم العميل: ${customer || 'غير معروف'}`,
-    `رسالة العميل: ${String(inboundText || '').trim() || 'غير متوفرة'}`,
-    `المشكلة: ${String(summary || '').trim() || 'يحتاج متابعة'}`,
+    `رسالة العميل: ${customerMessage}`,
+    `المشكلة: ${problemSummary}`,
   ].join('\n');
 }
 
@@ -126,4 +145,5 @@ module.exports = {
   normalizeEscalationPhone,
   normalizeEscalationTarget,
   prepareEscalation,
+  applyEscalationTemplate,
 };

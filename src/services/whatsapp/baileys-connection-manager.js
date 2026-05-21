@@ -7,6 +7,7 @@ const pino = require('pino');
 const {
   Browsers,
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   jidNormalizedUser,
   makeWASocket,
@@ -29,6 +30,23 @@ function textFromBaileysMessage(message = {}) {
   ).trim();
 }
 
+function mediaKindFromBaileysMessage(message = {}) {
+  if (message.imageMessage) return 'image';
+  if (message.audioMessage) return 'audio';
+  return null;
+}
+
+function mediaMetaFromBaileysMessage(message = {}) {
+  const kind = mediaKindFromBaileysMessage(message);
+  if (!kind) return null;
+  const node = kind === 'image' ? message.imageMessage : message.audioMessage;
+  return {
+    kind,
+    mimeType: node?.mimetype || (kind === 'image' ? 'image/jpeg' : 'audio/ogg'),
+    caption: node?.caption || '',
+  };
+}
+
 function normalizeOutboundJid(target) {
   const raw = String(target || '').trim();
   if (raw.endsWith('@s.whatsapp.net') || raw.endsWith('@g.us') || raw.endsWith('@lid')) return raw;
@@ -38,6 +56,7 @@ function normalizeOutboundJid(target) {
 
 function toWhatsappWebMessage(msg) {
   const remoteJid = msg.key?.remoteJid || null;
+  const mediaMeta = mediaMetaFromBaileysMessage(msg.message || {});
   return {
     id: { _serialized: msg.key?.id || null, id: msg.key?.id || null },
     from: remoteJid,
@@ -48,6 +67,7 @@ function toWhatsappWebMessage(msg) {
     timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : null,
     type: Object.keys(msg.message || {})[0] || 'unknown',
     hasMedia: !!(msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.documentMessage || msg.message?.audioMessage),
+    media: mediaMeta,
     deviceType: 'baileys',
   };
 }
@@ -65,6 +85,7 @@ class BaileysConnectionManager extends EventEmitter {
     logger = console,
     ingestService = new MessageIngestService({ logger }),
     database = db,
+    mediaDownloader = downloadMediaMessage,
   }) {
     super();
     if (!userId) throw new Error('userId is required');
@@ -76,6 +97,7 @@ class BaileysConnectionManager extends EventEmitter {
     this.logger = logger;
     this.ingestService = ingestService;
     this.db = database;
+    this.mediaDownloader = mediaDownloader;
 
     this.sock = null;
     this.client = null;
@@ -333,7 +355,25 @@ class BaileysConnectionManager extends EventEmitter {
     }
   }
 
-  handleMessages(event) {
+  async attachMedia(message, msg) {
+    if (!msg.hasMedia || !msg.media) return msg;
+    try {
+      const buffer = await this.mediaDownloader(message, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+      if (buffer?.length) {
+        msg.media = {
+          ...msg.media,
+          data: Buffer.from(buffer).toString('base64'),
+          sizeBytes: buffer.length,
+        };
+      }
+    } catch (err) {
+      this.log('warn', 'message', `failed to download Baileys media ${msg.id?.id || 'unknown'}: ${err.message}`);
+      msg.media = { ...msg.media, downloadError: err.message };
+    }
+    return msg;
+  }
+
+  async handleMessages(event) {
     if (!this._running || !Array.isArray(event?.messages)) return;
     if (event.type && event.type !== 'notify') {
       this.log('info', 'message', `ignored Baileys ${event.type} message batch`);
@@ -346,7 +386,8 @@ class BaileysConnectionManager extends EventEmitter {
         this.log('info', 'message', `ignored stale Baileys message ${msg.id?.id || 'unknown'}`);
         continue;
       }
-      this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg, source: 'baileys' })
+      const enriched = await this.attachMedia(message, msg);
+      this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg: enriched, source: 'baileys' })
         .then(result => this.emit('message_ingested', result))
         .catch(err => {
           this.lastError = err.message;

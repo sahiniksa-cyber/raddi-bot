@@ -2,6 +2,18 @@
 
 const { TIMERS } = require('../../lib/constants');
 
+function describeStartState(state = {}) {
+  const status = state.status || 'unknown';
+  if (status === 'qr_ready') return 'رمز QR جاهز، امسح الرمز من واتساب لإكمال الربط.';
+  if (status === 'waiting_qr') return 'البوت يجهز رمز QR. انتظر لحظات ثم حدّث الصفحة، وإذا تأخر اضغط إعادة تهيئة الاتصال.';
+  if (status === 'connecting' || status === 'reconnecting' || status === 'disconnected') {
+    return 'البوت يحاول الاتصال الآن. انتظر لحظات، وإذا بقيت الحالة كما هي اضغط تشغيل مرة ثانية أو إعادة تشغيل.';
+  }
+  if (status === 'connected') return 'البوت متصل ويعمل.';
+  if (state.error) return state.error;
+  return 'طلب التشغيل وصل. إذا لم تتغير الحالة خلال لحظات، اضغط تشغيل مرة ثانية.';
+}
+
 function createBotController({ getUserBot }) {
   if (typeof getUserBot !== 'function') throw new Error('getUserBot dependency is required');
 
@@ -48,7 +60,7 @@ function createBotController({ getUserBot }) {
       if (state.status === 'error') {
         return res.status(500).json({ success: false, started, status: state.status, message: state.error || 'bot start failed' });
       }
-      res.json({ success: true, started, status: state.status, message: started ? null : 'bot already running or waiting for active deployment lock' });
+      res.json({ success: true, started, status: state.status, message: started ? describeStartState(state) : describeStartState(state) });
     },
 
     async stop(req, res) {
@@ -110,4 +122,4 @@ function createBotController({ getUserBot }) {
   };
 }
 
-module.exports = { createBotController };
+module.exports = { createBotController, describeStartState };
