@@ -129,6 +129,7 @@ async function loadPendingInboundMessages({
   fallbackMessageId,
   fallbackText,
   limit = 20,
+  maxAgeMs = parseInt(process.env.AI_PENDING_MAX_AGE_MS || '600000', 10),
 }) {
   if (!conversationId || !userId) {
     return fallbackText ? [{ id: fallbackMessageId, content: fallbackText, raw_payload: {} }] : [];
@@ -144,19 +145,20 @@ async function loadPendingInboundMessages({
          AND role = 'assistant'
      )
      SELECT id, content, provider_message_id, raw_payload
-     FROM messages
+     FROM messages m
      WHERE conversation_id = $1
        AND user_id = $2
        AND direction = 'inbound'
        AND status IN ('queued_for_ai', 'ai_failed')
        AND created_at > COALESCE((SELECT created_at FROM last_assistant), '-infinity'::timestamptz)
+       AND m.created_at >= NOW() - ($4 * interval '1 millisecond')
      ORDER BY created_at ASC
      LIMIT $3`,
-    [conversationId, userId, limit],
+    [conversationId, userId, limit, Math.max(1, Number(maxAgeMs) || 1)],
   );
 
   if (result.rows.length > 0) return result.rows;
-  return fallbackText ? [{ id: fallbackMessageId, content: fallbackText, raw_payload: {} }] : [];
+  return [];
 }
 
 function buildCombinedInboundText(messages = []) {

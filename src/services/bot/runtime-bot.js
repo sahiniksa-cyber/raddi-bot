@@ -348,6 +348,8 @@ class RuntimeBot {
 
   async stopBot() {
     this.sessionDesiredState = 'stopped';
+    clearTimeout(this._autoRecoverTimer);
+    this._autoRecoverTimer = null;
     this.stopWhatsappSessionBackup();
     await this.connection.stop();
     await this.persistSessionState({ desiredState: 'stopped' });

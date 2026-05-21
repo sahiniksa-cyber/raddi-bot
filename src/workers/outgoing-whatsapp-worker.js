@@ -96,13 +96,30 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     return { skipped: true, reason: 'stale_outgoing_reply' };
   }
 
+  const loadedBot = await getUserBot(userId);
+  if (shouldCancelOutgoingForStoppedBot(loadedBot, payload)) {
+    const message = 'outgoing reply canceled because bot is stopped by owner';
+    await markReplyMessage(replyMessageId, 'canceled', {
+      sentBy: WORKER_NAME,
+      canceledAt: new Date().toISOString(),
+      error: message,
+    });
+    await updateJobStatus(job.id, {
+      status: 'canceled',
+      finished_at: new Date(),
+      attempts: job.attemptsMade,
+      last_error: message,
+    });
+    return { skipped: true, reason: 'bot_stopped_by_owner' };
+  }
+
   await updateJobStatus(job.id, {
     status: 'processing',
     started_at: new Date(),
     attempts: job.attemptsMade,
   });
 
-  const bot = await waitForConnectedBot(await getUserBot(userId), {
+  const bot = await waitForConnectedBot(loadedBot, {
     reason: `outgoing:${job.id}`,
     timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
   });
@@ -119,6 +136,10 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
 
   bot.log(`outgoing reply sent to ${sender}`);
   return { sent: true, replyMessageId };
+}
+
+function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
+  return bot?.sessionDesiredState === 'stopped' && !payload.escalation;
 }
 
 async function sendWhatsappReply(bot, { sender, reply, providerMessageId }) {
@@ -155,9 +176,12 @@ async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageI
 
 async function waitForConnectedBot(bot, { reason, timeoutMs }) {
   if (!bot) throw new Error('Unable to load user bot');
+  if (bot.sessionDesiredState === 'stopped') {
+    throw new Error('WhatsApp is stopped by owner');
+  }
   if (bot.appState.status === 'connected' && bot.client) return bot;
 
-  if (bot.sessionDesiredState === 'running' || ['stopped', 'reconnecting', 'disconnected', 'waiting_qr'].includes(bot.appState.status)) {
+  if (bot.sessionDesiredState === 'running' && ['stopped', 'reconnecting', 'disconnected', 'waiting_qr'].includes(bot.appState.status)) {
     bot.startBot(reason).catch((err) => bot.log?.(`outgoing start failed: ${err.message}`));
   }
 
@@ -286,6 +310,7 @@ module.exports = {
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
   sendWhatsappReply,
+  shouldCancelOutgoingForStoppedBot,
   shouldSkipStaleOutgoingPayload,
   updatePersistedJobKey,
   waitForConnectedBot,

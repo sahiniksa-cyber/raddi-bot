@@ -31,3 +31,24 @@ test('recoverQueuedAiReplyJobs reenqueues queued inbound messages by conversatio
   assert.equal(enqueued[0].options.jobKey, 'conversation-conv-1');
   assert.doesNotMatch(enqueued[0].options.jobKey, /:/);
 });
+
+test('recoverQueuedAiReplyJobs ignores queued messages older than the safe recovery window', async () => {
+  const enqueued = [];
+  const database = {
+    isConfigured: () => true,
+    query: async (sql, params) => {
+      assert.match(sql, /created_at >= NOW\(\) - \(\$2 \* interval '1 millisecond'\)/);
+      assert.deepEqual(params, [100, 600000]);
+      return { rows: [] };
+    },
+  };
+
+  const result = await recoverQueuedAiReplyJobs({
+    database,
+    enqueue: async (payload, options) => enqueued.push({ payload, options }),
+    maxAgeMs: 600000,
+  });
+
+  assert.equal(result.recovered, 0);
+  assert.equal(enqueued.length, 0);
+});

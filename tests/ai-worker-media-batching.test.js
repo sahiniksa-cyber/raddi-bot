@@ -28,6 +28,7 @@ test('loadPendingInboundMessages loads queued inbound messages since last assist
     query: async (sql, params) => {
       calls.push({ sql, params });
       assert.match(sql, /last_assistant/);
+      assert.match(sql, /m\.created_at >= NOW\(\) - \(\$4 \* interval '1 millisecond'\)/);
       return {
         rows: [
           { id: 'msg-1', content: 'السلام عليكم', provider_message_id: 'wa-1', raw_payload: {} },
@@ -45,8 +46,24 @@ test('loadPendingInboundMessages loads queued inbound messages since last assist
     fallbackText: 'كم السعر؟',
   });
 
-  assert.deepEqual(calls[0].params, ['conv-1', 'user-1', 20]);
+  assert.deepEqual(calls[0].params, ['conv-1', 'user-1', 20, 600000]);
   assert.deepEqual(messages.map(m => m.id), ['msg-1', 'msg-2']);
+});
+
+test('loadPendingInboundMessages does not fall back to stale payload text when no queued rows exist', async () => {
+  const database = {
+    query: async () => ({ rows: [] }),
+  };
+
+  const messages = await loadPendingInboundMessages({
+    database,
+    userId: 'user-1',
+    conversationId: 'conv-1',
+    fallbackMessageId: 'old-msg',
+    fallbackText: 'رسالة قديمة',
+  });
+
+  assert.deepEqual(messages, []);
 });
 
 test('buildCombinedInboundText combines rapid customer messages into one prompt', () => {

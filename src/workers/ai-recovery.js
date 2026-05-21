@@ -7,9 +7,11 @@ async function recoverQueuedAiReplyJobs({
   database = db,
   enqueue = enqueueAiReply,
   limit = parseInt(process.env.AI_RECOVERY_LIMIT || '100', 10),
+  maxAgeMs = parseInt(process.env.AI_RECOVERY_MAX_AGE_MS || '600000', 10),
   logger = console,
 } = {}) {
   if (!database.isConfigured?.()) return { recovered: 0 };
+  const safeMaxAgeMs = Math.max(1, Number(maxAgeMs) || 1);
 
   const result = await database.query(
     `SELECT DISTINCT ON (m.conversation_id)
@@ -22,9 +24,10 @@ async function recoverQueuedAiReplyJobs({
      FROM messages m
      WHERE m.direction = 'inbound'
        AND m.status = 'queued_for_ai'
+       AND m.created_at >= NOW() - ($2 * interval '1 millisecond')
      ORDER BY m.conversation_id, m.created_at DESC
      LIMIT $1`,
-    [Math.max(1, limit)],
+    [Math.max(1, limit), safeMaxAgeMs],
   );
 
   let recovered = 0;
