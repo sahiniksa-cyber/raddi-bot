@@ -138,6 +138,8 @@ class BaileysConnectionManager extends EventEmitter {
     this._running = false;
     this._retryCount = 0;
     this._retryTimer = null;
+    this._stabilityTimer = null;
+    this._lastOpenAt = 0;
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
     this._version = null;
@@ -241,9 +243,11 @@ class BaileysConnectionManager extends EventEmitter {
   async stop() {
     clearTimeout(this._retryTimer);
     clearTimeout(this._qrWatchdogTimer);
+    clearTimeout(this._stabilityTimer);
     this.stopHeartbeat();
     this._retryTimer = null;
     this._qrWatchdogTimer = null;
+    this._stabilityTimer = null;
     this._running = false;
     this._socketGeneration++;
     this.ready = false;
@@ -266,6 +270,19 @@ class BaileysConnectionManager extends EventEmitter {
       this.scheduleReconnect(retryCount, 'Baileys QR watchdog timeout');
     }, timeout);
     if (typeof this._qrWatchdogTimer.unref === 'function') this._qrWatchdogTimer.unref();
+  }
+
+  scheduleStabilityReset() {
+    clearTimeout(this._stabilityTimer);
+    const stableMs = parseInt(process.env.WA_STABLE_RESET_MS || '20000', 10);
+    this._stabilityTimer = setTimeout(() => {
+      this._stabilityTimer = null;
+      if (!this._running || !this.ready || this.status !== 'connected') return;
+      this._retryCount = 0;
+      this.reconnectCount = 0;
+      this.log('info', 'connection', 'Baileys connection stable; reconnect backoff reset');
+    }, stableMs);
+    if (typeof this._stabilityTimer.unref === 'function') this._stabilityTimer.unref();
   }
 
   startHeartbeat() {
@@ -308,6 +325,8 @@ class BaileysConnectionManager extends EventEmitter {
       this.reconnectCount++;
     }
 
+    clearTimeout(this._stabilityTimer);
+    this._stabilityTimer = null;
     this.ready = false;
     this.qr = null;
     this.lastError = String(reason || 'unknown');
@@ -321,7 +340,9 @@ class BaileysConnectionManager extends EventEmitter {
     this.client = null;
     try { sock?.end?.(new Error('reconnect')); } catch (_) {}
     try { sock?.ws?.close?.(); } catch (_) {}
-    const nextRetry = immediate ? retryCount : retryCount + 1;
+    // Always advance the retry counter so a repeating close (e.g. a flapping session)
+    // climbs the backoff ladder instead of retrying at the same short delay forever.
+    const nextRetry = retryCount + 1;
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
       if (socketGeneration !== this._socketGeneration) return;
@@ -363,9 +384,7 @@ class BaileysConnectionManager extends EventEmitter {
       this._retryTimer = null;
       this.ready = true;
       this.lastProbeState = 'CONNECTED';
-      // A successful connection resets the backoff so the next disconnect retries quickly
-      // instead of inheriting a long delay from earlier failed attempts.
-      this._retryCount = 0;
+      this._lastOpenAt = Date.now();
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
       this.qr = null;
       this.lastError = null;
@@ -374,6 +393,11 @@ class BaileysConnectionManager extends EventEmitter {
       this.startHeartbeat();
       this.setStatus('connected', 'open');
       this.emit('ready', this.state());
+      // Only reset the backoff once the connection PROVES stable. A flapping session
+      // (connect → drop every couple seconds) must keep backing off instead of hammering
+      // a fresh socket every time, which is what caused the "connected then reconnecting"
+      // loop. A 2-second connection is not "stable".
+      this.scheduleStabilityReset();
     }
 
     if (update.connection === 'close') {
@@ -392,9 +416,13 @@ class BaileysConnectionManager extends EventEmitter {
         return;
       }
       if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
-        // Expected immediately after pairing — reconnect at once without backoff.
-        this.scheduleReconnect(this._retryCount, message, socketGeneration, { immediate: true });
-        return;
+        // The FIRST 515 (right after pairing) is normal — reconnect at once. But if 515
+        // keeps firing after brief connections, fall through to normal backoff so we don't
+        // hammer the socket every half-second.
+        if (this._retryCount === 0) {
+          this.scheduleReconnect(0, message, socketGeneration, { immediate: true });
+          return;
+        }
       }
       if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
         this.log('warn', 'connection', `Baileys session replaced by another connection; reclaiming: ${message}`);
