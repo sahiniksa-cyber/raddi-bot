@@ -78,6 +78,29 @@ function timestampToMs(timestamp) {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
+function startupGraceMs() {
+  return parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '1000', 10);
+}
+
+function startupBulkGuardMs() {
+  return parseInt(process.env.WA_STARTUP_BULK_GUARD_MS || '30000', 10);
+}
+
+function startupBulkSenderLimit() {
+  return parseInt(process.env.WA_STARTUP_BULK_SENDER_LIMIT || '5', 10);
+}
+
+function requireProviderTimestamp() {
+  return process.env.WA_REQUIRE_MESSAGE_TIMESTAMP !== 'false';
+}
+
+function isCustomerJid(jid) {
+  const value = String(jid || '');
+  return value &&
+    value !== 'status@broadcast' &&
+    !value.includes('@g.us');
+}
+
 class BaileysConnectionManager extends EventEmitter {
   constructor({
     userId,
@@ -118,7 +141,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._qrWatchdogTimer = null;
     this._version = null;
     this._socketGeneration = 0;
-    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
+    this.acceptMessagesAfterMs = Date.now() - startupGraceMs();
   }
 
   log(level, stage, message, meta) {
@@ -165,7 +188,7 @@ class BaileysConnectionManager extends EventEmitter {
     this.ready = false;
     this.lastError = null;
     this.qr = null;
-    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
+    this.acceptMessagesAfterMs = Date.now() - startupGraceMs();
     this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
@@ -379,9 +402,17 @@ class BaileysConnectionManager extends EventEmitter {
       this.log('info', 'message', `ignored Baileys ${event.type} message batch`);
       return;
     }
+    if (this.shouldBlockStartupBulkBatch(event.messages)) {
+      this.log('warn', 'message', `blocked startup bulk notify batch messages=${event.messages.length}`);
+      return;
+    }
     for (const message of event.messages) {
       const msg = toWhatsappWebMessage(message);
       const messageTimeMs = timestampToMs(msg.timestamp);
+      if (!messageTimeMs && requireProviderTimestamp()) {
+        this.log('info', 'message', `ignored Baileys message without timestamp ${msg.id?.id || 'unknown'}`);
+        continue;
+      }
       if (messageTimeMs && messageTimeMs < this.acceptMessagesAfterMs) {
         this.log('info', 'message', `ignored stale Baileys message ${msg.id?.id || 'unknown'}`);
         continue;
@@ -395,6 +426,22 @@ class BaileysConnectionManager extends EventEmitter {
           this.logger.error?.('message', `Baileys ingest failed: ${err.message}`);
         });
     }
+  }
+
+  shouldBlockStartupBulkBatch(messages = []) {
+    const guardMs = startupBulkGuardMs();
+    const limit = startupBulkSenderLimit();
+    if (guardMs <= 0 || limit <= 0) return false;
+    if (Date.now() - this.acceptMessagesAfterMs > guardMs) return false;
+
+    const senders = new Set();
+    for (const message of messages) {
+      if (message?.key?.fromMe) continue;
+      const jid = message?.key?.remoteJid;
+      if (isCustomerJid(jid)) senders.add(jid);
+      if (senders.size >= limit) return true;
+    }
+    return false;
   }
 
   clearWebCache(reason) {
@@ -412,4 +459,4 @@ class BaileysConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { BaileysConnectionManager, normalizeOutboundJid };
+module.exports = { BaileysConnectionManager, normalizeOutboundJid, timestampToMs };

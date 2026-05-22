@@ -110,6 +110,7 @@ test('Enterprise WhatsApp manager downloads media before ingesting', async () =>
     body: '',
     hasMedia: true,
     type: 'ptt',
+    timestamp: Math.floor(Date.now() / 1000),
     downloadMedia: async () => ({
       mimetype: 'audio/ogg; codecs=opus',
       data: Buffer.from('voice-bytes').toString('base64'),
@@ -119,4 +120,31 @@ test('Enterprise WhatsApp manager downloads media before ingesting', async () =>
   assert.equal(ingested.length, 1);
   assert.equal(ingested[0].msg.media.kind, 'audio');
   assert.equal(ingested[0].msg.media.mimeType, 'audio/ogg');
+});
+
+test('Enterprise WhatsApp manager ignores messages older than the current startup window', async () => {
+  const ingested = [];
+  const manager = new EnterpriseWhatsAppConnectionManager({
+    userId: 'user-1',
+    dataDir: __dirname,
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+    ingestService: {
+      ingestWhatsappMessage: async (payload) => {
+        ingested.push(payload);
+        return { accepted: true };
+      },
+    },
+  });
+
+  manager._running = true;
+  manager.acceptMessagesAfterMs = Date.now();
+
+  await manager.handleIncomingMessage({
+    id: { id: 'old-web-1' },
+    from: '966501234567@c.us',
+    body: 'old customer message',
+    timestamp: Math.floor((Date.now() - 60 * 60 * 1000) / 1000),
+  });
+
+  assert.deepEqual(ingested, []);
 });

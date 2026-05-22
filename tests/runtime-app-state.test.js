@@ -47,3 +47,27 @@ test('appState exposes connection diagnostics used by dashboard and workers', ()
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('startBot awaits stale connection restart instead of returning a false background start', async () => {
+  const bot = Object.create(RuntimeBot.prototype);
+  bot.lastPersistedSession = { updated_at: new Date(Date.now() - 120000).toISOString() };
+  bot.connection = {
+    status: 'waiting_qr',
+    qr: null,
+  };
+  bot.logger = {
+    warn: () => {},
+    error: () => {},
+  };
+
+  let restartCalls = 0;
+  bot.restartBot = async () => {
+    restartCalls++;
+    return true;
+  };
+
+  const started = await bot.startBot('manual');
+
+  assert.equal(started, true);
+  assert.equal(restartCalls, 1);
+});
+
