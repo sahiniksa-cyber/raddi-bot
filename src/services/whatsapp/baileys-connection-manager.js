@@ -425,7 +425,8 @@ class BaileysConnectionManager extends EventEmitter {
         }
       }
       if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
-        this.log('warn', 'connection', `Baileys session replaced by another connection; reclaiming: ${message}`);
+        this.lastError = 'تعارض اتصال (conflict): يوجد اتصال آخر يستخدم نفس رقم الواتساب — نسخة أخرى من التطبيق على نفس قاعدة البيانات، أو جلسة على جهاز/خادم آخر. أوقف النسخة الأخرى، ثم امسح الجلسة وأعد المسح.';
+        this.log('warn', 'connection', `Baileys session replaced — another connection is using the same WhatsApp credentials (code=440). Stop the duplicate instance. raw=${message}`);
       }
       this.emit('disconnected', message);
       this.scheduleReconnect(this._retryCount, message, socketGeneration);
