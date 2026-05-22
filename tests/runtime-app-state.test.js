@@ -71,3 +71,32 @@ test('startBot awaits stale connection restart instead of returning a false back
   assert.equal(restartCalls, 1);
 });
 
+test('startBot does not force restart while Baileys is already reconnecting for outgoing sends', async () => {
+  const bot = Object.create(RuntimeBot.prototype);
+  bot.lastPersistedSession = { updated_at: new Date(Date.now() - 120000).toISOString() };
+  bot.connection = {
+    status: 'reconnecting',
+    qr: null,
+    start: async () => false,
+  };
+  bot.logger = {
+    warn: () => {},
+    error: () => {},
+    info: () => {},
+  };
+  bot.sessionDesiredState = 'running';
+  bot.acquireConnectionLease = async () => true;
+  bot.persistSessionState = async () => {};
+
+  let restartCalls = 0;
+  bot.restartBot = async () => {
+    restartCalls++;
+    return true;
+  };
+
+  const started = await bot.startBot('outgoing:reply-1');
+
+  assert.equal(started, false);
+  assert.equal(restartCalls, 0);
+});
+

@@ -218,12 +218,19 @@ label{display:flex;align-items:center}
 .conv-head{width:100%;border:0;background:var(--card-soft);padding:12px 14px;text-align:right;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;font-family:var(--font)}
 .conv-title{font-weight:900;color:var(--text);font-size:13px}
 .conv-phone{font-size:12px;color:var(--text-soft);direction:ltr;text-align:left}
+.conv-meta{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;width:100%}
+.conv-label{font-size:10.5px;color:var(--text-soft);font-weight:800;margin-bottom:3px}
+.conv-problem{font-size:14px;color:var(--text);font-weight:900;line-height:1.45}
+.conv-phone-box{background:#fff;border:1px solid var(--border);border-radius:9px;padding:7px 10px;min-width:150px}
 .conv-body{display:none;padding:12px;background:#fff}
 .conv-item.open .conv-body{display:block}
 .conv-msg{border-radius:10px;padding:9px 11px;margin-bottom:8px;font-size:12px;line-height:1.7;white-space:pre-wrap}
 .conv-msg.customer{background:var(--green-bg);border:1px solid var(--green-border)}
 .conv-msg.ai{background:var(--indigo-bg);border:1px solid var(--indigo-border)}
 .conv-speaker{font-weight:900;margin-bottom:3px;color:var(--text-2)}
+.esc-vars{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px}
+.esc-var-btn{border:1px solid var(--indigo-border);background:var(--indigo-bg);color:var(--indigo);border-radius:8px;padding:6px 9px;font-family:var(--font);font-size:11.5px;font-weight:800;cursor:pointer}
+.esc-var-btn:hover{background:#fff;color:var(--text-2)}
 
 /* TEST CHAT */
 .test-chat{background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:14px;min-height:180px;max-height:380px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
@@ -741,6 +748,7 @@ body{background-attachment:scroll}
     <button class="tab active" onclick="goTab('connect')" id="tab-connect">📱 الربط</button>
     <button class="tab" onclick="goTab('settings')" id="tab-settings">⚙️ الإعدادات</button>
     <button class="tab" onclick="goTab('train')" id="tab-train">🎓 دربني</button>
+    <button class="tab" onclick="goTab('conversations')" id="tab-conversations">💬 المحادثات</button>
     <button class="tab" onclick="goTab('pricing')" id="tab-pricing">📞 التفعيل</button>
     <button class="tab" onclick="goTab('account')" id="tab-account">👤 حسابي</button>
   </div>
@@ -855,6 +863,30 @@ body{background-attachment:scroll}
 
 </div>
 
+<!-- ══ CONVERSATIONS VIEW ══ -->
+<div class="view" id="view-conversations">
+<div class="sw">
+  <div class="panel">
+    <div class="phdr">
+      <span>سجل محادثات العملاء</span>
+      <button class="add-btn" onclick="loadConversations()">تحديث</button>
+    </div>
+    <div class="pbdy">
+      <div class="conv-summary">
+        <div>
+          <div style="font-weight:900;color:var(--text)">عدد الأشخاص الذين تواصلوا</div>
+          <div class="hint">كل محادثة تعرض رقم العميل وعنوان المشكلة مباشرة، واضغط عليها لرؤية كلام العميل وردود الذكاء الاصطناعي.</div>
+        </div>
+        <div class="conv-count" id="convCount">0</div>
+      </div>
+      <div class="conv-list" id="convList">
+        <div class="hint">لا توجد محادثات بعد</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
 <!-- ══ SETTINGS VIEW ══ -->
 <div class="view" id="view-settings">
 <div class="sw">
@@ -886,25 +918,6 @@ body{background-attachment:scroll}
   <div class="health-results" id="healthResults">
     <div class="health-results-hdr"><span id="healthHdrIcon">📋</span><span id="healthHdrTxt">نتائج الفحص</span></div>
     <div id="healthBody"></div>
-  </div>
-
-  <div class="panel">
-    <div class="phdr">
-      <span>سجل محادثات العملاء</span>
-      <button class="add-btn" onclick="loadConversations()">تحديث</button>
-    </div>
-    <div class="pbdy">
-      <div class="conv-summary">
-        <div>
-          <div style="font-weight:900;color:var(--text)">عدد الأشخاص الذين تواصلوا</div>
-          <div class="hint">اضغط على أي محادثة لعرض كلام العميل وردود الذكاء الاصطناعي</div>
-        </div>
-        <div class="conv-count" id="convCount">0</div>
-      </div>
-      <div class="conv-list" id="convList">
-        <div class="hint">لا توجد محادثات بعد</div>
-      </div>
-    </div>
   </div>
 
   <!-- ═══ TEST BOT LIVE ═══ -->
@@ -1507,6 +1520,7 @@ function goTab(t){
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+t).classList.add('active');
   document.getElementById('tab-'+t).classList.add('active');
+  if(t==='conversations')loadConversations();
 }
 
 // ── SCREENS ──
@@ -1690,8 +1704,7 @@ function maybeRecoverStuckConnecting(d){
   const age=d.statusAgeMs||0;
   if(!stuck||age<75000||Date.now()-lastAutoRestartAt<90000)return;
   lastAutoRestartAt=Date.now();
-  toast('الاتصال أخذ وقت طويل، تتم إعادة التهيئة تلقائياً...');
-  fetch('/api/bot/restart',{method:'POST'}).catch(()=>{});
+  toast('الاتصال أخذ وقت طويل. إذا بقيت الحالة كما هي اضغط إعادة التهيئة يدوياً.', true);
 }
 async function poll(){
   try{
@@ -1967,7 +1980,7 @@ async function loadConversations(){
         const cls=m.speaker==='AI'?'ai':'customer';
         return `<div class="conv-msg ${cls}"><div class="conv-speaker">${esc(m.speaker||'')}</div>${esc(m.content||'')}</div>`;
       }).join('') || '<div class="hint">لا توجد رسائل محفوظة</div>';
-      item.innerHTML=`<button type="button" class="conv-head"><div><div class="conv-title">${esc(c.title||'استفسار عميل')}</div><div class="conv-phone">${esc(c.phone||c.sender||'')}</div></div><span>عرض</span></button><div class="conv-body">${messages}</div>`;
+      item.innerHTML=`<button type="button" class="conv-head"><div class="conv-meta"><div><div class="conv-label">عنوان المشكلة</div><div class="conv-problem">${esc(c.title||'استفسار عميل')}</div></div><div class="conv-phone-box"><div class="conv-label">رقم العميل</div><div class="conv-phone">${esc(c.phone||c.sender||'')}</div></div></div><span>عرض</span></button><div class="conv-body">${messages}</div>`;
       item.querySelector('.conv-head').onclick=()=>item.classList.toggle('open');
       list.appendChild(item);
     });
@@ -1994,6 +2007,19 @@ function updProd(){
 }
 // ── ESCALATION CONTACTS ──
 function renderEscContacts(arr){document.getElementById('escContainer').innerHTML='';(arr||[]).forEach(c=>addEscContact(c.name,c.phone,c.role,c.when));}
+function insertEscVariable(btn, token){
+  const textarea=btn.closest('.esc-card')?.querySelector('.esc-template');
+  if(!textarea)return;
+  const start=textarea.selectionStart ?? textarea.value.length;
+  const end=textarea.selectionEnd ?? textarea.value.length;
+  const before=textarea.value.slice(0,start);
+  const after=textarea.value.slice(end);
+  const spacer=before && !/\s$/.test(before)?' ':'';
+  textarea.value=before+spacer+token+after;
+  const pos=(before+spacer+token).length;
+  textarea.focus();
+  textarea.setSelectionRange(pos,pos);
+}
 function addEscContact(n='',p='',role='',when=''){
   const c=document.getElementById('escContainer'),el=document.createElement('div');
   el.className='esc-card';
@@ -2009,7 +2035,7 @@ addEscContact = function(n='',p='',role='',when='',messageTemplate=''){
   const el=document.getElementById('escContainer').lastElementChild;
   if(!el)return;
   const box=document.createElement('div');
-  box.innerHTML=`<label>طريقة رسالة التصعيد للفريق</label><textarea class="esc-template" placeholder="مثال: تنبيه للموظف {{contactName}}\nرقم العميل: {{customerPhone}}\nرسالة العميل: {{customerMessage}}\nالمطلوب: {{summary}}">${esc(messageTemplate||'')}</textarea><div class="hint">المتغيرات المتاحة: {{contactName}} {{contactRole}} {{customerPhone}} {{customerMessage}} {{summary}}</div>`;
+  box.innerHTML=`<label>طريقة رسالة التصعيد للفريق</label><textarea class="esc-template" placeholder="مثال: تنبيه للموظف {{contactName}}\nرقم العميل: {{customerPhone}}\nرسالة العميل: {{customerMessage}}\nالمطلوب: {{summary}}">${esc(messageTemplate||'')}</textarea><div class="esc-vars"><button type="button" class="esc-var-btn" onclick="insertEscVariable(this,'{{contactName}}')">اسم الموظف</button><button type="button" class="esc-var-btn" onclick="insertEscVariable(this,'{{contactRole}}')">الدور</button><button type="button" class="esc-var-btn" onclick="insertEscVariable(this,'{{customerPhone}}')">رقم العميل</button><button type="button" class="esc-var-btn" onclick="insertEscVariable(this,'{{customerMessage}}')">رسالة العميل</button><button type="button" class="esc-var-btn" onclick="insertEscVariable(this,'{{summary}}')">ملخص المشكلة</button></div>`;
   const del=el.querySelector('.prod-del');
   el.insertBefore(box,del);
 };

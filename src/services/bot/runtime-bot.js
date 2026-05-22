@@ -331,8 +331,9 @@ class RuntimeBot {
   async startBot(source = 'manual') {
     const staleWaitingQrMs = parseInt(process.env.WA_STALE_WAITING_QR_RESTART_MS || '45000', 10);
     const updatedAt = this.lastPersistedSession?.updated_at ? new Date(this.lastPersistedSession.updated_at).getTime() : 0;
-    const staleStatuses = new Set(['waiting_qr', 'connecting', 'reconnecting', 'disconnected']);
-    if (staleStatuses.has(this.connection.status) && !this.connection.qr && updatedAt && Date.now() - updatedAt > staleWaitingQrMs) {
+    const staleStatuses = new Set(['waiting_qr', 'connecting']);
+    const manualStart = source === 'manual';
+    if (manualStart && staleStatuses.has(this.connection.status) && !this.connection.qr && updatedAt && Date.now() - updatedAt > staleWaitingQrMs) {
       this.logger.warn('boot', `stale ${this.connection.status} detected; forcing WhatsApp restart`);
       return this.restartBot();
     }
