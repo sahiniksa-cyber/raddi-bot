@@ -16,7 +16,7 @@
  */
 'use strict';
 
-const { TIMERS } = require('./constants');
+const { TIMERS } = require('../../lib/constants');
 
 class MessageQueue {
   constructor(logger) {

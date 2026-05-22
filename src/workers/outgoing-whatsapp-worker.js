@@ -174,12 +174,24 @@ async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageI
   return bot.client.sendMessage(sender, reply);
 }
 
+function resolveOutgoingSettleMs(bot) {
+  const explicit = process.env.OUTGOING_CONNECTED_SETTLE_MS;
+  if (explicit != null && String(explicit).trim() !== '') return parseInt(explicit, 10);
+  // Baileys is genuinely connected the moment the socket opens, so a short settle is
+  // enough to ride out the post-pairing restart. whatsapp-web.js fires "ready" before the
+  // page is fully usable, so it needs a longer settle window.
+  return bot?.appState?.whatsappEngine === 'baileys' ? 3000 : 20000;
+}
+
 async function waitForConnectedBot(bot, { reason, timeoutMs }) {
   if (!bot) throw new Error('Unable to load user bot');
   if (bot.sessionDesiredState === 'stopped') {
     throw new Error('WhatsApp is stopped by owner');
   }
-  if (bot.appState.status === 'connected' && bot.client) return bot;
+  const settleMs = resolveOutgoingSettleMs(bot);
+  if (bot.appState.status === 'connected' && bot.client && (bot.appState.statusAgeMs || 0) >= settleMs) {
+    return bot;
+  }
 
   if (bot.sessionDesiredState === 'running' && ['stopped', 'reconnecting', 'disconnected', 'waiting_qr'].includes(bot.appState.status)) {
     bot.startBot(reason).catch((err) => bot.log?.(`outgoing start failed: ${err.message}`));
@@ -188,7 +200,6 @@ async function waitForConnectedBot(bot, { reason, timeoutMs }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (bot.appState.status === 'connected' && bot.client) {
-      const settleMs = parseInt(process.env.OUTGOING_CONNECTED_SETTLE_MS || '20000', 10);
       if ((bot.appState.statusAgeMs || 0) >= settleMs) return bot;
     }
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -309,6 +320,7 @@ module.exports = {
   createOutgoingWhatsappWorker,
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
+  resolveOutgoingSettleMs,
   sendWhatsappReply,
   shouldCancelOutgoingForStoppedBot,
   shouldSkipStaleOutgoingPayload,

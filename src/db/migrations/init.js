@@ -237,6 +237,26 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_ai_usage_user_created
     ON ai_usage(user_id, created_at DESC)`,
 
+  `CREATE TABLE IF NOT EXISTS health_incidents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    component TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'global',
+    severity TEXT NOT NULL DEFAULT 'critical',
+    status TEXT NOT NULL DEFAULT 'open',
+    detail TEXT NOT NULL DEFAULT '',
+    notified_channels JSONB NOT NULL DEFAULT '[]'::jsonb,
+    opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_health_incidents_open_unique
+    ON health_incidents(component, scope)
+    WHERE status = 'open'`,
+
+  `CREATE INDEX IF NOT EXISTS idx_health_incidents_opened
+    ON health_incidents(opened_at DESC)`,
+
   `CREATE INDEX IF NOT EXISTS idx_app_sessions_expire
     ON app_sessions(expire)`,
 

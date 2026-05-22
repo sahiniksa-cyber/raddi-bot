@@ -29,15 +29,15 @@ let nodemailer; try { nodemailer = require('nodemailer'); } catch (_) {}
 let FileStore;  try { FileStore = require('session-file-store')(session); } catch (_) {}
 
 // ─── Project Modules ─────────────────────────────────────────────────
-const Logger            = require('./lib/logger');
-const { OWNER_PAUSE_MS, DEFAULT_CONFIG, DELAY_PRESETS, TIMERS } = require('./lib/constants');
-const { sleep, killChrome, findChrome, isPrivateUrl, fetchURL } = require('./lib/helpers');
+const Logger            = require('../lib/logger');
+const { OWNER_PAUSE_MS, DEFAULT_CONFIG, DELAY_PRESETS, TIMERS } = require('../lib/constants');
+const { sleep, killChrome, findChrome, isPrivateUrl, fetchURL } = require('../lib/helpers');
 const errorHandler      = require('./lib/error-handler');
 const Heartbeat         = require('./lib/heartbeat');
 const MessageQueue      = require('./lib/message-queue');
 const ConnectionManager = require('./lib/connection-manager');
-const AIClient          = require('./lib/ai-client');
-const storeScanner      = require('./lib/store-scanner');
+const AIClient          = require('../lib/ai-client');
+const storeScanner      = require('../lib/store-scanner');
 
 // ─── DATA PERSISTENCE ─────────────────────────────────────────────────
 const _onRailway = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
