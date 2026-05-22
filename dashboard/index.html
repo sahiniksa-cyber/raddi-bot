@@ -211,20 +211,26 @@ label{display:flex;align-items:center}
 .health-name{font-weight:700;color:var(--text)}
 .health-msg{color:var(--text-soft);font-size:12px;margin-right:auto;text-align:left;direction:ltr}
 .health-hint{font-size:11px;color:var(--amber);margin-top:2px}
-.conv-summary{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--card-soft);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px}
-.conv-count{font-size:24px;font-weight:900;color:var(--green2)}
-.conv-list{display:flex;flex-direction:column;gap:10px;max-height:440px;overflow:auto}
-.conv-item{border:1px solid var(--border);border-radius:12px;background:#fff;overflow:hidden}
-.conv-head{width:100%;border:0;background:var(--card-soft);padding:12px 14px;text-align:right;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;font-family:var(--font)}
+.conv-summary{display:flex;align-items:center;justify-content:space-between;gap:14px;background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.conv-count{font-size:26px;font-weight:900;color:var(--green2);min-width:52px;text-align:center}
+.conv-list{display:flex;flex-direction:column;gap:10px;max-height:560px;overflow:auto;padding-left:2px}
+.conv-item{border:1px solid var(--border);border-radius:10px;background:#fff;overflow:hidden;box-shadow:var(--shadow-xs)}
+.conv-item.open{border-color:var(--green-border)}
+.conv-head{width:100%;border:0;background:#fff;padding:14px;text-align:right;cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:12px;font-family:var(--font);align-items:center}
+.conv-head:hover{background:var(--card-soft)}
 .conv-title{font-weight:900;color:var(--text);font-size:13px}
-.conv-phone{font-size:12px;color:var(--text-soft);direction:ltr;text-align:left}
-.conv-meta{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;width:100%}
-.conv-label{font-size:10.5px;color:var(--text-soft);font-weight:800;margin-bottom:3px}
-.conv-problem{font-size:14px;color:var(--text);font-weight:900;line-height:1.45}
-.conv-phone-box{background:#fff;border:1px solid var(--border);border-radius:9px;padding:7px 10px;min-width:150px}
-.conv-body{display:none;padding:12px;background:#fff}
+.conv-phone{font-size:13px;color:var(--text);direction:ltr;text-align:left;font-weight:900;white-space:nowrap}
+.conv-meta{display:grid;grid-template-columns:minmax(0,1fr) minmax(170px,auto);gap:12px;align-items:stretch;width:100%}
+.conv-label{font-size:11px;color:var(--text-soft);font-weight:900;margin-bottom:4px}
+.conv-problem{font-size:16px;color:var(--text);font-weight:900;line-height:1.45;word-break:break-word}
+.conv-phone-box{background:var(--bg-soft);border:1px solid var(--border);border-radius:9px;padding:8px 10px;min-width:170px;display:flex;flex-direction:column;justify-content:center}
+.conv-action{display:flex;align-items:center;gap:8px;color:var(--text-soft);font-weight:900;font-size:12px;white-space:nowrap}
+.conv-caret{width:28px;height:28px;border-radius:8px;border:1px solid var(--border);background:var(--bg-soft);display:flex;align-items:center;justify-content:center;font-size:14px;transition:transform .14s ease}
+.conv-item.open .conv-caret{transform:rotate(180deg);background:var(--green-bg);border-color:var(--green-border);color:var(--green2)}
+.conv-body{display:none;padding:12px 14px 14px;background:var(--card-soft);border-top:1px solid var(--border)}
 .conv-item.open .conv-body{display:block}
-.conv-msg{border-radius:10px;padding:9px 11px;margin-bottom:8px;font-size:12px;line-height:1.7;white-space:pre-wrap}
+.conv-body-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px;font-size:11px;color:var(--text-soft);font-weight:800}
+.conv-msg{border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13px;line-height:1.75;white-space:pre-wrap}
 .conv-msg.customer{background:var(--green-bg);border:1px solid var(--green-border)}
 .conv-msg.ai{background:var(--indigo-bg);border:1px solid var(--indigo-border)}
 .conv-speaker{font-weight:900;margin-bottom:3px;color:var(--text-2)}
@@ -292,6 +298,10 @@ details summary::-webkit-details-marker{display:none}
   .topbar{padding:0 14px;height:60px}
   .nav-tabs{gap:1px;padding:3px}
   .tab{padding:7px 11px;font-size:12px}
+  .conv-head{grid-template-columns:1fr}
+  .conv-meta{grid-template-columns:1fr}
+  .conv-phone-box{min-width:0}
+  .conv-action{justify-content:space-between}
   .logo{font-size:21px}
   .g2{grid-template-columns:1fr 1fr}
   .stats-row{grid-template-columns:repeat(2,1fr) !important}
@@ -1973,20 +1983,36 @@ async function loadConversations(){
       return;
     }
     list.innerHTML='';
-    d.conversations.forEach(c=>{
+    d.conversations.forEach((c,index)=>{
       const item=document.createElement('div');
       item.className='conv-item';
       const messages=(c.messages||[]).map(m=>{
         const cls=m.speaker==='AI'?'ai':'customer';
         return `<div class="conv-msg ${cls}"><div class="conv-speaker">${esc(m.speaker||'')}</div>${esc(m.content||'')}</div>`;
       }).join('') || '<div class="hint">لا توجد رسائل محفوظة</div>';
-      item.innerHTML=`<button type="button" class="conv-head"><div class="conv-meta"><div><div class="conv-label">عنوان المشكلة</div><div class="conv-problem">${esc(c.title||'استفسار عميل')}</div></div><div class="conv-phone-box"><div class="conv-label">رقم العميل</div><div class="conv-phone">${esc(c.phone||c.sender||'')}</div></div></div><span>عرض</span></button><div class="conv-body">${messages}</div>`;
-      item.querySelector('.conv-head').onclick=()=>item.classList.toggle('open');
+      const bodyId=`conv-body-${index}`;
+      const count=(c.messages||[]).length;
+      item.innerHTML=`<button type="button" class="conv-head" aria-expanded="false" aria-controls="${bodyId}"><div class="conv-meta"><div><div class="conv-label">عنوان المشكلة</div><div class="conv-problem">${esc(c.title||'استفسار عميل')}</div></div><div class="conv-phone-box"><div class="conv-label">رقم العميل</div><div class="conv-phone">${esc(c.phone||c.sender||'')}</div></div></div><div class="conv-action"><span>${count} رسالة</span><span class="conv-caret">⌄</span></div></button><div class="conv-body" id="${bodyId}"><div class="conv-body-head"><span>آخر تحديث: ${esc(formatConvTime(c.lastMessageAt))}</span><span>${esc(c.phone||c.sender||'')}</span></div>${messages}</div>`;
+      item.querySelector('.conv-head').onclick=()=>toggleConversation(item);
       list.appendChild(item);
     });
   }catch(e){
     list.innerHTML='<div class="hint">تعذر تحميل المحادثات: '+esc(e.message||'خطأ')+'</div>';
   }
+}
+
+function toggleConversation(item){
+  item.classList.toggle('open');
+  const open=item.classList.contains('open');
+  const head=item.querySelector('.conv-head');
+  if(head)head.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function formatConvTime(value){
+  if(!value)return '—';
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime()))return '—';
+  return date.toLocaleString('ar-SA',{dateStyle:'short',timeStyle:'short'});
 }
 
 function renderKW(kws){document.getElementById('kwContainer').innerHTML='';Object.entries(kws).forEach(([k,v])=>addKW(k,v));}

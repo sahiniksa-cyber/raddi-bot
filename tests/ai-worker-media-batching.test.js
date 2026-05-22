@@ -3,11 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildAiReplyQueueOptions } = require('../src/queues/message-queue');
+const { buildAiReplyQueueOptions, ensureReusableQueueJobId } = require('../src/queues/message-queue');
 const {
   buildCombinedInboundText,
   enrichInboundMessagesWithMedia,
   loadPendingInboundMessages,
+  waitForDatabaseReady,
 } = require('../src/workers/ai-worker');
 
 test('buildAiReplyQueueOptions debounces AI jobs per conversation', () => {
@@ -20,6 +21,45 @@ test('buildAiReplyQueueOptions debounces AI jobs per conversation', () => {
   assert.equal(options.jobKey, 'conversation-conv-1');
   assert.doesNotMatch(options.jobId, /:/);
   assert.equal(options.delay > 0, true);
+});
+
+test('ensureReusableQueueJobId removes completed debounce jobs before enqueueing again', async () => {
+  let removed = 0;
+  const queue = {
+    getJob: async (jobId) => {
+      assert.equal(jobId, 'conversation-conv-1');
+      return {
+        getState: async () => 'completed',
+        remove: async () => { removed++; },
+      };
+    },
+  };
+
+  const result = await ensureReusableQueueJobId(queue, 'conversation-conv-1');
+
+  assert.equal(result.removed, true);
+  assert.equal(removed, 1);
+});
+
+test('waitForDatabaseReady retries transient PostgreSQL startup errors', async () => {
+  let attempts = 0;
+  const database = {
+    ping: async () => {
+      attempts++;
+      if (attempts === 1) throw new Error('the database system is not yet accepting connections');
+      return { ok: true };
+    },
+  };
+
+  const result = await waitForDatabaseReady({
+    database,
+    timeoutMs: 100,
+    intervalMs: 1,
+    logger: { warn: () => {}, info: () => {} },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(attempts, 2);
 });
 
 test('loadPendingInboundMessages loads queued inbound messages since last assistant reply', async () => {
@@ -49,7 +89,7 @@ test('loadPendingInboundMessages loads queued inbound messages since last assist
   });
 
   assert.equal(calls[0].params.length, 5);
-  assert.deepEqual(calls[0].params.slice(0, 4), ['conv-1', 'user-1', 20, 600000]);
+  assert.deepEqual(calls[0].params.slice(0, 4), ['conv-1', 'user-1', 20, 1800000]);
   assert.equal(Number.isFinite(calls[0].params[4]), true);
   assert.deepEqual(messages.map(m => m.id), ['msg-1', 'msg-2']);
 });

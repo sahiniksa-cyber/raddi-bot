@@ -117,6 +117,7 @@ async function enqueueAiReply(payload, options = {}) {
   const queueOptions = buildAiReplyQueueOptions(payload, options);
   const jobKey = queueOptions.jobKey;
   await recordJob(QUEUE_NAMES.aiReplies, jobKey, payload, payload);
+  await ensureReusableQueueJobId(aiReplies, queueOptions.jobId);
   return aiReplies.add('generate-ai-reply', payload, {
     jobId: queueOptions.jobId || undefined,
     priority: queueOptions.priority,
@@ -139,6 +140,20 @@ function buildAiReplyQueueOptions(payload = {}, options = {}) {
         ? DEFAULT_AI_REPLY_DEBOUNCE_MS
         : 0,
   };
+}
+
+async function ensureReusableQueueJobId(queue, jobId) {
+  if (!queue || !jobId) return { removed: false, state: null };
+  const existing = await queue.getJob(jobId).catch(() => null);
+  if (!existing) return { removed: false, state: null };
+
+  const state = await existing.getState().catch(() => null);
+  if (state === 'completed' || state === 'failed') {
+    await existing.remove();
+    return { removed: true, state };
+  }
+
+  return { removed: false, state };
 }
 
 async function enqueueOutgoingWhatsapp(payload, options = {}) {
@@ -173,6 +188,7 @@ module.exports = {
   enqueueAiReply,
   enqueueIncomingMessage,
   enqueueOutgoingWhatsapp,
+  ensureReusableQueueJobId,
   getConnection,
   getQueueEvents,
   getQueues,

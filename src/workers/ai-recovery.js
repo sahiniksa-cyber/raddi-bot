@@ -2,12 +2,47 @@
 
 const db = require('../db/client');
 const { enqueueAiReply } = require('../queues/message-queue');
+const { getQueues } = require('../queues/message-queue');
+
+async function markPersistedAiJobQueued(database, jobKey) {
+  if (!database.isConfigured?.() || !jobKey) return;
+  await database.query(
+    `UPDATE jobs
+     SET status = 'queued',
+         attempts = 0,
+         last_error = NULL,
+         available_at = NOW(),
+         finished_at = NULL,
+         updated_at = NOW()
+     WHERE queue_name = 'ai-replies' AND job_key = $1`,
+    [jobKey],
+  );
+}
+
+async function reviveExistingAiJob({ aiQueue, database, jobKey }) {
+  const queue = aiQueue || getQueues().aiReplies;
+  const existing = await queue.getJob(jobKey).catch(() => null);
+  if (!existing) return false;
+
+  const state = await existing.getState().catch(() => null);
+  if (state === 'failed') {
+    await existing.retry('failed');
+    await markPersistedAiJobQueued(database, jobKey).catch(() => {});
+    return true;
+  }
+  if (['waiting', 'delayed', 'active', 'prioritized', 'waiting-children'].includes(state)) {
+    await markPersistedAiJobQueued(database, jobKey).catch(() => {});
+    return true;
+  }
+  return false;
+}
 
 async function recoverQueuedAiReplyJobs({
   database = db,
   enqueue = enqueueAiReply,
+  aiQueue = null,
   limit = parseInt(process.env.AI_RECOVERY_LIMIT || '100', 10),
-  maxAgeMs = parseInt(process.env.AI_RECOVERY_MAX_AGE_MS || '600000', 10),
+  maxAgeMs = parseInt(process.env.AI_RECOVERY_MAX_AGE_MS || '1800000', 10),
   logger = console,
 } = {}) {
   if (!database.isConfigured?.()) return { recovered: 0 };
@@ -32,7 +67,13 @@ async function recoverQueuedAiReplyJobs({
 
   let recovered = 0;
   for (const row of result.rows) {
+    const jobKey = `conversation-${row.conversation_id}`;
     try {
+      if (aiQueue && await reviveExistingAiJob({ aiQueue, database, jobKey })) {
+        recovered++;
+        continue;
+      }
+
       await enqueue({
         userId: row.user_id,
         conversationId: row.conversation_id,
@@ -42,16 +83,20 @@ async function recoverQueuedAiReplyJobs({
         providerMessageId: row.provider_message_id,
         source: 'ai_recovery',
       }, {
-        jobKey: `conversation-${row.conversation_id}`,
+        jobKey,
         delay: 0,
       });
       recovered++;
     } catch (err) {
-      logger.warn?.('queue', `failed to recover AI reply job ${row.message_id}: ${err.message}`);
+      if (/already exists/i.test(err.message) && await reviveExistingAiJob({ aiQueue, database, jobKey }).catch(() => false)) {
+        recovered++;
+      } else {
+        logger.warn?.('queue', `failed to recover AI reply job ${row.message_id}: ${err.message}`);
+      }
     }
   }
 
   return { recovered };
 }
 
-module.exports = { recoverQueuedAiReplyJobs };
+module.exports = { recoverQueuedAiReplyJobs, reviveExistingAiJob };
