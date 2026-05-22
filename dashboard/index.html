@@ -214,6 +214,14 @@ label{display:flex;align-items:center}
 .conv-summary{display:flex;align-items:center;justify-content:space-between;gap:14px;background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px}
 .conv-count{font-size:26px;font-weight:900;color:var(--green2);min-width:52px;text-align:center}
 .conv-list{display:flex;flex-direction:column;gap:10px;max-height:560px;overflow:auto;padding-left:2px}
+.conv-tabs{display:flex;gap:6px;margin-bottom:12px;background:var(--bg-soft);padding:4px;border-radius:11px}
+.conv-tab{flex:1;padding:9px 12px;border:none;background:transparent;color:var(--text-soft);font-family:var(--font);font-size:13.5px;font-weight:800;cursor:pointer;border-radius:8px;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:7px}
+.conv-tab.active{background:#fff;color:var(--green2);box-shadow:var(--shadow-sm)}
+.conv-tab-count{font-size:11px;font-weight:900;background:var(--bg-soft);color:var(--text-soft);border-radius:99px;padding:1px 8px;min-width:22px}
+.conv-tab.active .conv-tab-count{background:var(--green-bg);color:var(--green2)}
+.conv-status-badge{font-size:10.5px;font-weight:800;border-radius:99px;padding:2px 9px;white-space:nowrap}
+.conv-status-badge.ongoing{background:var(--green-bg);color:var(--green2);border:1px solid var(--green-border)}
+.conv-status-badge.finished{background:var(--bg-soft);color:var(--text-soft);border:1px solid var(--border)}
 .conv-item{border:1px solid var(--border);border-radius:10px;background:#fff;overflow:hidden;box-shadow:var(--shadow-xs)}
 .conv-item.open{border-color:var(--green-border)}
 .conv-head{width:100%;border:0;background:#fff;padding:14px;text-align:right;cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:12px;font-family:var(--font);align-items:center}
@@ -888,6 +896,11 @@ body{background-attachment:scroll}
           <div class="hint">كل محادثة تعرض رقم العميل وعنوان المشكلة مباشرة، واضغط عليها لرؤية كلام العميل وردود الذكاء الاصطناعي.</div>
         </div>
         <div class="conv-count" id="convCount">0</div>
+      </div>
+      <div class="conv-tabs" id="convTabs">
+        <button type="button" class="conv-tab active" data-status="all" onclick="setConvFilter('all')">الكل <span class="conv-tab-count" id="convTabAll">0</span></button>
+        <button type="button" class="conv-tab" data-status="ongoing" onclick="setConvFilter('ongoing')">مستمرة <span class="conv-tab-count" id="convTabOngoing">0</span></button>
+        <button type="button" class="conv-tab" data-status="finished" onclick="setConvFilter('finished')">منتهية <span class="conv-tab-count" id="convTabFinished">0</span></button>
       </div>
       <div class="conv-list" id="convList">
         <div class="hint">لا توجد محادثات بعد</div>
@@ -1967,19 +1980,34 @@ async function runHealthCheck(){
   finally{btn.disabled=false;btn.textContent='🩺 فحص الخدمة الكامل — هل كل شيء يعمل؟';}
 }
 
+let convFilter='all';
+function setConvFilter(status){
+  convFilter=status;
+  document.querySelectorAll('#convTabs .conv-tab').forEach(t=>t.classList.toggle('active',t.dataset.status===status));
+  loadConversations();
+}
+function updateConvTabCounts(counts){
+  if(!counts)return;
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v??0;};
+  set('convTabAll',counts.all);
+  set('convTabOngoing',counts.ongoing);
+  set('convTabFinished',counts.finished);
+}
 async function loadConversations(){
   const count=document.getElementById('convCount');
   const list=document.getElementById('convList');
   if(!list)return;
   list.innerHTML='<div class="hint">جاري تحميل المحادثات...</div>';
   try{
-    const r=await fetch('/api/conversations');
+    const r=await fetch('/api/conversations?status='+encodeURIComponent(convFilter));
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
     if(!d.success)throw new Error(d.message||'تعذر تحميل المحادثات');
     if(count)count.textContent=d.total||0;
+    updateConvTabCounts(d.counts);
     if(!d.conversations||!d.conversations.length){
-      list.innerHTML='<div class="hint">لا توجد محادثات بعد</div>';
+      const emptyMsg=convFilter==='ongoing'?'لا توجد محادثات مستمرة الآن':convFilter==='finished'?'لا توجد محادثات منتهية':'لا توجد محادثات بعد';
+      list.innerHTML='<div class="hint">'+emptyMsg+'</div>';
       return;
     }
     list.innerHTML='';
@@ -1992,7 +2020,8 @@ async function loadConversations(){
       }).join('') || '<div class="hint">لا توجد رسائل محفوظة</div>';
       const bodyId=`conv-body-${index}`;
       const count=(c.messages||[]).length;
-      item.innerHTML=`<button type="button" class="conv-head" aria-expanded="false" aria-controls="${bodyId}"><div class="conv-meta"><div><div class="conv-label">عنوان المشكلة</div><div class="conv-problem">${esc(c.title||'استفسار عميل')}</div></div><div class="conv-phone-box"><div class="conv-label">رقم العميل</div><div class="conv-phone">${esc(c.phone||c.sender||'')}</div></div></div><div class="conv-action"><span>${count} رسالة</span><span class="conv-caret">⌄</span></div></button><div class="conv-body" id="${bodyId}"><div class="conv-body-head"><span>آخر تحديث: ${esc(formatConvTime(c.lastMessageAt))}</span><span>${esc(c.phone||c.sender||'')}</span></div>${messages}</div>`;
+      const badge=c.status==='ongoing'?'<span class="conv-status-badge ongoing">مستمرة</span>':'<span class="conv-status-badge finished">منتهية</span>';
+      item.innerHTML=`<button type="button" class="conv-head" aria-expanded="false" aria-controls="${bodyId}"><div class="conv-meta"><div><div class="conv-label">عنوان المشكلة</div><div class="conv-problem">${esc(c.title||'استفسار عميل')}</div></div><div class="conv-phone-box"><div class="conv-label">رقم العميل</div><div class="conv-phone">${esc(c.phone||c.sender||'')}</div></div></div><div class="conv-action">${badge}<span>${count} رسالة</span><span class="conv-caret">⌄</span></div></button><div class="conv-body" id="${bodyId}"><div class="conv-body-head"><span>آخر تحديث: ${esc(formatConvTime(c.lastMessageAt))}</span><span>${esc(c.phone||c.sender||'')}</span></div>${messages}</div>`;
       item.querySelector('.conv-head').onclick=()=>toggleConversation(item);
       list.appendChild(item);
     });

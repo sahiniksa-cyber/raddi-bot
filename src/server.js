@@ -10,6 +10,7 @@ const session = require('express-session');
 const rateLimit = require('express-rate-limit');
 
 const db = require('./db/client');
+const redis = require('./queues/redis');
 const { migrate } = require('./db/migrations/init');
 const { PostgresSessionStore } = require('./db/session-store');
 const { createAuthRoutes } = require('./routes/auth.routes');
@@ -25,6 +26,10 @@ const { organizeProductsForConfig } = require('./services/products/product-impor
 const { findAutoReply } = require('./services/bot/platform-features');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
 const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
+const { getQueues } = require('./queues/message-queue');
+const { HealthMonitor, setActiveMonitor } = require('./services/monitoring/health-monitor');
+const { createAlertDispatcher } = require('./services/monitoring/alerts');
+const { createMailer } = require('./services/notify/mailer');
 const storeScanner = require('../lib/store-scanner');
 
 function resolveDataDir() {
@@ -80,6 +85,23 @@ async function getUserBot(userId) {
     botCache.set(userId, bot);
   }
   return botCache.get(userId);
+}
+
+let _ownerBotUserId = null;
+async function resolveOwnerBot() {
+  try {
+    if (!_ownerBotUserId) {
+      _ownerBotUserId = (process.env.OWNER_ALERT_USER_ID || '').trim() || null;
+      if (!_ownerBotUserId && db.isConfigured()) {
+        const result = await db.query("SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1");
+        _ownerBotUserId = result.rows[0]?.id || null;
+      }
+    }
+    if (!_ownerBotUserId) return null;
+    return await getUserBot(_ownerBotUserId);
+  } catch (_) {
+    return null;
+  }
 }
 
 function createStartupApp(state = {}) {
@@ -478,12 +500,15 @@ async function main() {
   const server = app.listen(PORT, () => console.log(`${new Date().toISOString()} [server] Jwab health listening on port ${PORT}`));
   let outgoingWorker = null;
   let aiRecoveryTimer = null;
+  let healthMonitor = null;
 
   const shutdown = async (signal, exitCode = 0) => {
     console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);
     if (aiRecoveryTimer) clearInterval(aiRecoveryTimer);
+    healthMonitor?.stop?.();
     server.close(() => {});
     await outgoingWorker?.close?.().catch(() => {});
+    await redis.closeShared().catch(() => {});
     await db.close().catch(() => {});
     process.exit(exitCode);
   };
@@ -519,6 +544,22 @@ async function main() {
     } catch (err) {
       console.error(`${new Date().toISOString()} [server] outgoing worker failed to start: ${err.message}`);
       // Don't crash — the web server should still serve healthchecks and the dashboard
+    }
+  }
+
+  // Start the 24/7 health monitor: detects outages and alerts the owner.
+  if (process.env.HEALTH_MONITOR_DISABLED !== 'true') {
+    try {
+      const dispatcher = createAlertDispatcher({
+        getOwnerBot: resolveOwnerBot,
+        mailer: createMailer(),
+      });
+      healthMonitor = new HealthMonitor({ getQueues, dispatcher });
+      healthMonitor.start();
+      setActiveMonitor(healthMonitor);
+      console.log(`${new Date().toISOString()} [server] health monitor started`);
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [server] health monitor failed to start: ${err.message}`);
     }
   }
 }

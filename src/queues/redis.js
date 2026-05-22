@@ -43,9 +43,31 @@ async function ping() {
   }
 }
 
+// A long-lived connection reused by the health monitor so it doesn't open and tear down
+// a fresh TCP/TLS connection on every tick.
+let sharedConnection = null;
+async function pingShared() {
+  if (!getRedisUrl()) {
+    const err = new Error('REDIS_URL is not configured');
+    err.code = 'REDIS_NOT_CONFIGURED';
+    throw err;
+  }
+  if (!sharedConnection) sharedConnection = createRedisConnection();
+  return sharedConnection.ping();
+}
+
+async function closeShared() {
+  if (!sharedConnection) return;
+  const connection = sharedConnection;
+  sharedConnection = null;
+  try { await connection.quit(); } catch (_) { connection.disconnect(); }
+}
+
 module.exports = {
+  closeShared,
   createRedisConnection,
   getRedisUrl,
   ping,
+  pingShared,
   redisOptions,
 };

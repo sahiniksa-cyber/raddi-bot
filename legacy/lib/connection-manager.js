@@ -21,8 +21,8 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const path = require('path');
 const fs   = require('fs');
-const { findChrome, killChrome } = require('./helpers');
-const { RETRY, TIMERS } = require('./constants');
+const { findChrome, killChrome } = require('../../lib/helpers');
+const { RETRY, TIMERS } = require('../../lib/constants');
 
 class ConnectionManager {
   /**

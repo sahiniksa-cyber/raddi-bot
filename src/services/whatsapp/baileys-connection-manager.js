@@ -136,6 +136,7 @@ class BaileysConnectionManager extends EventEmitter {
     this.statusSince = Date.now();
     this.lastProbeState = null;
     this._running = false;
+    this._retryCount = 0;
     this._retryTimer = null;
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
@@ -185,6 +186,7 @@ class BaileysConnectionManager extends EventEmitter {
     }
 
     this._running = true;
+    this._retryCount = retryCount;
     this.ready = false;
     this.lastError = null;
     this.qr = null;
@@ -282,7 +284,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._heartbeatTimer = null;
   }
 
-  scheduleReconnect(retryCount, reason, socketGeneration = this._socketGeneration) {
+  scheduleReconnect(retryCount = this._retryCount, reason, socketGeneration = this._socketGeneration, { immediate = false } = {}) {
     if (!this._running) return;
     if (socketGeneration !== this._socketGeneration) {
       this.log('info', 'connection', `ignored stale reconnect request: ${String(reason || 'unknown')}`);
@@ -293,26 +295,39 @@ class BaileysConnectionManager extends EventEmitter {
       this.log('warn', 'connection', `Baileys reconnect already scheduled; ignoring duplicate close: ${this.lastError}`);
       return;
     }
-    const retryIndex = Math.min(retryCount, RETRY.DELAYS_MS.length - 1);
-    const delay = RETRY.DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
-    this.reconnectCount++;
+
+    let delay;
+    if (immediate) {
+      // restartRequired (515) is part of the normal Baileys handshake after pairing.
+      // Reconnect almost instantly and keep the status as "connecting" so the UI does
+      // not flicker to "reconnecting", and do not inflate the backoff counter.
+      delay = parseInt(process.env.WA_RESTART_REQUIRED_DELAY_MS || '500', 10);
+    } else {
+      const retryIndex = Math.min(retryCount, RETRY.DELAYS_MS.length - 1);
+      delay = RETRY.DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
+      this.reconnectCount++;
+    }
+
     this.ready = false;
     this.qr = null;
     this.lastError = String(reason || 'unknown');
     this.stopHeartbeat();
-    this.setStatus('reconnecting', 'reconnect');
-    this.log('warn', 'connection', `Baileys reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
+    this.setStatus(immediate ? 'connecting' : 'reconnecting', immediate ? 'restart_required' : 'reconnect');
+    this.log('warn', 'connection', immediate
+      ? `Baileys restart required; reconnecting in ${delay}ms: ${this.lastError}`
+      : `Baileys reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
     const sock = this.sock;
     this.sock = null;
     this.client = null;
     try { sock?.end?.(new Error('reconnect')); } catch (_) {}
     try { sock?.ws?.close?.(); } catch (_) {}
+    const nextRetry = immediate ? retryCount : retryCount + 1;
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
       if (socketGeneration !== this._socketGeneration) return;
       if (this.ready || this.status === 'connected') return;
       this._running = false;
-      this.start(retryCount + 1).catch((err) => {
+      this.start(nextRetry).catch((err) => {
         this.log('error', 'connection', `Baileys reconnect failed: ${err.message}`, err);
       });
     }, delay);
@@ -348,6 +363,9 @@ class BaileysConnectionManager extends EventEmitter {
       this._retryTimer = null;
       this.ready = true;
       this.lastProbeState = 'CONNECTED';
+      // A successful connection resets the backoff so the next disconnect retries quickly
+      // instead of inheriting a long delay from earlier failed attempts.
+      this._retryCount = 0;
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
       this.qr = null;
       this.lastError = null;
@@ -373,8 +391,16 @@ class BaileysConnectionManager extends EventEmitter {
         this.emit('disconnected', message);
         return;
       }
+      if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
+        // Expected immediately after pairing — reconnect at once without backoff.
+        this.scheduleReconnect(this._retryCount, message, socketGeneration, { immediate: true });
+        return;
+      }
+      if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
+        this.log('warn', 'connection', `Baileys session replaced by another connection; reclaiming: ${message}`);
+      }
       this.emit('disconnected', message);
-      this.scheduleReconnect(retryCount, message, socketGeneration);
+      this.scheduleReconnect(this._retryCount, message, socketGeneration);
     }
   }
 

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   buildConversationTitle,
+  classifyConversation,
   cleanCustomerPhone,
   createConversationsController,
 } = require('../src/controllers/conversations.controller');
@@ -20,18 +21,27 @@ test('buildConversationTitle uses the first customer inquiry', () => {
   assert.equal(buildConversationTitle('كم سعر الاشتراك الشهري؟ وهل فيه ضمان؟'), 'كم سعر الاشتراك الشهري؟ وهل فيه ضمان؟');
 });
 
-test('conversations controller returns customer count and transcripts', async () => {
+test('classifyConversation labels recent chats ongoing and older ones finished', () => {
+  const now = Date.parse('2026-05-21T20:00:00.000Z');
+  assert.equal(classifyConversation('2026-05-21T19:50:00.000Z', { now }), 'ongoing');
+  assert.equal(classifyConversation('2026-05-21T19:00:00.000Z', { now }), 'finished');
+});
+
+test('conversations controller returns counts, status, and transcripts', async () => {
   const calls = [];
   const database = {
     query: async (sql, params) => {
       calls.push({ sql, params });
+      if (/COUNT\(\*\)/.test(sql)) {
+        return { rows: [{ total: 3, ongoing: 1, finished: 2 }] };
+      }
       if (/FROM conversations/.test(sql)) {
         return {
           rows: [
             {
               id: 'conv-1',
               sender: '966501234567@s.whatsapp.net',
-              last_message_at: '2026-05-21T20:00:00.000Z',
+              last_message_at: new Date().toISOString(),
               first_inquiry: 'ابي السعر',
             },
           ],
@@ -46,17 +56,35 @@ test('conversations controller returns customer count and transcripts', async ()
     },
   };
   const controller = createConversationsController({ database });
-  const res = {
-    body: null,
-    json(body) { this.body = body; },
-  };
+  const res = { body: null, json(body) { this.body = body; } };
 
-  await controller.list({ session: { userId: 'user-1' } }, res);
+  await controller.list({ session: { userId: 'user-1' }, query: {} }, res);
 
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.equal(res.body.success, true);
-  assert.equal(res.body.total, 1);
+  assert.equal(res.body.total, 3);
+  assert.deepEqual(res.body.counts, { all: 3, ongoing: 1, finished: 2 });
+  assert.equal(res.body.status, 'all');
   assert.equal(res.body.conversations[0].phone, '+966501234567');
   assert.equal(res.body.conversations[0].title, 'ابي السعر');
+  assert.equal(res.body.conversations[0].status, 'ongoing');
   assert.deepEqual(res.body.conversations[0].messages.map(m => m.speaker), ['العميل', 'AI']);
+});
+
+test('conversations controller filters by status and parameterizes the cutoff', async () => {
+  const listCalls = [];
+  const database = {
+    query: async (sql, params) => {
+      if (/COUNT\(\*\)/.test(sql)) return { rows: [{ total: 5, ongoing: 2, finished: 3 }] };
+      if (/FROM conversations c/.test(sql)) { listCalls.push({ sql, params }); return { rows: [] }; }
+      return { rows: [] };
+    },
+  };
+  const controller = createConversationsController({ database });
+  const res = { body: null, json(body) { this.body = body; } };
+
+  await controller.list({ session: { userId: 'user-1' }, query: { status: 'finished' } }, res);
+
+  assert.equal(res.body.status, 'finished');
+  assert.match(listCalls[0].sql, /c\.last_message_at < \$2/);
 });

@@ -14,7 +14,7 @@
  */
 'use strict';
 
-const { TIMERS } = require('./constants');
+const { TIMERS } = require('../../lib/constants');
 
 class Heartbeat {
   constructor(logger) {

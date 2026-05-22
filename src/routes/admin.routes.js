@@ -3,6 +3,8 @@
 const path = require('path');
 const express = require('express');
 const db = require('../db/client');
+const { getActiveMonitor } = require('../services/monitoring/health-monitor');
+const { listRecentIncidents } = require('../services/monitoring/incident-store');
 
 const {
   grantFreeAccess,
@@ -64,6 +66,18 @@ function createAdminRoutes(deps = {}) {
 
   router.get(settings.adminSecretPath, requireOwner, (req, res) => {
     res.sendFile(path.join(dashboardDir, 'admin.html'));
+  });
+
+  // Platform health snapshot + recent incidents for the 24/7 monitoring console.
+  router.get('/api/admin/health', requireOwner, async (req, res, next) => {
+    try {
+      const monitor = getActiveMonitor();
+      const snapshot = monitor ? monitor.getSnapshot() : { ok: null, checks: [], at: null };
+      const incidents = await listRecentIncidents(db, 30);
+      res.json({ success: true, snapshot, incidents });
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/api/admin/customers', requireOwner, async (req, res, next) => {

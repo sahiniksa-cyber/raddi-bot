@@ -2,6 +2,13 @@
 
 const db = require('../db/client');
 
+const ACTIVE_WINDOW_MS = parseInt(process.env.CONVERSATION_ACTIVE_WINDOW_MS || String(30 * 60 * 1000), 10);
+
+function classifyConversation(lastMessageAt, { now = Date.now(), activeWindowMs = ACTIVE_WINDOW_MS } = {}) {
+  const ts = lastMessageAt ? new Date(lastMessageAt).getTime() : 0;
+  return now - ts <= activeWindowMs ? 'ongoing' : 'finished';
+}
+
 function cleanCustomerPhone(sender) {
   const raw = String(sender || '').trim();
   if (raw.endsWith('@lid')) return raw;
@@ -34,26 +41,49 @@ function createConversationsController({ database = db } = {}) {
     async list(req, res) {
       const userId = req.session.userId;
       const limit = Math.max(1, Math.min(50, parseInt(req.query?.limit, 10) || 20));
-      const conversations = await database.query(
-        `SELECT c.id,
-                c.sender,
-                c.last_message_at,
-                COALESCE(first_msg.content, '') AS first_inquiry
-         FROM conversations c
-         LEFT JOIN LATERAL (
-           SELECT content
-           FROM messages
-           WHERE conversation_id = c.id
-             AND user_id = c.user_id
-             AND direction = 'inbound'
-           ORDER BY created_at ASC
-           LIMIT 1
-         ) first_msg ON TRUE
-         WHERE c.user_id = $1
-         ORDER BY c.last_message_at DESC
-         LIMIT $2`,
-        [userId, limit],
-      );
+      const statusFilter = ['ongoing', 'finished'].includes(req.query?.status) ? req.query.status : 'all';
+      const now = Date.now();
+      const cutoffIso = new Date(now - ACTIVE_WINDOW_MS).toISOString();
+
+      const listParams = [userId];
+      let statusCondition = '';
+      if (statusFilter === 'ongoing') { statusCondition = ' AND c.last_message_at >= $2'; listParams.push(cutoffIso); }
+      else if (statusFilter === 'finished') { statusCondition = ' AND c.last_message_at < $2'; listParams.push(cutoffIso); }
+      listParams.push(limit);
+      const limitPlaceholder = `$${listParams.length}`;
+
+      // Counts and the list are independent — run them together.
+      const [countsResult, conversations] = await Promise.all([
+        database.query(
+          `SELECT COUNT(*)::int AS total,
+                  COUNT(*) FILTER (WHERE last_message_at >= $2)::int AS ongoing,
+                  COUNT(*) FILTER (WHERE last_message_at < $2)::int AS finished
+           FROM conversations
+           WHERE user_id = $1`,
+          [userId, cutoffIso],
+        ),
+        database.query(
+          `SELECT c.id,
+                  c.sender,
+                  c.last_message_at,
+                  COALESCE(first_msg.content, '') AS first_inquiry
+           FROM conversations c
+           LEFT JOIN LATERAL (
+             SELECT content
+             FROM messages
+             WHERE conversation_id = c.id
+               AND user_id = c.user_id
+               AND direction = 'inbound'
+             ORDER BY created_at ASC
+             LIMIT 1
+           ) first_msg ON TRUE
+           WHERE c.user_id = $1${statusCondition}
+           ORDER BY c.last_message_at DESC
+           LIMIT ${limitPlaceholder}`,
+          listParams,
+        ),
+      ]);
+      const counts = countsResult.rows[0] || { total: 0, ongoing: 0, finished: 0 };
 
       const ids = conversations.rows.map(row => row.id);
       const messagesByConversation = new Map(ids.map(id => [id, []]));
@@ -77,12 +107,15 @@ function createConversationsController({ database = db } = {}) {
         phone: cleanCustomerPhone(row.sender),
         title: buildConversationTitle(row.first_inquiry),
         lastMessageAt: row.last_message_at,
+        status: classifyConversation(row.last_message_at, { now }),
         messages: messagesByConversation.get(row.id) || [],
       }));
 
       res.json({
         success: true,
-        total: payload.length,
+        total: counts.total,
+        status: statusFilter,
+        counts: { all: counts.total, ongoing: counts.ongoing, finished: counts.finished },
         conversations: payload,
       });
     },
@@ -91,6 +124,7 @@ function createConversationsController({ database = db } = {}) {
 
 module.exports = {
   buildConversationTitle,
+  classifyConversation,
   cleanCustomerPhone,
   createConversationsController,
 };
