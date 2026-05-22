@@ -17,6 +17,16 @@ test('dashboard exposes conversations as a top-level tab', () => {
   assert.match(html, /onclick="goTab\('conversations'\)"/);
 });
 
+test('conversation rows show problem title, customer phone, and collapsible details', () => {
+  const html = dashboardHtml();
+
+  assert.match(html, /conv-problem/);
+  assert.match(html, /conv-phone-box/);
+  assert.match(html, /conv-caret/);
+  assert.match(html, /aria-expanded/);
+  assert.match(html, /toggleConversation/);
+});
+
 test('escalation template variables are clickable insert buttons', () => {
   const html = dashboardHtml();
 

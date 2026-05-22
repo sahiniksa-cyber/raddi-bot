@@ -52,3 +52,43 @@ test('recoverQueuedAiReplyJobs ignores queued messages older than the safe recov
   assert.equal(result.recovered, 0);
   assert.equal(enqueued.length, 0);
 });
+
+test('recoverQueuedAiReplyJobs retries an existing failed BullMQ AI job', async () => {
+  let retried = 0;
+  const database = {
+    isConfigured: () => true,
+    query: async () => ({
+      rows: [{
+        user_id: 'user-1',
+        conversation_id: 'conv-1',
+        message_id: 'msg-1',
+        sender: '966501234567@s.whatsapp.net',
+        content: 'السلام عليكم',
+        provider_message_id: 'wa-1',
+      }],
+    }),
+  };
+  const aiQueue = {
+    getJob: async (jobKey) => {
+      assert.equal(jobKey, 'conversation-conv-1');
+      return {
+        getState: async () => 'failed',
+        retry: async (state) => {
+          assert.equal(state, 'failed');
+          retried++;
+        },
+      };
+    },
+  };
+
+  const result = await recoverQueuedAiReplyJobs({
+    database,
+    aiQueue,
+    enqueue: async () => {
+      throw new Error('Job conversation-conv-1 already exists');
+    },
+  });
+
+  assert.equal(result.recovered, 1);
+  assert.equal(retried, 1);
+});

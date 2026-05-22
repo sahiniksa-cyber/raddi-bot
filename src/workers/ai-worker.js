@@ -23,6 +23,8 @@ const WORKER_NAME = 'ai-worker';
 const CONCURRENCY = parseInt(process.env.AI_WORKER_CONCURRENCY || '2', 10);
 const RATE_LIMIT_MAX = parseInt(process.env.AI_WORKER_RATE_LIMIT_MAX || '15', 10);
 const RATE_LIMIT_DURATION_MS = parseInt(process.env.AI_WORKER_RATE_LIMIT_DURATION_MS || '60000', 10);
+const DB_READY_TIMEOUT_MS = parseInt(process.env.AI_WORKER_DB_READY_TIMEOUT_MS || '120000', 10);
+const DB_READY_INTERVAL_MS = parseInt(process.env.AI_WORKER_DB_READY_INTERVAL_MS || '2000', 10);
 
 function createLogger(jobId) {
   const prefix = `[${WORKER_NAME}:${jobId || 'manual'}]`;
@@ -129,7 +131,7 @@ async function loadPendingInboundMessages({
   fallbackMessageId,
   fallbackText,
   limit = 20,
-  maxAgeMs = parseInt(process.env.AI_PENDING_MAX_AGE_MS || '600000', 10),
+  maxAgeMs = parseInt(process.env.AI_PENDING_MAX_AGE_MS || '1800000', 10),
   minProviderMessageTimeMs = Date.now() - Math.max(1, Number(maxAgeMs) || 1),
 }) {
   if (!conversationId || !userId) {
@@ -171,6 +173,40 @@ async function loadPendingInboundMessages({
 
   if (result.rows.length > 0) return result.rows;
   return [];
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isTransientDatabaseError(err) {
+  const message = String(err?.message || err || '');
+  return /not yet accepting connections|ECONNREFUSED|Connection terminated|connection timeout|timeout exceeded|ECONNRESET|57P03/i.test(message);
+}
+
+async function waitForDatabaseReady({
+  database = db,
+  timeoutMs = DB_READY_TIMEOUT_MS,
+  intervalMs = DB_READY_INTERVAL_MS,
+  logger = console,
+} = {}) {
+  const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 1);
+  let lastError = null;
+
+  while (Date.now() < deadline) {
+    try {
+      if (typeof database.ping === 'function') return await database.ping();
+      await database.query('SELECT 1');
+      return { ok: true };
+    } catch (err) {
+      lastError = err;
+      if (!isTransientDatabaseError(err)) throw err;
+      logger.warn?.('db', `PostgreSQL is not ready yet: ${err.message}`);
+      await sleep(Math.max(1, Number(intervalMs) || 1));
+    }
+  }
+
+  throw lastError || new Error('Timed out waiting for PostgreSQL');
 }
 
 function buildCombinedInboundText(messages = []) {
@@ -277,6 +313,7 @@ async function markInboundMessageFailed({ database = db, messageId, error }) {
 
 async function processAiReply(job) {
   const payload = job.data || {};
+  const logger = createLogger(job.id);
   try {
     if (!db.isConfigured()) {
       throw new Error('DATABASE_URL is required for AI worker');
@@ -285,13 +322,14 @@ async function processAiReply(job) {
     const userId = payload.userId;
     if (!userId) throw new Error('Missing userId in AI job payload');
 
+    await waitForDatabaseReady({ logger });
+
     await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
       status: 'processing',
       started_at: new Date(),
       attempts: job.attemptsMade,
     });
 
-    const logger = createLogger(job.id);
     const config = await loadConfig(userId);
     const conversation = await resolveConversation({
       userId,
@@ -456,6 +494,13 @@ function createWorker() {
 }
 
 async function main() {
+  await waitForDatabaseReady({
+    logger: {
+      warn: (stage, message) => console.warn(`${new Date().toISOString()} [${WORKER_NAME}] [${stage}] ${message}`),
+      info: (stage, message) => console.log(`${new Date().toISOString()} [${WORKER_NAME}] [${stage}] ${message}`),
+    },
+  });
+
   const worker = createWorker();
 
   worker.on('completed', (job) => {
@@ -496,8 +541,10 @@ module.exports = {
   buildCombinedInboundText,
   createWorker,
   enrichInboundMessagesWithMedia,
+  isTransientDatabaseError,
   loadPendingInboundMessages,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
   processAiReply,
+  waitForDatabaseReady,
 };

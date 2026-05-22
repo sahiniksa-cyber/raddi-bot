@@ -37,6 +37,7 @@ function resolveDataDir() {
 const DATA_DIR = resolveDataDir();
 const PORT = process.env.PORT || 3000;
 const botCache = new Map();
+const AI_RECOVERY_INTERVAL_MS = parseInt(process.env.AI_RECOVERY_INTERVAL_MS || '60000', 10);
 
 function ensureDatabaseConfigured() {
   if (!db.isConfigured()) throw new Error('DATABASE_URL is required for src server');
@@ -450,6 +451,21 @@ async function runPostStartupTasks(startupState) {
   }
 }
 
+function startAiRecoveryLoop() {
+  if (AI_RECOVERY_INTERVAL_MS <= 0) return null;
+  const timer = setInterval(() => {
+    recoverQueuedAiReplyJobs().then((recovered) => {
+      if (recovered.recovered > 0) {
+        console.log(`${new Date().toISOString()} [server] recovered ${recovered.recovered} queued AI reply jobs`);
+      }
+    }).catch((err) => {
+      console.error(`${new Date().toISOString()} [server] AI recovery loop failed: ${err.message}`);
+    });
+  }, AI_RECOVERY_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
+
 async function main() {
   console.log(`${new Date().toISOString()} [server] starting Jwab server...`);
 
@@ -461,9 +477,11 @@ async function main() {
   const app = createStartupApp(startupState);
   const server = app.listen(PORT, () => console.log(`${new Date().toISOString()} [server] Jwab health listening on port ${PORT}`));
   let outgoingWorker = null;
+  let aiRecoveryTimer = null;
 
   const shutdown = async (signal, exitCode = 0) => {
     console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);
+    if (aiRecoveryTimer) clearInterval(aiRecoveryTimer);
     server.close(() => {});
     await outgoingWorker?.close?.().catch(() => {});
     await db.close().catch(() => {});
@@ -491,6 +509,7 @@ async function main() {
   runPostStartupTasks(startupState).catch((err) => {
     console.error(`${new Date().toISOString()} [server] post-startup task failed: ${err.stack || err.message}`);
   });
+  aiRecoveryTimer = startAiRecoveryLoop();
 
   // Start outgoing worker after the dashboard is available.
   if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {
