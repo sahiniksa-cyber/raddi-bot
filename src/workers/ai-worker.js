@@ -2,6 +2,7 @@
 
 require('dotenv').config({ quiet: true });
 
+const crypto = require('crypto');
 const { Worker } = require('bullmq');
 
 const db = require('../db/client');
@@ -268,8 +269,14 @@ async function markInboundMessagesAnswered({ database = db, messageIds = [] }) {
   );
 }
 
-async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId }) {
-  const result = await db.query(
+async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, database = db }) {
+  // provider_message_id must be unique per reply (the UNIQUE constraint is on
+  // (user_id, provider_message_id)). The jobId is shared across all replies for
+  // the same conversation (BullMQ uses conversation-${id} as the job key for
+  // debouncing), so we add a UUID suffix to avoid duplicate key violations.
+  const providerMessageId = `ai-worker:${jobId}:${crypto.randomUUID()}`;
+
+  const result = await database.query(
     `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
      VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
      RETURNING id`,
@@ -278,12 +285,12 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
       userId,
       sender,
       reply,
-      `ai-worker:${jobId}`,
+      providerMessageId,
       JSON.stringify({ source: WORKER_NAME, jobId }),
     ],
   );
 
-  await db.query(
+  await database.query(
     `UPDATE conversations
      SET last_message_at = NOW()
      WHERE id = $1`,
@@ -545,6 +552,7 @@ module.exports = {
   loadPendingInboundMessages,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
+  storeAssistantMessage,
   processAiReply,
   waitForDatabaseReady,
 };
