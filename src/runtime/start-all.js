@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn } = require('child_process');
+const { RETRY } = require('../../lib/constants');
 
 const processes = [
   { name: 'web', command: 'node', args: ['src/server.js'], required: true },
@@ -10,14 +11,13 @@ const processes = [
 const children = new Map();
 let shuttingDown = false;
 
-const RESTART_BACKOFF_BASE_MS = 5000;
-const RESTART_BACKOFF_MAX_MS = 120000;
-const STABLE_RESET_MS = 60000;
+const STABLE_RESET_MS = parseInt(process.env.PROC_STABLE_RESET_MS || '60000', 10);
 const restartCounts = new Map();
 const stabilityTimers = new Map();
 
 function restartDelayMs(count) {
-  return Math.min(RESTART_BACKOFF_BASE_MS * Math.pow(2, Math.min(count - 1, 6)), RESTART_BACKOFF_MAX_MS);
+  const index = Math.min(Math.max(count - 1, 0), RETRY.DELAYS_MS.length - 1);
+  return RETRY.DELAYS_MS[index] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
 }
 
 function startProcess(definition) {

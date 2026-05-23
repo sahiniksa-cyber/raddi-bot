@@ -25,6 +25,7 @@ const DEFAULT_REMOVE_ON_FAIL = {
 };
 
 const DEFAULT_AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '9000', 10);
+const STALE_ACTIVE_JOB_MS = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '120000', 10) * 2;
 
 let connection = null;
 let queues = null;
@@ -155,11 +156,17 @@ async function ensureReusableQueueJobId(queue, jobId) {
 
   if (state === 'active') {
     const processedOn = existing.processedOn || existing.timestamp || 0;
-    const staleMs = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '120000', 10) * 2;
-    if (Date.now() - processedOn > staleMs) {
-      await existing.moveToFailed(new Error('stale active job evicted'), existing.id, true);
-      await existing.remove();
-      return { removed: true, state: 'stale_active' };
+    if (Date.now() - processedOn > STALE_ACTIVE_JOB_MS) {
+      // BullMQ's moveToFailed requires a worker lock token that we don't have
+      // here. Just remove the stale job — if a real worker still holds the
+      // lock (very rare given the staleness threshold of 2x lockDuration),
+      // remove() will throw and we'll fall through to leaving the job alone.
+      try {
+        await existing.remove();
+        return { removed: true, state: 'stale_active' };
+      } catch (err) {
+        return { removed: false, state, error: err.message };
+      }
     }
   }
 
