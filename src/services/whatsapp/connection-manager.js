@@ -9,29 +9,6 @@ const { findChrome, killChrome } = require('../../../lib/helpers');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
 
-function mediaKindFromWhatsappWebMessage(msg = {}) {
-  const type = String(msg.type || '').toLowerCase();
-  if (type.includes('image')) return 'image';
-  if (type.includes('audio') || type.includes('ptt') || type.includes('voice')) return 'audio';
-  return null;
-}
-
-function normalizeWhatsappWebMime(mimetype, kind) {
-  const raw = String(mimetype || '').split(';')[0].trim().toLowerCase();
-  if (raw) return raw;
-  return kind === 'audio' ? 'audio/ogg' : kind === 'image' ? 'image/jpeg' : '';
-}
-
-function timestampToMs(timestamp) {
-  const value = Number(timestamp);
-  if (!Number.isFinite(value) || value <= 0) return null;
-  return value > 1_000_000_000_000 ? value : value * 1000;
-}
-
-function startupGraceMs() {
-  return parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '1000', 10);
-}
-
 class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   constructor({
     userId,
@@ -70,7 +47,6 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this._readyWatchdogTimer = null;
     this._launchTimer = null;
     this._running = false;
-    this.acceptMessagesAfterMs = Date.now() - startupGraceMs();
   }
 
   log(level, stage, message, meta) {
@@ -187,7 +163,6 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     this.ready = false;
     this.lastError = null;
     this.qr = null;
-    this.acceptMessagesAfterMs = Date.now() - startupGraceMs();
     this.setStatus('waiting_qr', 'start');
     this.startStateProbe();
     this.log('info', 'boot', `starting WhatsApp client${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
@@ -591,7 +566,7 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
     });
 
     client.on('message', (msg) => {
-      this.handleIncomingMessage(msg)
+      this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg })
         .then(result => this.emit('message_ingested', result))
         .catch(err => {
           this.lastError = err.message;
@@ -600,37 +575,6 @@ class EnterpriseWhatsAppConnectionManager extends EventEmitter {
         });
     });
   }
-
-  async attachMedia(msg) {
-    if (!msg?.hasMedia || typeof msg.downloadMedia !== 'function') return msg;
-    const kind = mediaKindFromWhatsappWebMessage(msg);
-    if (!kind) return msg;
-    try {
-      const media = await msg.downloadMedia();
-      if (!media?.data) return msg;
-      msg.media = {
-        kind,
-        mimeType: normalizeWhatsappWebMime(media.mimetype, kind),
-        data: String(media.data || ''),
-        caption: String(msg.caption || msg.body || '').trim(),
-        sizeBytes: Buffer.from(String(media.data || ''), 'base64').length,
-      };
-    } catch (err) {
-      this.log('warn', 'message', `failed to download WhatsApp media ${msg.id?.id || 'unknown'}: ${err.message}`);
-      msg.media = { kind, mimeType: normalizeWhatsappWebMime('', kind), downloadError: err.message };
-    }
-    return msg;
-  }
-
-  async handleIncomingMessage(msg) {
-    const messageTimeMs = timestampToMs(msg?.timestamp);
-    if (messageTimeMs && messageTimeMs < this.acceptMessagesAfterMs) {
-      this.log('info', 'message', `ignored stale WhatsApp Web message ${msg?.id?.id || 'unknown'}`);
-      return { accepted: false, statusCode: 200, reason: 'stale_message' };
-    }
-    const enriched = await this.attachMedia(msg);
-    return this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg: enriched });
-  }
 }
 
-module.exports = { EnterpriseWhatsAppConnectionManager, mediaKindFromWhatsappWebMessage };
+module.exports = { EnterpriseWhatsAppConnectionManager };
