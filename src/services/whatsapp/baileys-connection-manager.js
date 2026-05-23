@@ -30,7 +30,9 @@ function textFromBaileysMessage(message = {}) {
   ).trim();
 }
 
-const MEDIA_DOWNLOAD_MAX_BYTES = parseInt(process.env.WA_MEDIA_DOWNLOAD_MAX_BYTES || `${8 * 1024 * 1024}`, 10);
+// Same default and env var as openai-media-analysis.js — keep them in sync so an operator
+// only needs to tune one knob to allow larger inbound media end-to-end.
+const MEDIA_DOWNLOAD_MAX_BYTES = parseInt(process.env.MEDIA_ANALYSIS_MAX_BYTES || `${8 * 1024 * 1024}`, 10);
 
 function detectMediaPart(message = {}) {
   if (message.imageMessage) return { kind: 'image', part: message.imageMessage, type: 'image' };
@@ -84,7 +86,7 @@ function toWhatsappWebMessage(msg) {
     body: textFromBaileysMessage(msg.message || {}),
     timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : null,
     type: Object.keys(msg.message || {})[0] || 'unknown',
-    hasMedia: !!(msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.documentMessage || msg.message?.audioMessage),
+    hasMedia: !!detectMediaPart(msg.message || {}),
     deviceType: 'baileys',
   };
 }
@@ -136,7 +138,11 @@ class BaileysConnectionManager extends EventEmitter {
     this.startupTime = Date.now();
     this._stableTimer = null;
     this._effectiveRetryCount = 0;
-    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '60000', 10);
+    this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
+  }
+
+  computeAcceptMessagesAfterMs() {
+    return Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '60000', 10);
   }
 
   log(level, stage, message, meta) {
@@ -184,7 +190,7 @@ class BaileysConnectionManager extends EventEmitter {
     this.lastError = null;
     this.qr = null;
     this.startupTime = Date.now();
-    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '60000', 10);
+    this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
     this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
@@ -375,7 +381,7 @@ class BaileysConnectionManager extends EventEmitter {
       const reasonName = DisconnectReason[statusCode] || 'unknown';
       const rawMessage = update.lastDisconnect?.error?.message || 'closed';
       const technicalMessage = `${rawMessage} (code=${statusCode || 'unknown'} reason=${reasonName})`;
-      if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+      if (statusCode === DisconnectReason.loggedOut) {
         this.lastError = technicalMessage;
         this.authFailureCount++;
         await this.clearAuthCache('Baileys logged out');
@@ -384,7 +390,7 @@ class BaileysConnectionManager extends EventEmitter {
         this.emit('disconnected', technicalMessage);
         return;
       }
-      if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
+      if (statusCode === DisconnectReason.connectionReplaced) {
         this.lastError = 'تعارض اتصال (440): فيه نسخة ثانية متصلة بنفس الرقم. افتح واتساب على جوالك ← الأجهزة المرتبطة، واحذف أي جلسة غير معروفة، ثم اضغط "تشغيل البوت" مرة أخرى.';
         this.authFailureCount++;
         this.setStatus('stopped', 'connection_conflict');
