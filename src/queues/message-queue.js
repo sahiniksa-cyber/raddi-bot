@@ -153,6 +153,16 @@ async function ensureReusableQueueJobId(queue, jobId) {
     return { removed: true, state };
   }
 
+  if (state === 'active') {
+    const processedOn = existing.processedOn || existing.timestamp || 0;
+    const staleMs = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '120000', 10) * 2;
+    if (Date.now() - processedOn > staleMs) {
+      await existing.moveToFailed(new Error('stale active job evicted'), existing.id, true);
+      await existing.remove();
+      return { removed: true, state: 'stale_active' };
+    }
+  }
+
   return { removed: false, state };
 }
 
