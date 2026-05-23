@@ -452,18 +452,33 @@ function createApp() {
     // Check AI queue health
     try {
       const { aiReplies, outgoingWhatsapp } = getQueues();
-      const [aiWaiting, aiActive, outWaiting, outActive] = await Promise.all([
+      const [aiWaiting, aiActive, aiDelayed, aiFailed, outWaiting, outActive] = await Promise.all([
         aiReplies.getWaitingCount(),
         aiReplies.getActiveCount(),
+        aiReplies.getDelayedCount(),
+        aiReplies.getFailedCount(),
         outgoingWhatsapp.getWaitingCount(),
         outgoingWhatsapp.getActiveCount(),
       ]);
-      const queueOk = aiActive > 0 || aiWaiting < 10;
+      const queueOk = (aiFailed === 0 || aiActive > 0) && aiWaiting < 10;
+      const aiParts = [`${aiWaiting} انتظار`, `${aiActive} نشط`];
+      if (aiDelayed > 0) aiParts.push(`${aiDelayed} مؤجل`);
+      if (aiFailed > 0) aiParts.push(`${aiFailed} فاشل`);
       checks.push({
         name: 'الطابور',
         ok: queueOk,
-        msg: `AI: ${aiWaiting} انتظار / ${aiActive} نشط — إرسال: ${outWaiting} انتظار / ${outActive} نشط`,
+        msg: `AI: ${aiParts.join(' / ')} — إرسال: ${outWaiting} انتظار / ${outActive} نشط`,
+        aiFailed,
       });
+
+      if (aiFailed > 0) {
+        try {
+          const failedJobs = await aiReplies.getFailed(0, 0);
+          if (failedJobs[0]?.failedReason) {
+            checks.push({ name: 'آخر خطأ AI', ok: false, msg: failedJobs[0].failedReason });
+          }
+        } catch (_) {}
+      }
     } catch (err) {
       checks.push({ name: 'الطابور', ok: false, msg: err.message });
     }
