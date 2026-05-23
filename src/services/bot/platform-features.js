@@ -1,15 +1,23 @@
 'use strict';
 
+function isShortGreetingLikeKeyword(keyword) {
+  const tokens = keyword.split(/\s+/).filter(Boolean);
+  return tokens.length === 1 && keyword.length <= 8;
+}
+
 function findAutoReply(config = {}, text = '') {
-  const lower = String(text || '').toLowerCase();
+  const lower = String(text || '').toLowerCase().trim();
   if (!lower) return '';
+  const messageWordCount = lower.split(/\s+/).filter(Boolean).length;
 
   for (const [keyword, reply] of Object.entries(config.autoReplyKeywords || {})) {
     const normalizedKeyword = String(keyword || '').trim().toLowerCase();
     const normalizedReply = String(reply || '').trim();
-    if (normalizedKeyword && normalizedReply && lower.includes(normalizedKeyword)) {
-      return normalizedReply;
-    }
+    if (!normalizedKeyword || !normalizedReply) continue;
+    if (!lower.includes(normalizedKeyword)) continue;
+    // كلمات قصيرة مفردة (تحيات مثل "السلام"، "hi") لا تختطف رسالة طويلة فيها سؤال.
+    if (isShortGreetingLikeKeyword(normalizedKeyword) && messageWordCount > 3) continue;
+    return normalizedReply;
   }
 
   return '';
