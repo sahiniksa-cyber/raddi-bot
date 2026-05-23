@@ -406,84 +406,86 @@ function createApp() {
   app.post('/api/health-check', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const userId = req.session.userId;
+    const { aiReplies, outgoingWhatsapp } = getQueues();
+
+    const redisPing = redis.pingShared().then(
+      () => ({ ok: true, msg: 'متصل' }),
+      err => ({ ok: false, msg: err.code === 'REDIS_NOT_CONFIGURED' ? 'غير مضبوط' : err.message }),
+    );
+
+    // Combined into one query — saves a round trip per dashboard click.
+    const aiPipelineStats = db.query(
+      `SELECT
+         COUNT(*) FILTER (
+           WHERE direction = 'inbound'
+             AND status = 'queued_for_ai'
+             AND created_at < NOW() - interval '2 minutes'
+         )::int AS stuck_count,
+         MAX(created_at) FILTER (
+           WHERE direction = 'outbound' AND role = 'assistant'
+         ) AS last_reply_at
+       FROM messages
+       WHERE user_id = $1`,
+      [userId],
+    ).then(
+      r => ({ stuckCount: r.rows[0]?.stuck_count || 0, lastReplyAt: r.rows[0]?.last_reply_at || null }),
+      err => { console.warn(`[health-check] ai pipeline stats failed: ${err.message}`); return { stuckCount: 0, lastReplyAt: null }; },
+    );
+
+    const queueCounts = Promise.all([
+      aiReplies.getWaitingCount(),
+      aiReplies.getActiveCount(),
+      aiReplies.getDelayedCount(),
+      aiReplies.getFailedCount(),
+      outgoingWhatsapp.getWaitingCount(),
+      outgoingWhatsapp.getActiveCount(),
+    ]).then(
+      ([w, a, d, f, ow, oa]) => ({ aiWaiting: w, aiActive: a, aiDelayed: d, aiFailed: f, outWaiting: ow, outActive: oa }),
+      err => { console.warn(`[health-check] queue counts failed: ${err.message}`); return { error: err.message }; },
+    );
+
+    const [redisResult, aiStats, queues] = await Promise.all([redisPing, aiPipelineStats, queueCounts]);
 
     const checks = [
       { name: 'قاعدة البيانات', ok: true, msg: 'PostgreSQL' },
       { name: 'الواتساب', ok: bot.appState.status === 'connected', msg: bot.appState.status },
+      { name: 'Redis', ...redisResult },
     ];
 
-    // Check Redis
-    try {
-      await redis.pingShared();
-      checks.push({ name: 'Redis', ok: true, msg: 'متصل' });
-    } catch (err) {
-      checks.push({ name: 'Redis', ok: false, msg: err.code === 'REDIS_NOT_CONFIGURED' ? 'غير مضبوط' : err.message });
-    }
-
-    // Check AI pipeline: stuck messages
-    let stuckCount = 0;
-    let lastAiReply = null;
-    try {
-      const stuck = await db.query(
-        `SELECT COUNT(*)::int AS cnt FROM messages
-         WHERE user_id = $1 AND direction = 'inbound' AND status = 'queued_for_ai'
-           AND created_at < NOW() - interval '2 minutes'`,
-        [userId],
-      );
-      stuckCount = stuck.rows[0]?.cnt || 0;
-
-      const lastReply = await db.query(
-        `SELECT created_at FROM messages
-         WHERE user_id = $1 AND direction = 'outbound' AND role = 'assistant'
-         ORDER BY created_at DESC LIMIT 1`,
-        [userId],
-      );
-      lastAiReply = lastReply.rows[0]?.created_at || null;
-    } catch (_) {}
-
-    const aiPipelineOk = stuckCount === 0;
-    const aiMsg = stuckCount > 0
-      ? `${stuckCount} رسالة عالقة بانتظار الذكاء الاصطناعي`
-      : lastAiReply
-        ? `يعمل — آخر رد: ${new Date(lastAiReply).toLocaleString('ar-SA')}`
+    const aiPipelineOk = aiStats.stuckCount === 0;
+    const aiMsg = aiStats.stuckCount > 0
+      ? `${aiStats.stuckCount} رسالة عالقة بانتظار الذكاء الاصطناعي`
+      : aiStats.lastReplyAt
+        ? `يعمل — آخر رد: ${new Date(aiStats.lastReplyAt).toLocaleString('ar-SA')}`
         : 'لا توجد ردود بعد';
-    checks.push({ name: 'معالجة الذكاء الاصطناعي', ok: aiPipelineOk, msg: aiMsg, stuckCount });
+    checks.push({ name: 'معالجة الذكاء الاصطناعي', ok: aiPipelineOk, msg: aiMsg, stuckCount: aiStats.stuckCount });
 
-    // Check AI queue health
-    try {
-      const { aiReplies, outgoingWhatsapp } = getQueues();
-      const [aiWaiting, aiActive, aiDelayed, aiFailed, outWaiting, outActive] = await Promise.all([
-        aiReplies.getWaitingCount(),
-        aiReplies.getActiveCount(),
-        aiReplies.getDelayedCount(),
-        aiReplies.getFailedCount(),
-        outgoingWhatsapp.getWaitingCount(),
-        outgoingWhatsapp.getActiveCount(),
-      ]);
-      const queueOk = (aiFailed === 0 || aiActive > 0) && aiWaiting < 10;
-      const aiParts = [`${aiWaiting} انتظار`, `${aiActive} نشط`];
-      if (aiDelayed > 0) aiParts.push(`${aiDelayed} مؤجل`);
-      if (aiFailed > 0) aiParts.push(`${aiFailed} فاشل`);
+    if (queues.error) {
+      checks.push({ name: 'الطابور', ok: false, msg: queues.error });
+    } else {
+      const queueOk = (queues.aiFailed === 0 || queues.aiActive > 0) && queues.aiWaiting < 10;
+      const aiParts = [`${queues.aiWaiting} انتظار`, `${queues.aiActive} نشط`];
+      if (queues.aiDelayed > 0) aiParts.push(`${queues.aiDelayed} مؤجل`);
+      if (queues.aiFailed > 0) aiParts.push(`${queues.aiFailed} فاشل`);
       checks.push({
         name: 'الطابور',
         ok: queueOk,
-        msg: `AI: ${aiParts.join(' / ')} — إرسال: ${outWaiting} انتظار / ${outActive} نشط`,
-        aiFailed,
+        msg: `AI: ${aiParts.join(' / ')} — إرسال: ${queues.outWaiting} انتظار / ${queues.outActive} نشط`,
+        aiFailed: queues.aiFailed,
       });
 
-      if (aiFailed > 0) {
+      if (queues.aiFailed > 0) {
         try {
           const failedJobs = await aiReplies.getFailed(0, 0);
           if (failedJobs[0]?.failedReason) {
             checks.push({ name: 'آخر خطأ AI', ok: false, msg: failedJobs[0].failedReason });
           }
-        } catch (_) {}
+        } catch (err) {
+          console.warn(`[health-check] getFailed failed: ${err.message}`);
+        }
       }
-    } catch (err) {
-      checks.push({ name: 'الطابور', ok: false, msg: err.message });
     }
 
-    // Check API key
     const hasKey = !!(bot.config.googleApiKey?.trim() || bot.config.openrouterApiKey?.trim() || bot.config.openaiApiKey?.trim() || bot.config.anthropicApiKey?.trim());
     checks.push({ name: 'مفتاح API', ok: hasKey, msg: hasKey ? 'مضبوط' : 'لا يوجد مفتاح — أضف مفتاح في الإعدادات' });
 
@@ -585,6 +587,18 @@ async function main() {
     if (aiRecoveryTimer) clearInterval(aiRecoveryTimer);
     healthMonitor?.stop?.();
     server.close(() => {});
+    // Release WhatsApp connection leases so the next Railway replica can
+    // acquire them immediately instead of waiting up to 2 minutes for the
+    // lease TTL to expire. Bounded by an overall timeout so a misbehaving
+    // bot can't block shutdown past Railway's SIGKILL window.
+    const releaseDeadlineMs = parseInt(process.env.SHUTDOWN_LEASE_RELEASE_TIMEOUT_MS || '5000', 10);
+    const releaseAll = Promise.allSettled(
+      Array.from(botCache.values()).map(bot => bot.releaseConnectionLease()),
+    );
+    await Promise.race([
+      releaseAll,
+      new Promise(resolve => setTimeout(resolve, releaseDeadlineMs)),
+    ]).catch(() => {});
     await outgoingWorker?.close?.().catch(() => {});
     await redis.closeShared().catch(() => {});
     await db.close().catch(() => {});
