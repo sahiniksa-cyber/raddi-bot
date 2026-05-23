@@ -405,11 +405,74 @@ function createApp() {
 
   app.post('/api/health-check', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
-    res.json({ success: true, checks: [
+    const userId = req.session.userId;
+
+    const checks = [
       { name: 'قاعدة البيانات', ok: true, msg: 'PostgreSQL' },
       { name: 'الواتساب', ok: bot.appState.status === 'connected', msg: bot.appState.status },
-      { name: 'الطابور', ok: true, msg: 'BullMQ configured' },
-    ] });
+    ];
+
+    // Check Redis
+    try {
+      await redis.pingShared();
+      checks.push({ name: 'Redis', ok: true, msg: 'متصل' });
+    } catch (err) {
+      checks.push({ name: 'Redis', ok: false, msg: err.code === 'REDIS_NOT_CONFIGURED' ? 'غير مضبوط' : err.message });
+    }
+
+    // Check AI pipeline: stuck messages
+    let stuckCount = 0;
+    let lastAiReply = null;
+    try {
+      const stuck = await db.query(
+        `SELECT COUNT(*)::int AS cnt FROM messages
+         WHERE user_id = $1 AND direction = 'inbound' AND status = 'queued_for_ai'
+           AND created_at < NOW() - interval '2 minutes'`,
+        [userId],
+      );
+      stuckCount = stuck.rows[0]?.cnt || 0;
+
+      const lastReply = await db.query(
+        `SELECT created_at FROM messages
+         WHERE user_id = $1 AND direction = 'outbound' AND role = 'assistant'
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      );
+      lastAiReply = lastReply.rows[0]?.created_at || null;
+    } catch (_) {}
+
+    const aiPipelineOk = stuckCount === 0;
+    const aiMsg = stuckCount > 0
+      ? `${stuckCount} رسالة عالقة بانتظار الذكاء الاصطناعي`
+      : lastAiReply
+        ? `يعمل — آخر رد: ${new Date(lastAiReply).toLocaleString('ar-SA')}`
+        : 'لا توجد ردود بعد';
+    checks.push({ name: 'معالجة الذكاء الاصطناعي', ok: aiPipelineOk, msg: aiMsg, stuckCount });
+
+    // Check AI queue health
+    try {
+      const { aiReplies, outgoingWhatsapp } = getQueues();
+      const [aiWaiting, aiActive, outWaiting, outActive] = await Promise.all([
+        aiReplies.getWaitingCount(),
+        aiReplies.getActiveCount(),
+        outgoingWhatsapp.getWaitingCount(),
+        outgoingWhatsapp.getActiveCount(),
+      ]);
+      const queueOk = aiActive > 0 || aiWaiting < 10;
+      checks.push({
+        name: 'الطابور',
+        ok: queueOk,
+        msg: `AI: ${aiWaiting} انتظار / ${aiActive} نشط — إرسال: ${outWaiting} انتظار / ${outActive} نشط`,
+      });
+    } catch (err) {
+      checks.push({ name: 'الطابور', ok: false, msg: err.message });
+    }
+
+    // Check API key
+    const hasKey = !!(bot.config.googleApiKey?.trim() || bot.config.openrouterApiKey?.trim() || bot.config.openaiApiKey?.trim() || bot.config.anthropicApiKey?.trim());
+    checks.push({ name: 'مفتاح API', ok: hasKey, msg: hasKey ? 'مضبوط' : 'لا يوجد مفتاح — أضف مفتاح في الإعدادات' });
+
+    res.json({ success: true, checks });
   }));
 
   app.use((err, req, res, next) => {

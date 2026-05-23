@@ -10,9 +10,15 @@ const processes = [
 const children = new Map();
 let shuttingDown = false;
 
-const MAX_RESTART_ATTEMPTS = 5;
-const RESTART_DELAY_MS = 5000;
+const RESTART_BACKOFF_BASE_MS = 5000;
+const RESTART_BACKOFF_MAX_MS = 120000;
+const STABLE_RESET_MS = 60000;
 const restartCounts = new Map();
+const stabilityTimers = new Map();
+
+function restartDelayMs(count) {
+  return Math.min(RESTART_BACKOFF_BASE_MS * Math.pow(2, Math.min(count - 1, 6)), RESTART_BACKOFF_MAX_MS);
+}
 
 function startProcess(definition) {
   console.log(`${new Date().toISOString()} [start-all] starting ${definition.name}...`);
@@ -24,8 +30,22 @@ function startProcess(definition) {
 
   children.set(definition.name, { child, definition });
 
+  if (definition.restartable) {
+    clearTimeout(stabilityTimers.get(definition.name));
+    const timer = setTimeout(() => {
+      const prev = restartCounts.get(definition.name) || 0;
+      if (prev > 0) {
+        restartCounts.set(definition.name, 0);
+        console.log(`${new Date().toISOString()} [start-all] ${definition.name} stable for ${STABLE_RESET_MS / 1000}s, restart counter reset`);
+      }
+    }, STABLE_RESET_MS);
+    if (typeof timer.unref === 'function') timer.unref();
+    stabilityTimers.set(definition.name, timer);
+  }
+
   child.on('exit', (code, signal) => {
     children.delete(definition.name);
+    clearTimeout(stabilityTimers.get(definition.name));
     if (shuttingDown) return;
 
     const failed = code !== 0;
@@ -36,16 +56,12 @@ function startProcess(definition) {
       return;
     }
 
-    // Auto-restart non-required processes
     if (definition.restartable && failed) {
       const count = (restartCounts.get(definition.name) || 0) + 1;
       restartCounts.set(definition.name, count);
-      if (count <= MAX_RESTART_ATTEMPTS) {
-        console.log(`${new Date().toISOString()} [start-all] restarting ${definition.name} (attempt ${count}/${MAX_RESTART_ATTEMPTS}) in ${RESTART_DELAY_MS}ms...`);
-        setTimeout(() => startProcess(definition), RESTART_DELAY_MS);
-      } else {
-        console.error(`${new Date().toISOString()} [start-all] ${definition.name} exceeded max restart attempts, giving up`);
-      }
+      const delay = restartDelayMs(count);
+      console.log(`${new Date().toISOString()} [start-all] restarting ${definition.name} (attempt ${count}) in ${Math.round(delay / 1000)}s...`);
+      setTimeout(() => startProcess(definition), delay);
     }
   });
 }
