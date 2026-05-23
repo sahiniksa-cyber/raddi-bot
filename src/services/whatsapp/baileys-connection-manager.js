@@ -7,6 +7,7 @@ const pino = require('pino');
 const {
   Browsers,
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   jidNormalizedUser,
   makeWASocket,
@@ -27,6 +28,42 @@ function textFromBaileysMessage(message = {}) {
     message.listResponseMessage?.title ||
     '',
   ).trim();
+}
+
+const MEDIA_DOWNLOAD_MAX_BYTES = parseInt(process.env.WA_MEDIA_DOWNLOAD_MAX_BYTES || `${8 * 1024 * 1024}`, 10);
+
+function detectMediaPart(message = {}) {
+  if (message.imageMessage) return { kind: 'image', part: message.imageMessage, type: 'image' };
+  if (message.videoMessage) return { kind: 'video', part: message.videoMessage, type: 'video' };
+  if (message.audioMessage) return { kind: message.audioMessage.ptt ? 'ptt' : 'audio', part: message.audioMessage, type: 'audio' };
+  if (message.documentMessage) return { kind: 'document', part: message.documentMessage, type: 'document' };
+  if (message.stickerMessage) return { kind: 'sticker', part: message.stickerMessage, type: 'sticker' };
+  return null;
+}
+
+async function downloadBaileysMedia(rawMessage, logger) {
+  const message = rawMessage?.message || {};
+  const detected = detectMediaPart(message);
+  if (!detected) return null;
+  const sizeBytes = Number(detected.part?.fileLength?.toNumber?.() || detected.part?.fileLength || 0);
+  if (sizeBytes && sizeBytes > MEDIA_DOWNLOAD_MAX_BYTES) {
+    logger?.warn?.('media', `skipped media too large (${sizeBytes} bytes)`);
+    return { kind: detected.kind, mimeType: detected.part?.mimetype || '', data: '', caption: String(detected.part?.caption || '').trim(), sizeBytes, skipped: 'too_large' };
+  }
+  try {
+    const buffer = await downloadMediaMessage(rawMessage, 'buffer', {}, { logger });
+    if (!buffer?.length) return null;
+    return {
+      kind: detected.kind,
+      mimeType: detected.part?.mimetype || '',
+      data: buffer.toString('base64'),
+      caption: String(detected.part?.caption || '').trim(),
+      sizeBytes: buffer.length,
+    };
+  } catch (err) {
+    logger?.warn?.('media', `failed to download Baileys media: ${err.message}`);
+    return { kind: detected.kind, mimeType: detected.part?.mimetype || '', data: '', caption: String(detected.part?.caption || '').trim(), error: err.message };
+  }
 }
 
 function normalizeOutboundJid(target) {
@@ -96,7 +133,10 @@ class BaileysConnectionManager extends EventEmitter {
     this._qrWatchdogTimer = null;
     this._version = null;
     this._socketGeneration = 0;
-    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
+    this.startupTime = Date.now();
+    this._stableTimer = null;
+    this._effectiveRetryCount = 0;
+    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '60000', 10);
   }
 
   log(level, stage, message, meta) {
@@ -143,7 +183,8 @@ class BaileysConnectionManager extends EventEmitter {
     this.ready = false;
     this.lastError = null;
     this.qr = null;
-    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
+    this.startupTime = Date.now();
+    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '60000', 10);
     this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
@@ -194,9 +235,11 @@ class BaileysConnectionManager extends EventEmitter {
   async stop() {
     clearTimeout(this._retryTimer);
     clearTimeout(this._qrWatchdogTimer);
+    clearTimeout(this._stableTimer);
     this.stopHeartbeat();
     this._retryTimer = null;
     this._qrWatchdogTimer = null;
+    this._stableTimer = null;
     this._running = false;
     this._socketGeneration++;
     this.ready = false;
@@ -248,7 +291,8 @@ class BaileysConnectionManager extends EventEmitter {
       this.log('warn', 'connection', `Baileys reconnect already scheduled; ignoring duplicate close: ${this.lastError}`);
       return;
     }
-    const retryIndex = Math.min(retryCount, RETRY.DELAYS_MS.length - 1);
+    this._effectiveRetryCount = Math.max(this._effectiveRetryCount, retryCount) + 1;
+    const retryIndex = Math.min(this._effectiveRetryCount - 1, RETRY.DELAYS_MS.length - 1);
     const delay = RETRY.DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
     this.reconnectCount++;
     this.ready = false;
@@ -311,25 +355,47 @@ class BaileysConnectionManager extends EventEmitter {
       this.startHeartbeat();
       this.setStatus('connected', 'open');
       this.emit('ready', this.state());
+
+      clearTimeout(this._stableTimer);
+      const stableMs = parseInt(process.env.WA_STABLE_RESET_MS || '20000', 10);
+      this._stableTimer = setTimeout(() => {
+        if (this.ready && this._socketGeneration === socketGeneration) {
+          this._effectiveRetryCount = 0;
+          this.log('info', 'connection', `Baileys connection stable for ${Math.round(stableMs / 1000)}s, backoff reset`);
+        }
+      }, stableMs);
+      if (typeof this._stableTimer.unref === 'function') this._stableTimer.unref();
     }
 
     if (update.connection === 'close') {
       this.ready = false;
+      clearTimeout(this._stableTimer);
+      this._stableTimer = null;
       const statusCode = update.lastDisconnect?.error?.output?.statusCode;
       const reasonName = DisconnectReason[statusCode] || 'unknown';
       const rawMessage = update.lastDisconnect?.error?.message || 'closed';
-      const message = `${rawMessage} (code=${statusCode || 'unknown'} reason=${reasonName})`;
-      this.lastError = message;
+      const technicalMessage = `${rawMessage} (code=${statusCode || 'unknown'} reason=${reasonName})`;
       if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+        this.lastError = technicalMessage;
         this.authFailureCount++;
         await this.clearAuthCache('Baileys logged out');
         this.setStatus('stopped', 'logged_out');
         this._running = false;
-        this.emit('disconnected', message);
+        this.emit('disconnected', technicalMessage);
         return;
       }
-      this.emit('disconnected', message);
-      this.scheduleReconnect(retryCount, message, socketGeneration);
+      if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
+        this.lastError = 'تعارض اتصال (440): فيه نسخة ثانية متصلة بنفس الرقم. افتح واتساب على جوالك ← الأجهزة المرتبطة، واحذف أي جلسة غير معروفة، ثم اضغط "تشغيل البوت" مرة أخرى.';
+        this.authFailureCount++;
+        this.setStatus('stopped', 'connection_conflict');
+        this._running = false;
+        this.emit('disconnected', this.lastError);
+        this.emit('connection_conflict', { reason: technicalMessage, message: this.lastError });
+        return;
+      }
+      this.lastError = technicalMessage;
+      this.emit('disconnected', technicalMessage);
+      this.scheduleReconnect(this._effectiveRetryCount, technicalMessage, socketGeneration);
     }
   }
 
@@ -339,6 +405,9 @@ class BaileysConnectionManager extends EventEmitter {
       this.log('info', 'message', `ignored Baileys ${event.type} message batch`);
       return;
     }
+
+    const candidates = [];
+    const distinctSenders = new Set();
     for (const message of event.messages) {
       const msg = toWhatsappWebMessage(message);
       const messageTimeMs = timestampToMs(msg.timestamp);
@@ -346,14 +415,43 @@ class BaileysConnectionManager extends EventEmitter {
         this.log('info', 'message', `ignored stale Baileys message ${msg.id?.id || 'unknown'}`);
         continue;
       }
-      this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg, source: 'baileys' })
-        .then(result => this.emit('message_ingested', result))
-        .catch(err => {
-          this.lastError = err.message;
-          this.emit('message_ingest_error', err);
-          this.logger.error?.('message', `Baileys ingest failed: ${err.message}`);
-        });
+      candidates.push({ raw: message, msg });
+      if (msg.from) distinctSenders.add(msg.from);
     }
+
+    if (this.shouldDropStartupBulkBatch(candidates, distinctSenders)) {
+      this.log('warn', 'message', `dropped startup bulk batch: ${candidates.length} messages from ${distinctSenders.size} senders within ${Math.round((Date.now() - this.startupTime) / 1000)}s of boot`);
+      return;
+    }
+
+    for (const { raw, msg } of candidates) {
+      this.processInboundBaileysMessage(raw, msg).catch(err => {
+        this.lastError = err.message;
+        this.emit('message_ingest_error', err);
+        this.logger.error?.('message', `Baileys ingest failed: ${err.message}`);
+      });
+    }
+  }
+
+  shouldDropStartupBulkBatch(candidates, distinctSenders) {
+    const windowMs = parseInt(process.env.WA_STARTUP_BULK_WINDOW_MS || '30000', 10);
+    if (Date.now() - this.startupTime > windowMs) return false;
+    const minMessages = parseInt(process.env.WA_STARTUP_BULK_MIN_MESSAGES || '6', 10);
+    const minSenders = parseInt(process.env.WA_STARTUP_BULK_MIN_SENDERS || '5', 10);
+    return candidates.length >= minMessages && distinctSenders.size >= minSenders;
+  }
+
+  async processInboundBaileysMessage(rawMessage, msg) {
+    if (msg.hasMedia) {
+      try {
+        const media = await downloadBaileysMedia(rawMessage, this.logger);
+        if (media) msg.media = media;
+      } catch (err) {
+        this.log('warn', 'message', `media download error: ${err.message}`);
+      }
+    }
+    const result = await this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg, source: 'baileys' });
+    this.emit('message_ingested', result);
   }
 
   clearWebCache(reason) {
