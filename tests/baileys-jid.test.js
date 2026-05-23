@@ -148,65 +148,6 @@ test('Baileys manager ignores customer messages older than the current startup w
   assert.deepEqual(ingested, []);
 });
 
-test('Baileys manager blocks bulk startup notify batches from many senders', async () => {
-  const ingested = [];
-  const manager = new BaileysConnectionManager({
-    userId: 'user-1',
-    dataDir: __dirname,
-    database: {},
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
-    ingestService: {
-      ingestWhatsappMessage: async (payload) => {
-        ingested.push(payload);
-        return { accepted: true };
-      },
-    },
-  });
-
-  manager._running = true;
-  manager.acceptMessagesAfterMs = Date.now() - 5000;
-
-  await manager.handleMessages({
-    type: 'notify',
-    messages: Array.from({ length: 6 }, (_, index) => ({
-      key: { id: `startup-${index}`, remoteJid: `96650123456${index}@s.whatsapp.net` },
-      message: { conversation: 'old queued customer message' },
-      messageTimestamp: Math.floor(Date.now() / 1000),
-    })),
-  });
-
-  assert.deepEqual(ingested, []);
-});
-
-test('Baileys manager ignores notify messages without a provider timestamp', async () => {
-  const ingested = [];
-  const manager = new BaileysConnectionManager({
-    userId: 'user-1',
-    dataDir: __dirname,
-    database: {},
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
-    ingestService: {
-      ingestWhatsappMessage: async (payload) => {
-        ingested.push(payload);
-        return { accepted: true };
-      },
-    },
-  });
-
-  manager._running = true;
-  manager.acceptMessagesAfterMs = Date.now();
-
-  await manager.handleMessages({
-    type: 'notify',
-    messages: [{
-      key: { id: 'no-ts-1', remoteJid: '966501234567@s.whatsapp.net' },
-      message: { conversation: 'message without timestamp' },
-    }],
-  });
-
-  assert.deepEqual(ingested, []);
-});
-
 test('Baileys manager does not reconnect from a stale timer after it is connected', async () => {
   const manager = createManager();
   const originalSetTimeout = global.setTimeout;

@@ -7,7 +7,6 @@ const pino = require('pino');
 const {
   Browsers,
   DisconnectReason,
-  downloadMediaMessage,
   fetchLatestBaileysVersion,
   jidNormalizedUser,
   makeWASocket,
@@ -30,23 +29,6 @@ function textFromBaileysMessage(message = {}) {
   ).trim();
 }
 
-function mediaKindFromBaileysMessage(message = {}) {
-  if (message.imageMessage) return 'image';
-  if (message.audioMessage) return 'audio';
-  return null;
-}
-
-function mediaMetaFromBaileysMessage(message = {}) {
-  const kind = mediaKindFromBaileysMessage(message);
-  if (!kind) return null;
-  const node = kind === 'image' ? message.imageMessage : message.audioMessage;
-  return {
-    kind,
-    mimeType: node?.mimetype || (kind === 'image' ? 'image/jpeg' : 'audio/ogg'),
-    caption: node?.caption || '',
-  };
-}
-
 function normalizeOutboundJid(target) {
   const raw = String(target || '').trim();
   if (raw.endsWith('@s.whatsapp.net') || raw.endsWith('@g.us') || raw.endsWith('@lid')) return raw;
@@ -56,7 +38,6 @@ function normalizeOutboundJid(target) {
 
 function toWhatsappWebMessage(msg) {
   const remoteJid = msg.key?.remoteJid || null;
-  const mediaMeta = mediaMetaFromBaileysMessage(msg.message || {});
   return {
     id: { _serialized: msg.key?.id || null, id: msg.key?.id || null },
     from: remoteJid,
@@ -67,7 +48,6 @@ function toWhatsappWebMessage(msg) {
     timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : null,
     type: Object.keys(msg.message || {})[0] || 'unknown',
     hasMedia: !!(msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.documentMessage || msg.message?.audioMessage),
-    media: mediaMeta,
     deviceType: 'baileys',
   };
 }
@@ -78,29 +58,6 @@ function timestampToMs(timestamp) {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
-function startupGraceMs() {
-  return parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '1000', 10);
-}
-
-function startupBulkGuardMs() {
-  return parseInt(process.env.WA_STARTUP_BULK_GUARD_MS || '30000', 10);
-}
-
-function startupBulkSenderLimit() {
-  return parseInt(process.env.WA_STARTUP_BULK_SENDER_LIMIT || '5', 10);
-}
-
-function requireProviderTimestamp() {
-  return process.env.WA_REQUIRE_MESSAGE_TIMESTAMP !== 'false';
-}
-
-function isCustomerJid(jid) {
-  const value = String(jid || '');
-  return value &&
-    value !== 'status@broadcast' &&
-    !value.includes('@g.us');
-}
-
 class BaileysConnectionManager extends EventEmitter {
   constructor({
     userId,
@@ -108,7 +65,6 @@ class BaileysConnectionManager extends EventEmitter {
     logger = console,
     ingestService = new MessageIngestService({ logger }),
     database = db,
-    mediaDownloader = downloadMediaMessage,
   }) {
     super();
     if (!userId) throw new Error('userId is required');
@@ -120,7 +76,6 @@ class BaileysConnectionManager extends EventEmitter {
     this.logger = logger;
     this.ingestService = ingestService;
     this.db = database;
-    this.mediaDownloader = mediaDownloader;
 
     this.sock = null;
     this.client = null;
@@ -136,15 +91,12 @@ class BaileysConnectionManager extends EventEmitter {
     this.statusSince = Date.now();
     this.lastProbeState = null;
     this._running = false;
-    this._retryCount = 0;
     this._retryTimer = null;
-    this._stabilityTimer = null;
-    this._lastOpenAt = 0;
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
     this._version = null;
     this._socketGeneration = 0;
-    this.acceptMessagesAfterMs = Date.now() - startupGraceMs();
+    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
   }
 
   log(level, stage, message, meta) {
@@ -188,11 +140,10 @@ class BaileysConnectionManager extends EventEmitter {
     }
 
     this._running = true;
-    this._retryCount = retryCount;
     this.ready = false;
     this.lastError = null;
     this.qr = null;
-    this.acceptMessagesAfterMs = Date.now() - startupGraceMs();
+    this.acceptMessagesAfterMs = Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '5000', 10);
     this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
@@ -243,11 +194,9 @@ class BaileysConnectionManager extends EventEmitter {
   async stop() {
     clearTimeout(this._retryTimer);
     clearTimeout(this._qrWatchdogTimer);
-    clearTimeout(this._stabilityTimer);
     this.stopHeartbeat();
     this._retryTimer = null;
     this._qrWatchdogTimer = null;
-    this._stabilityTimer = null;
     this._running = false;
     this._socketGeneration++;
     this.ready = false;
@@ -272,19 +221,6 @@ class BaileysConnectionManager extends EventEmitter {
     if (typeof this._qrWatchdogTimer.unref === 'function') this._qrWatchdogTimer.unref();
   }
 
-  scheduleStabilityReset() {
-    clearTimeout(this._stabilityTimer);
-    const stableMs = parseInt(process.env.WA_STABLE_RESET_MS || '20000', 10);
-    this._stabilityTimer = setTimeout(() => {
-      this._stabilityTimer = null;
-      if (!this._running || !this.ready || this.status !== 'connected') return;
-      this._retryCount = 0;
-      this.reconnectCount = 0;
-      this.log('info', 'connection', 'Baileys connection stable; reconnect backoff reset');
-    }, stableMs);
-    if (typeof this._stabilityTimer.unref === 'function') this._stabilityTimer.unref();
-  }
-
   startHeartbeat() {
     this.stopHeartbeat();
     this._heartbeatTimer = setInterval(() => {
@@ -301,7 +237,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._heartbeatTimer = null;
   }
 
-  scheduleReconnect(retryCount = this._retryCount, reason, socketGeneration = this._socketGeneration, { immediate = false } = {}) {
+  scheduleReconnect(retryCount, reason, socketGeneration = this._socketGeneration) {
     if (!this._running) return;
     if (socketGeneration !== this._socketGeneration) {
       this.log('info', 'connection', `ignored stale reconnect request: ${String(reason || 'unknown')}`);
@@ -312,43 +248,26 @@ class BaileysConnectionManager extends EventEmitter {
       this.log('warn', 'connection', `Baileys reconnect already scheduled; ignoring duplicate close: ${this.lastError}`);
       return;
     }
-
-    let delay;
-    if (immediate) {
-      // restartRequired (515) is part of the normal Baileys handshake after pairing.
-      // Reconnect almost instantly and keep the status as "connecting" so the UI does
-      // not flicker to "reconnecting", and do not inflate the backoff counter.
-      delay = parseInt(process.env.WA_RESTART_REQUIRED_DELAY_MS || '500', 10);
-    } else {
-      const retryIndex = Math.min(retryCount, RETRY.DELAYS_MS.length - 1);
-      delay = RETRY.DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
-      this.reconnectCount++;
-    }
-
-    clearTimeout(this._stabilityTimer);
-    this._stabilityTimer = null;
+    const retryIndex = Math.min(retryCount, RETRY.DELAYS_MS.length - 1);
+    const delay = RETRY.DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
+    this.reconnectCount++;
     this.ready = false;
     this.qr = null;
     this.lastError = String(reason || 'unknown');
     this.stopHeartbeat();
-    this.setStatus(immediate ? 'connecting' : 'reconnecting', immediate ? 'restart_required' : 'reconnect');
-    this.log('warn', 'connection', immediate
-      ? `Baileys restart required; reconnecting in ${delay}ms: ${this.lastError}`
-      : `Baileys reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
+    this.setStatus('reconnecting', 'reconnect');
+    this.log('warn', 'connection', `Baileys reconnect scheduled in ${Math.round(delay / 1000)}s: ${this.lastError}`);
     const sock = this.sock;
     this.sock = null;
     this.client = null;
     try { sock?.end?.(new Error('reconnect')); } catch (_) {}
     try { sock?.ws?.close?.(); } catch (_) {}
-    // Always advance the retry counter so a repeating close (e.g. a flapping session)
-    // climbs the backoff ladder instead of retrying at the same short delay forever.
-    const nextRetry = retryCount + 1;
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
       if (socketGeneration !== this._socketGeneration) return;
       if (this.ready || this.status === 'connected') return;
       this._running = false;
-      this.start(nextRetry).catch((err) => {
+      this.start(retryCount + 1).catch((err) => {
         this.log('error', 'connection', `Baileys reconnect failed: ${err.message}`, err);
       });
     }, delay);
@@ -384,7 +303,6 @@ class BaileysConnectionManager extends EventEmitter {
       this._retryTimer = null;
       this.ready = true;
       this.lastProbeState = 'CONNECTED';
-      this._lastOpenAt = Date.now();
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
       this.qr = null;
       this.lastError = null;
@@ -393,11 +311,6 @@ class BaileysConnectionManager extends EventEmitter {
       this.startHeartbeat();
       this.setStatus('connected', 'open');
       this.emit('ready', this.state());
-      // Only reset the backoff once the connection PROVES stable. A flapping session
-      // (connect → drop every couple seconds) must keep backing off instead of hammering
-      // a fresh socket every time, which is what caused the "connected then reconnecting"
-      // loop. A 2-second connection is not "stable".
-      this.scheduleStabilityReset();
     }
 
     if (update.connection === 'close') {
@@ -415,65 +328,25 @@ class BaileysConnectionManager extends EventEmitter {
         this.emit('disconnected', message);
         return;
       }
-      if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
-        // The FIRST 515 (right after pairing) is normal — reconnect at once. But if 515
-        // keeps firing after brief connections, fall through to normal backoff so we don't
-        // hammer the socket every half-second.
-        if (this._retryCount === 0) {
-          this.scheduleReconnect(0, message, socketGeneration, { immediate: true });
-          return;
-        }
-      }
-      if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
-        this.lastError = 'تعارض اتصال (conflict): يوجد اتصال آخر يستخدم نفس رقم الواتساب — نسخة أخرى من التطبيق على نفس قاعدة البيانات، أو جلسة على جهاز/خادم آخر. أوقف النسخة الأخرى، ثم امسح الجلسة وأعد المسح.';
-        this.log('warn', 'connection', `Baileys session replaced — another connection is using the same WhatsApp credentials (code=440). Stop the duplicate instance. raw=${message}`);
-      }
       this.emit('disconnected', message);
-      this.scheduleReconnect(this._retryCount, message, socketGeneration);
+      this.scheduleReconnect(retryCount, message, socketGeneration);
     }
   }
 
-  async attachMedia(message, msg) {
-    if (!msg.hasMedia || !msg.media) return msg;
-    try {
-      const buffer = await this.mediaDownloader(message, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-      if (buffer?.length) {
-        msg.media = {
-          ...msg.media,
-          data: Buffer.from(buffer).toString('base64'),
-          sizeBytes: buffer.length,
-        };
-      }
-    } catch (err) {
-      this.log('warn', 'message', `failed to download Baileys media ${msg.id?.id || 'unknown'}: ${err.message}`);
-      msg.media = { ...msg.media, downloadError: err.message };
-    }
-    return msg;
-  }
-
-  async handleMessages(event) {
+  handleMessages(event) {
     if (!this._running || !Array.isArray(event?.messages)) return;
     if (event.type && event.type !== 'notify') {
       this.log('info', 'message', `ignored Baileys ${event.type} message batch`);
       return;
     }
-    if (this.shouldBlockStartupBulkBatch(event.messages)) {
-      this.log('warn', 'message', `blocked startup bulk notify batch messages=${event.messages.length}`);
-      return;
-    }
     for (const message of event.messages) {
       const msg = toWhatsappWebMessage(message);
       const messageTimeMs = timestampToMs(msg.timestamp);
-      if (!messageTimeMs && requireProviderTimestamp()) {
-        this.log('info', 'message', `ignored Baileys message without timestamp ${msg.id?.id || 'unknown'}`);
-        continue;
-      }
       if (messageTimeMs && messageTimeMs < this.acceptMessagesAfterMs) {
         this.log('info', 'message', `ignored stale Baileys message ${msg.id?.id || 'unknown'}`);
         continue;
       }
-      const enriched = await this.attachMedia(message, msg);
-      this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg: enriched, source: 'baileys' })
+      this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg, source: 'baileys' })
         .then(result => this.emit('message_ingested', result))
         .catch(err => {
           this.lastError = err.message;
@@ -481,22 +354,6 @@ class BaileysConnectionManager extends EventEmitter {
           this.logger.error?.('message', `Baileys ingest failed: ${err.message}`);
         });
     }
-  }
-
-  shouldBlockStartupBulkBatch(messages = []) {
-    const guardMs = startupBulkGuardMs();
-    const limit = startupBulkSenderLimit();
-    if (guardMs <= 0 || limit <= 0) return false;
-    if (Date.now() - this.acceptMessagesAfterMs > guardMs) return false;
-
-    const senders = new Set();
-    for (const message of messages) {
-      if (message?.key?.fromMe) continue;
-      const jid = message?.key?.remoteJid;
-      if (isCustomerJid(jid)) senders.add(jid);
-      if (senders.size >= limit) return true;
-    }
-    return false;
   }
 
   clearWebCache(reason) {
@@ -514,4 +371,4 @@ class BaileysConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { BaileysConnectionManager, normalizeOutboundJid, timestampToMs };
+module.exports = { BaileysConnectionManager, normalizeOutboundJid };
