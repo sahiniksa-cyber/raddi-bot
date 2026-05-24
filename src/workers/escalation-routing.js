@@ -76,10 +76,12 @@ function resolveEscalationContact(config = {}, contactName, inboundText = '') {
   return contact;
 }
 
-function cleanCustomerJid(sender) {
+function cleanCustomerJid(sender, { phoneNumber } = {}) {
+  const pn = String(phoneNumber || '').trim();
+  if (pn) return `+${pn}`;
   const raw = String(sender || '').trim();
   if (raw.endsWith('@lid')) return raw;
-  return cleanDigits(sender) || String(sender || '').trim();
+  return cleanDigits(sender) || raw;
 }
 
 function applyEscalationTemplate(template, values) {
@@ -88,8 +90,8 @@ function applyEscalationTemplate(template, values) {
   }).trim();
 }
 
-function buildEscalationNotification({ contact, customerSender, inboundText, summary }) {
-  const customer = cleanCustomerJid(customerSender);
+function buildEscalationNotification({ contact, customerSender, customerPhoneNumber, inboundText, summary }) {
+  const customer = cleanCustomerJid(customerSender, { phoneNumber: customerPhoneNumber });
   const customerMessage = String(inboundText || '').trim() || 'غير متوفرة';
   const problemSummary = String(summary || '').trim() || 'يحتاج متابعة';
   if (contact?.messageTemplate?.trim()) {
@@ -112,7 +114,7 @@ function buildEscalationNotification({ contact, customerSender, inboundText, sum
   ].join('\n');
 }
 
-function prepareEscalation({ reply, config = {}, customerSender, inboundText }) {
+function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNumber, inboundText }) {
   const explicit = extractEscalationRequest(reply);
   const contact = resolveEscalationContact(config, explicit?.contactName, inboundText);
   const ruleMatched = !explicit && contact && shouldEscalateByContactRule(contact, inboundText);
@@ -132,7 +134,7 @@ function prepareEscalation({ reply, config = {}, customerSender, inboundText }) 
     customerReply,
     ownerMessage: {
       sender: target,
-      reply: buildEscalationNotification({ contact, customerSender, inboundText, summary }),
+      reply: buildEscalationNotification({ contact, customerSender, customerPhoneNumber, inboundText, summary }),
       contact,
       summary,
     },
