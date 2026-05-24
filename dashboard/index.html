@@ -1981,55 +1981,116 @@ async function runHealthCheck(){
   finally{btn.disabled=false;btn.textContent='🩺 فحص الخدمة الكامل — هل كل شيء يعمل؟';}
 }
 
-let convFilter='all';
+let cvConversations = [];
+let cvSelectedId = null;
+
 async function loadConversations(){
-  const count=document.getElementById('convCount');
-  const list=document.getElementById('convList');
+  const list=document.getElementById('cvList');
   if(!list)return;
-  list.innerHTML='<div class="hint">جاري تحميل المحادثات...</div>';
+  list.innerHTML='<div class="cv-empty"><div class="cv-empty-icon">💬</div>جاري التحميل...</div>';
   try{
-    const r=await fetch('/api/conversations?status='+encodeURIComponent(convFilter));
-    if(r.status===401){window.location.href='/login';return;}
+    const search=document.getElementById('cvSearch')?.value?.trim()||'';
+    const url='/api/conversations'+(search?'?q='+encodeURIComponent(search):'');
+    const r=await fetch(url);
+    if(r.status===401){window.location.href='/login';return}
     const d=await r.json();
     if(!d.success)throw new Error(d.message||'تعذر تحميل المحادثات');
-    if(count)count.textContent=d.total||0;
-    if(!d.conversations||!d.conversations.length){
-      const emptyMsg=convFilter==='ongoing'?'لا توجد محادثات مستمرة الآن':convFilter==='finished'?'لا توجد محادثات منتهية':'لا توجد محادثات بعد';
-      list.innerHTML='<div class="hint">'+emptyMsg+'</div>';
-      return;
+    cvConversations=d.conversations||[];
+    renderConversationList(cvConversations);
+    if(cvSelectedId){
+      const stillExists=cvConversations.find(c=>c.id===cvSelectedId);
+      if(stillExists)selectConversation(cvSelectedId);
+      else clearConversationPanel();
     }
-    list.innerHTML='';
-    d.conversations.forEach((c,index)=>{
-      const item=document.createElement('div');
-      item.className='conv-item';
-      const messages=(c.messages||[]).map(m=>{
-        const cls=m.speaker==='AI'?'ai':'customer';
-        return `<div class="conv-msg ${cls}"><div class="conv-speaker">${esc(m.speaker||'')}</div>${esc(m.content||'')}</div>`;
-      }).join('') || '<div class="hint">لا توجد رسائل محفوظة</div>';
-      const bodyId=`conv-body-${index}`;
-      const count=(c.messages||[]).length;
-      const badge=c.status==='ongoing'?'<span class="conv-status-badge ongoing">مستمرة</span>':'<span class="conv-status-badge finished">منتهية</span>';
-      item.innerHTML=`<button type="button" class="conv-head" aria-expanded="false" aria-controls="${bodyId}"><div class="conv-meta"><div><div class="conv-label">عنوان المشكلة</div><div class="conv-problem">${esc(c.title||'استفسار عميل')}</div></div><div class="conv-phone-box"><div class="conv-label">رقم العميل</div><div class="conv-phone">${esc(c.phone||c.sender||'')}</div></div></div><div class="conv-action">${badge}<span>${count} رسالة</span><span class="conv-caret">⌄</span></div></button><div class="conv-body" id="${bodyId}"><div class="conv-body-head"><span>آخر تحديث: ${esc(formatConvTime(c.lastMessageAt))}</span><span>${esc(c.phone||c.sender||'')}</span></div>${messages}</div>`;
-      item.querySelector('.conv-head').onclick=()=>toggleConversation(item);
-      list.appendChild(item);
-    });
   }catch(e){
-    list.innerHTML='<div class="hint">تعذر تحميل المحادثات: '+esc(e.message||'خطأ')+'</div>';
+    list.innerHTML='<div class="cv-empty"><div class="cv-empty-icon">⚠️</div>تعذر تحميل المحادثات: '+esc(e.message||'خطأ')+'</div>';
   }
 }
 
-function toggleConversation(item){
-  item.classList.toggle('open');
-  const open=item.classList.contains('open');
-  const head=item.querySelector('.conv-head');
-  if(head)head.setAttribute('aria-expanded', open ? 'true' : 'false');
+function renderConversationList(items){
+  const list=document.getElementById('cvList');
+  if(!list)return;
+  if(!items.length){
+    list.innerHTML='<div class="cv-empty"><div class="cv-empty-icon">💬</div>لا توجد محادثات</div>';
+    return;
+  }
+  list.innerHTML=items.map(c=>{
+    const count=(c.messages||[]).length;
+    const dotClass=c.status==='ongoing'?'ongoing':'finished';
+    const isActive=c.id===cvSelectedId;
+    return `<div class="cv-card ${isActive?'active':''}" data-id="${esc(c.id)}" onclick="onConvCardClick('${esc(c.id)}')">
+      <div class="cv-card-row">
+        <div style="flex:1;min-width:0">
+          <div class="phone">${esc(c.phone||c.sender||'')}</div>
+          <div class="title">${esc(c.title||'استفسار عميل')}</div>
+        </div>
+        <span class="cv-dot ${dotClass}" title="${c.status==='ongoing'?'نشطة':'منتهية'}"></span>
+      </div>
+      <div class="meta">
+        <span>${count} رسالة</span>
+        <span>${esc(formatConvTime(c.lastMessageAt))}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onConvCardClick(id){
+  if(window.innerWidth<=900) toggleAccordionCard(id);
+  else selectConversation(id);
+}
+
+function selectConversation(id){
+  cvSelectedId=id;
+  const conv=cvConversations.find(c=>c.id===id);
+  if(!conv)return;
+  document.querySelectorAll('.cv-card').forEach(el=>{
+    el.classList.toggle('active', el.dataset.id===id);
+  });
+  if(typeof renderConversationPanel==='function')renderConversationPanel(conv);
+}
+
+function clearConversationPanel(){
+  cvSelectedId=null;
+  const panel=document.getElementById('cvPanel');
+  if(panel)panel.innerHTML='<div class="cv-empty" id="cvPanelEmpty"><div class="cv-empty-icon">👈</div>اختر محادثة من القائمة لقراءتها</div>';
+}
+
+function filterConversations(query){
+  const q=String(query||'').trim().toLowerCase();
+  if(!q){ renderConversationList(cvConversations); return; }
+  const filtered=cvConversations.filter(c=>{
+    if(String(c.phone||'').toLowerCase().includes(q))return true;
+    if(String(c.title||'').toLowerCase().includes(q))return true;
+    if((c.messages||[]).some(m=>String(m.content||'').toLowerCase().includes(q)))return true;
+    return false;
+  });
+  renderConversationList(filtered);
 }
 
 function formatConvTime(value){
   if(!value)return '—';
   const date=new Date(value);
   if(Number.isNaN(date.getTime()))return '—';
-  return date.toLocaleString('ar-SA',{dateStyle:'short',timeStyle:'short'});
+  const now=new Date();
+  const diff=now-date;
+  if(diff<60000)return 'الآن';
+  if(diff<3600000)return 'قبل '+Math.floor(diff/60000)+' د';
+  const sameDay=date.toDateString()===now.toDateString();
+  if(sameDay)return date.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'});
+  const yesterday=new Date(now); yesterday.setDate(now.getDate()-1);
+  if(date.toDateString()===yesterday.toDateString())return 'أمس '+date.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'});
+  return date.toLocaleDateString('ar-SA',{month:'short',day:'numeric'});
+}
+
+// Stubs — Task 6 fills these in
+function renderConversationPanel(conv){
+  // TEMPORARY stub until Task 6 — shows raw count
+  const panel=document.getElementById('cvPanel');
+  if(panel)panel.innerHTML='<div class="cv-empty">سيتم عرض الرسائل في الخطوة التالية ('+(conv?.messages?.length||0)+' رسالة)</div>';
+}
+function toggleAccordionCard(id){
+  // TEMPORARY stub until Task 7
+  alert('سيتم تفعيل الوضع المحمول في الخطوة التالية');
 }
 
 function renderKW(kws){document.getElementById('kwContainer').innerHTML='';Object.entries(kws).forEach(([k,v])=>addKW(k,v));}

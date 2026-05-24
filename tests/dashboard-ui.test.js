@@ -20,11 +20,11 @@ test('dashboard exposes conversations as a top-level tab', () => {
 test('conversation rows show problem title, customer phone, and collapsible details', () => {
   const html = dashboardHtml();
 
-  assert.match(html, /conv-problem/);
-  assert.match(html, /conv-phone-box/);
-  assert.match(html, /conv-caret/);
-  assert.match(html, /aria-expanded/);
-  assert.match(html, /toggleConversation/);
+  assert.match(html, /renderConversationList/);
+  assert.match(html, /selectConversation/);
+  assert.match(html, /filterConversations/);
+  assert.match(html, /cv-card/);
+  assert.match(html, /cv-dot/);
 });
 
 test('escalation template variables are clickable insert buttons', () => {
