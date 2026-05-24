@@ -56,6 +56,7 @@ function createConversationsController({ database = db } = {}) {
       const userId = req.session.userId;
       const limit = Math.max(1, Math.min(50, parseInt(req.query?.limit, 10) || 20));
       const statusFilter = ['ongoing', 'finished'].includes(req.query?.status) ? req.query.status : 'all';
+      const searchQuery = String(req.query?.q || '').trim();
       const now = Date.now();
       const cutoffIso = new Date(now - ACTIVE_WINDOW_MS).toISOString();
 
@@ -63,6 +64,19 @@ function createConversationsController({ database = db } = {}) {
       let statusCondition = '';
       if (statusFilter === 'ongoing') { statusCondition = ' AND c.last_message_at >= $2'; listParams.push(cutoffIso); }
       else if (statusFilter === 'finished') { statusCondition = ' AND c.last_message_at < $2'; listParams.push(cutoffIso); }
+
+      let searchCondition = '';
+      if (searchQuery) {
+        listParams.push(`%${searchQuery}%`);
+        const qPlaceholder = `$${listParams.length}`;
+        searchCondition = ` AND (c.sender ILIKE ${qPlaceholder} OR EXISTS (
+          SELECT 1 FROM messages m2
+          WHERE m2.conversation_id = c.id
+            AND m2.user_id = c.user_id
+            AND m2.content ILIKE ${qPlaceholder}
+        ))`;
+      }
+
       listParams.push(limit);
       const limitPlaceholder = `$${listParams.length}`;
 
@@ -91,7 +105,7 @@ function createConversationsController({ database = db } = {}) {
              ORDER BY created_at ASC
              LIMIT 1
            ) first_msg ON TRUE
-           WHERE c.user_id = $1${statusCondition}
+           WHERE c.user_id = $1${statusCondition}${searchCondition}
            ORDER BY c.last_message_at DESC
            LIMIT ${limitPlaceholder}`,
           listParams,
