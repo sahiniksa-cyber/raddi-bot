@@ -123,3 +123,58 @@ test('normalizeMessage detects audio/ptt media kind', () => {
   assert.equal(msg.hasMedia, true);
   assert.equal(msg.mediaKind, 'ptt');
 });
+
+test('cleanCustomerPhone returns +<digits> when row.phone_number is present', () => {
+  assert.equal(
+    cleanCustomerPhone({ phone_number: '966512345678', sender: '276282495500304@lid' }),
+    '+966512345678'
+  );
+});
+
+test('cleanCustomerPhone falls back to sender behavior when phone_number is null', () => {
+  assert.equal(
+    cleanCustomerPhone({ phone_number: null, sender: '276282495500304@lid' }),
+    '276282495500304@lid'
+  );
+  assert.equal(
+    cleanCustomerPhone({ phone_number: null, sender: '966500000000@s.whatsapp.net' }),
+    '+966500000000'
+  );
+});
+
+test('cleanCustomerPhone preserves the string-only signature for backward compat', () => {
+  assert.equal(cleanCustomerPhone('966500000000@s.whatsapp.net'), '+966500000000');
+  assert.equal(cleanCustomerPhone('276282495500304@lid'), '276282495500304@lid');
+});
+
+test('conversations controller list includes phone_number in SELECT and exposes phoneNumber in payload', async () => {
+  const calls = [];
+  const database = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (/COUNT\(\*\)/.test(sql)) return { rows: [{ total: 1, ongoing: 1, finished: 0 }] };
+      if (/FROM conversations c/.test(sql)) {
+        return {
+          rows: [{
+            id: 'conv-1',
+            sender: '276282495500304@lid',
+            phone_number: '966512345678',
+            last_message_at: new Date().toISOString(),
+            first_inquiry: 'ابي السعر',
+          }],
+        };
+      }
+      return { rows: [] };
+    },
+  };
+  const ctl = createConversationsController({ database });
+  let body = null;
+  const req = { session: { userId: 'u1' }, query: {} };
+  const res = { json: (p) => { body = p; } };
+  await ctl.list(req, res);
+
+  const listQuery = calls.find(c => /FROM conversations c/.test(c.sql));
+  assert.match(listQuery.sql, /c\.phone_number/);
+  assert.equal(body.conversations[0].phoneNumber, '966512345678');
+  assert.equal(body.conversations[0].phone, '+966512345678');
+});

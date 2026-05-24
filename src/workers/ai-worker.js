@@ -94,7 +94,7 @@ async function loadConfig(userId) {
 async function resolveConversation({ userId, conversationId, sender }) {
   if (conversationId) {
     const result = await db.query(
-      'SELECT id, sender FROM conversations WHERE id = $1 AND user_id = $2',
+      'SELECT id, sender, phone_number FROM conversations WHERE id = $1 AND user_id = $2',
       [conversationId, userId],
     );
     if (result.rows[0]) return result.rows[0];
@@ -454,6 +454,7 @@ async function processAiReply(job) {
       reply,
       config,
       customerSender: conversation.sender,
+      customerPhoneNumber: conversation.phone_number,
       inboundText: text,
     });
     const customerReply = escalation.customerReply.trim();
@@ -494,6 +495,7 @@ async function processAiReply(job) {
         escalation: true,
         escalationSummary: escalation.ownerMessage.summary,
         customerSender: conversation.sender,
+        customerPhoneNumber: conversation.phone_number,
       }, {
         jobKey: buildEscalationJobKey(replyMessageId),
       });

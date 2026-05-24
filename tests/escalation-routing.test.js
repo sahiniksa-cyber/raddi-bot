@@ -110,3 +110,42 @@ test('buildEscalationNotification includes customer and problem details', () => 
   assert.match(text, /966500000000/);
   assert.match(text, /احتاج استرجاع/);
 });
+
+test('buildEscalationNotification prefers customerPhoneNumber over lid sender', () => {
+  const text = buildEscalationNotification({
+    contact: { name: 'علي', role: 'دعم', phone: '966500000000' },
+    customerSender: '276282495500304@lid',
+    customerPhoneNumber: '966512345678',
+    inboundText: 'مشكلة في الطلب',
+    summary: 'طلب لم يصل',
+  });
+  assert.ok(text.includes('+966512345678'), 'must include the real phone, got: ' + text);
+  assert.ok(!text.includes('@lid'), 'must NOT include the lid');
+});
+
+test('buildEscalationNotification falls back to sender when customerPhoneNumber is missing', () => {
+  const text = buildEscalationNotification({
+    contact: { name: 'علي', role: 'دعم', phone: '966500000000' },
+    customerSender: '276282495500304@lid',
+    inboundText: 'مشكلة',
+    summary: 'يحتاج متابعة',
+  });
+  // No phoneNumber → existing behavior: lid leaks through (acceptable for old conversations).
+  assert.ok(text.includes('276282495500304@lid'));
+});
+
+test('prepareEscalation threads customerPhoneNumber into the owner notification', () => {
+  const config = {
+    escalationContacts: [{ name: 'علي', role: 'دعم', phone: '966500000000' }],
+  };
+  const result = prepareEscalation({
+    reply: 'ثواني اتأكد لك [تحويل:علي|مشكلة دفع]',
+    config,
+    customerSender: '276282495500304@lid',
+    customerPhoneNumber: '966512345678',
+    inboundText: 'ما اقدر ادفع',
+  });
+  assert.ok(result.ownerMessage, 'escalation must produce an owner message');
+  assert.ok(result.ownerMessage.reply.includes('+966512345678'));
+  assert.ok(!result.ownerMessage.reply.includes('@lid'));
+});

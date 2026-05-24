@@ -70,6 +70,8 @@ const statements = [
     UNIQUE(user_id, sender)
   )`,
 
+  `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS phone_number TEXT`,
+
   `CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
