@@ -6,6 +6,7 @@ const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, getQueues } = require('../queues/message-queue');
 const { normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
+const { decrementMessageQuota } = require('../services/billing/message-quota');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -126,7 +127,16 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
 
   await sendWhatsappReply(bot, { sender, reply, providerMessageId });
 
-  await markReplyMessage(replyMessageId, 'sent', { sentBy: WORKER_NAME, sentAt: new Date().toISOString() });
+  const dec = await decrementMessageQuota(userId);
+  if (!dec.success) {
+    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] sent ${replyMessageId} but quota already empty for ${userId}`);
+  }
+
+  await markReplyMessage(replyMessageId, 'sent', {
+    sentBy: WORKER_NAME,
+    sentAt: new Date().toISOString(),
+    quotaRemainingAfter: dec.remaining ?? 0,
+  });
   await updateJobStatus(job.id, {
     status: 'completed',
     finished_at: new Date(),
