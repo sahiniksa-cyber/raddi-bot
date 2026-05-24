@@ -2021,7 +2021,7 @@ function renderConversationList(items){
     return `<div class="cv-card ${isActive?'active':''}" data-id="${esc(c.id)}" onclick="onConvCardClick('${esc(c.id)}')">
       <div class="cv-card-row">
         <div style="flex:1;min-width:0">
-          <div class="phone">${esc(c.phone||c.sender||'')}</div>
+          <div class="phone">${esc(c.phone||c.sender||'')}${!c.phoneNumber ? '<span class="old-badge">قديمة</span>' : ''}</div>
           <div class="title">${esc(c.title||'استفسار عميل')}</div>
         </div>
         <span class="cv-dot ${dotClass}" title="${c.status==='ongoing'?'نشطة':'منتهية'}"></span>
@@ -2092,7 +2092,7 @@ function renderConversationPanel(conv){
   const dotClass=conv.status==='ongoing'?'ongoing':'finished';
   const statusLabel=conv.status==='ongoing'?'نشطة':'منتهية';
   panel.innerHTML=`<div class="cv-panel-header">
-    <div class="phone">${esc(conv.phone||conv.sender||'')}</div>
+    <div class="phone">${esc(conv.phone||conv.sender||'')}${!conv.phoneNumber ? '<span class="old-badge">قديمة</span>' : ''}</div>
     <div class="title">${esc(conv.title||'استفسار عميل')}</div>
     <div class="meta"><span class="cv-dot ${dotClass}"></span> ${statusLabel} · آخر تحديث ${esc(formatConvTime(conv.lastMessageAt))}</div>
   </div>
