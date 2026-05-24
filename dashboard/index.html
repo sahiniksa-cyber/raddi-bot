@@ -2082,11 +2082,79 @@ function formatConvTime(value){
   return date.toLocaleDateString('ar-SA',{month:'short',day:'numeric'});
 }
 
-// Stubs — Task 6 fills these in
+// Stub — Task 7 fills this in
 function renderConversationPanel(conv){
-  // TEMPORARY stub until Task 6 — shows raw count
   const panel=document.getElementById('cvPanel');
-  if(panel)panel.innerHTML='<div class="cv-empty">سيتم عرض الرسائل في الخطوة التالية ('+(conv?.messages?.length||0)+' رسالة)</div>';
+  if(!panel)return;
+  const messages=conv.messages||[];
+  const bubblesHtml=messages.length
+    ? messages.map(renderBubble).join('')
+    : '<div class="cv-empty"><div class="cv-empty-icon">💭</div>لا توجد رسائل محفوظة</div>';
+  const dotClass=conv.status==='ongoing'?'ongoing':'finished';
+  const statusLabel=conv.status==='ongoing'?'نشطة':'منتهية';
+  panel.innerHTML=`<div class="cv-panel-header">
+    <div class="phone">${esc(conv.phone||conv.sender||'')}</div>
+    <div class="title">${esc(conv.title||'استفسار عميل')}</div>
+    <div class="meta"><span class="cv-dot ${dotClass}"></span> ${statusLabel} · آخر تحديث ${esc(formatConvTime(conv.lastMessageAt))}</div>
+  </div>
+  <div class="cv-bubbles" id="cvBubbles">${bubblesHtml}</div>`;
+  const bubbles=document.getElementById('cvBubbles');
+  if(bubbles)bubbles.scrollTop=bubbles.scrollHeight;
+}
+
+function bubbleStatusIcon(status){
+  if(!status)return '';
+  if(status==='sent')return '<span class="cv-bubble-status" title="مُرسلة">✓</span>';
+  if(status==='queued_for_send')return '<span class="cv-bubble-status" title="بانتظار الإرسال">⏳</span>';
+  if(status==='expired'||status==='canceled_no_quota')return '<span class="cv-bubble-status" title="ملغاة">🚫</span>';
+  if(status==='send_failed')return '<span class="cv-bubble-status" title="فشل الإرسال">✗</span>';
+  return '';
+}
+
+function mediaLabel(kind){
+  if(kind==='image')return {icon:'🖼️',label:'صورة من العميل'};
+  if(kind==='audio'||kind==='ptt')return {icon:'🎤',label:'رسالة صوتية'};
+  if(kind==='video')return {icon:'🎬',label:'فيديو'};
+  if(kind==='document')return {icon:'📄',label:'مستند'};
+  return {icon:'📎',label:'مرفق'};
+}
+
+function renderBubble(m){
+  const isAi=m.speaker==='AI'||m.direction==='outbound';
+  const wrapClass=isAi?'ai':'customer';
+  const isFailed=isAi && (m.status==='expired'||m.status==='canceled_no_quota'||m.status==='send_failed');
+  const statusIcon=isAi?bubbleStatusIcon(m.status):'';
+  const timeStr=esc(formatConvTime(m.at));
+  const safeContent=esc(m.content||'');
+  const copyAttr=String(m.content||'').replace(/'/g,"\\'").replace(/\n/g,'\\n');
+
+  let bubbleClass='cv-bubble';
+  let bubbleInner=safeContent;
+
+  if(m.hasMedia){
+    const meta=mediaLabel(m.mediaKind);
+    bubbleClass+=' media-'+(m.mediaKind||'other');
+    bubbleInner=`<span class="cv-bubble-media-icon">${meta.icon}</span><span class="cv-bubble-media-label">${meta.label}</span><br>${safeContent}`;
+  }
+  if(isFailed)bubbleClass+=' failed';
+
+  return `<div class="cv-bubble-wrap ${wrapClass}">
+    <div class="${bubbleClass}">
+      <button class="cv-bubble-copy" onclick="copyBubble(this,'${copyAttr}')" type="button">📋</button>
+      ${bubbleInner}
+    </div>
+    <div class="cv-bubble-time">${timeStr}${statusIcon}</div>
+  </div>`;
+}
+
+function copyBubble(btn, text){
+  const decoded=String(text||'').replace(/\\n/g,'\n');
+  if(navigator.clipboard?.writeText){
+    navigator.clipboard.writeText(decoded).then(()=>{
+      btn.textContent='✓';
+      setTimeout(()=>{btn.textContent='📋';},1200);
+    }).catch(()=>{ btn.textContent='✗'; });
+  }
 }
 function toggleAccordionCard(id){
   // TEMPORARY stub until Task 7
