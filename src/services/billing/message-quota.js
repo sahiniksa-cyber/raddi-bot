@@ -49,4 +49,30 @@ async function decrementMessageQuota(userId, { database = db } = {}) {
   return { success: true, remaining: result.rows[0].messages_remaining };
 }
 
-module.exports = { computeEffectiveRemaining, checkMessageQuota, decrementMessageQuota };
+async function addMessagesToQuota(userId, { messages, days, expireResetsQuota, database = db }) {
+  const result = await database.query(
+    `INSERT INTO billing_accounts (
+       user_id, messages_remaining, quota_expires_at, expire_resets_quota,
+       last_topup_amount, last_topup_at
+     )
+     VALUES ($1, $2, NOW() + ($3 || ' days')::INTERVAL, $4, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE
+       SET messages_remaining = billing_accounts.messages_remaining + EXCLUDED.messages_remaining,
+           quota_expires_at = EXCLUDED.quota_expires_at,
+           expire_resets_quota = EXCLUDED.expire_resets_quota,
+           last_topup_amount = EXCLUDED.last_topup_amount,
+           last_topup_at = NOW(),
+           updated_at = NOW()
+     RETURNING messages_remaining, quota_expires_at, expire_resets_quota,
+               last_topup_amount, last_topup_at`,
+    [userId, messages, String(days), expireResetsQuota],
+  );
+  return result.rows[0];
+}
+
+module.exports = {
+  computeEffectiveRemaining,
+  checkMessageQuota,
+  decrementMessageQuota,
+  addMessagesToQuota,
+};

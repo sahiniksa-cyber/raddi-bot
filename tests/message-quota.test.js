@@ -115,3 +115,28 @@ test('decrementMessageQuota returns failure when UPDATE matches no rows', async 
   const result = await decrementMessageQuota('user-1', { database });
   assert.deepEqual(result, { success: false });
 });
+
+const { addMessagesToQuota } = require('../src/services/billing/message-quota');
+
+test('addMessagesToQuota issues an UPSERT with INTERVAL and returns the new state', async () => {
+  const database = fakeDbCapture([{
+    messages_remaining: 5847,
+    quota_expires_at: '2026-06-23T12:00:00.000Z',
+    expire_resets_quota: true,
+    last_topup_amount: 3000,
+    last_topup_at: '2026-05-24T12:00:00.000Z',
+  }]);
+  const result = await addMessagesToQuota('user-1', {
+    messages: 3000,
+    days: 30,
+    expireResetsQuota: true,
+    database,
+  });
+  assert.equal(result.messages_remaining, 5847);
+  assert.equal(result.last_topup_amount, 3000);
+  assert.match(database.calls[0].sql, /INSERT INTO billing_accounts/);
+  assert.match(database.calls[0].sql, /ON CONFLICT \(user_id\) DO UPDATE/);
+  assert.match(database.calls[0].sql, /messages_remaining \+ EXCLUDED\.messages_remaining/);
+  assert.match(database.calls[0].sql, /NOW\(\) \+ \(\$3 \|\| ' days'\)::INTERVAL/);
+  assert.deepEqual(database.calls[0].params, ['user-1', 3000, '30', true]);
+});
