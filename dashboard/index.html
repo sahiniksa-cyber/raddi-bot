@@ -2082,7 +2082,6 @@ function formatConvTime(value){
   return date.toLocaleDateString('ar-SA',{month:'short',day:'numeric'});
 }
 
-// Stub — Task 7 fills this in
 function renderConversationPanel(conv){
   const panel=document.getElementById('cvPanel');
   if(!panel)return;
@@ -2157,8 +2156,33 @@ function copyBubble(btn, text){
   }
 }
 function toggleAccordionCard(id){
-  // TEMPORARY stub until Task 7
-  alert('سيتم تفعيل الوضع المحمول في الخطوة التالية');
+  const card=document.querySelector('.cv-card[data-id="'+id+'"]');
+  if(!card)return;
+  if(card.classList.contains('expanded')){
+    closeAccordionCard(card);
+    return;
+  }
+  document.querySelectorAll('.cv-card.expanded').forEach(c=>closeAccordionCard(c));
+  const conv=cvConversations.find(c=>c.id===id);
+  if(!conv)return;
+  const messages=conv.messages||[];
+  const bubblesHtml=messages.length
+    ? messages.map(renderBubble).join('')
+    : '<div class="cv-empty"><div class="cv-empty-icon">💭</div>لا توجد رسائل محفوظة</div>';
+  const body=document.createElement('div');
+  body.className='cv-card-body';
+  body.innerHTML=bubblesHtml+'<button class="cv-card-close" onclick="closeAccordionCard(this.closest(\'.cv-card\'))">✕ إغلاق</button>';
+  card.appendChild(body);
+  card.classList.add('expanded');
+  cvSelectedId=id;
+}
+
+function closeAccordionCard(card){
+  if(!card)return;
+  card.classList.remove('expanded');
+  const body=card.querySelector('.cv-card-body');
+  if(body)body.remove();
+  cvSelectedId=null;
 }
 
 function renderKW(kws){document.getElementById('kwContainer').innerHTML='';Object.entries(kws).forEach(([k,v])=>addKW(k,v));}
