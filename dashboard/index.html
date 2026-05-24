@@ -1143,6 +1143,14 @@ body{background-attachment:scroll}
       </div>
       <div class="hint">الافتراضي يمنع: أنا AI، نموذج لغة، روبوت، ChatGPT، OpenAI</div>
 
+      <!-- Avoid phrases -->
+      <label style="margin-top:10px">✏️ عبارات ممنوعة (جمل كاملة لا يقولها البوت)</label>
+      <div class="chips" id="avoidPhrasesChips">
+        <input type="text" id="avoidPhrasesInput" placeholder="مثال: إذا عندك أي استفسار أنا موجود" onkeydown="if(event.key==='Enter'){event.preventDefault();addAvoidPhrase()}">
+        <button class="chip-add" onclick="addAvoidPhrase()">+ إضافة</button>
+      </div>
+      <div class="hint">اكتب جملة كاملة كما يقولها البوت — يحذفها من الرد تلقائياً قبل الإرسال للعميل</div>
+
       <!-- Custom instructions with AI enhance -->
       <label style="margin-top:6px">📝 تعليمات إضافية للبوت
         <button class="enhance-btn" onclick="enhanceText('botInstr','instructions')" type="button">✨ تحسين بالذكاء</button>
@@ -1851,6 +1859,7 @@ function fillForm(c){
   renderChips('greetingChips',r.greetingPhrases||['أهلاً وسهلاً 🌹','هلا والله','حياك الله']);
   renderChips('closingChips',r.closingPhrases||['تأمر شي ثاني؟','في خدمتك']);
   renderChips('avoidChips',r.avoidWords||[]);
+  renderChips('avoidPhrasesChips',r.avoidPhrases||[]);
 
   // Reply delay preset
   const preset=c.replyDelayPreset||'1min';
@@ -1941,6 +1950,7 @@ function getChips(containerId){
 function addGreeting(){const i=document.getElementById('greetingInput');if(i.value.trim()){insertChip('greetingChips',i.value.trim());i.value='';}}
 function addClosing(){const i=document.getElementById('closingInput');if(i.value.trim()){insertChip('closingChips',i.value.trim());i.value='';}}
 function addAvoid(){const i=document.getElementById('avoidInput');if(i.value.trim()){insertChip('avoidChips',i.value.trim());i.value='';}}
+function addAvoidPhrase(){const i=document.getElementById('avoidPhrasesInput');if(i.value.trim()){insertChip('avoidPhrasesChips',i.value.trim());i.value='';}}
 
 // ── AI ENHANCER ──
 async function enhanceText(fieldId,type){
@@ -2261,6 +2271,7 @@ async function saveConf(){
     greetingPhrases:getChips('greetingChips'),
     closingPhrases:getChips('closingChips'),
     avoidWords:getChips('avoidChips'),
+    avoidPhrases:getChips('avoidPhrasesChips'),
   };
 
   // Delay preset
