@@ -66,13 +66,14 @@
             <th>العميل</th>
             <th>واتساب</th>
             <th>الوصول</th>
+            <th>الرصيد</th>
             <th>آخر دفع</th>
             <th>مستحقات الرسائل</th>
             <th>ملاحظة داخلية</th>
             <th>إجراءات</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="7" class="empty">جاري التحميل...</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="8" class="empty">جاري التحميل...</td></tr></tbody>
       </table>
     </section>
     <h2 style="margin-top:32px;font-size:18px">🎟️ الكوبونات</h2>
@@ -102,12 +103,19 @@ function chip(value){return `<span class="chip ${esc(value)}">${esc(label(value)
 function label(value){
   return {active:'مدفوع',free:'مجاني',unpaid:'غير مدفوع',suspended:'موقوف',connected:'متصل',stopped:'متوقف',waiting_qr:'ينتظر باركود',reconnecting:'يعيد الاتصال',disconnected:'مفصول'}[value]||value||'غير معروف';
 }
+function quotaLabel(c){
+  if(c.quotaStatus==='never_topped_up')return 'لم يُفعَّل';
+  if(c.quotaStatus==='expired')return '⚠ المدة منتهية';
+  if(c.quotaStatus==='empty')return 'الرصيد منتهي';
+  const days=c.quotaDaysLeft;
+  return days!=null?`نشط · ${days} يوم متبقي`:'نشط';
+}
 function toast(msg,err=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show'+(err?' err':'');setTimeout(()=>t.className='toast',2600)}
 async function loadCustomers(){
   try{
     const r=await fetch('/api/admin/customers');
     if(r.status===401){location.href='/login';return}
-    if(!r.ok){document.getElementById('rows').innerHTML='<tr><td colspan="7" class="empty">غير مصرح</td></tr>';return}
+    if(!r.ok){document.getElementById('rows').innerHTML='<tr><td colspan="8" class="empty">غير مصرح</td></tr>';return}
     const d=await r.json();customers=d.customers||[];render();
   }catch(_){toast('تعذر تحميل العملاء',true)}
 }
@@ -118,16 +126,21 @@ function render(){
   document.getElementById('stActive').textContent=customers.filter(c=>c.accessActive).length;
   document.getElementById('stUnpaid').textContent=customers.filter(c=>c.accessStatus==='unpaid').length;
   document.getElementById('stSuspended').textContent=customers.filter(c=>c.accessStatus==='suspended').length;
-  if(!list.length){document.getElementById('rows').innerHTML='<tr><td colspan="7" class="empty">لا توجد نتائج</td></tr>';return}
+  if(!list.length){document.getElementById('rows').innerHTML='<tr><td colspan="8" class="empty">لا توجد نتائج</td></tr>';return}
   document.getElementById('rows').innerHTML=list.map(c=>`
     <tr>
       <td><b>${esc(c.name||'بدون اسم')}</b><div class="sub">${esc(c.email)}</div></td>
       <td>${chip(c.whatsappStatus)}<div class="sub">${esc(c.whatsappPhone||'')}</div></td>
       <td>${chip(c.accessStatus)}<div class="sub">${esc(c.activationSource||'')}</div></td>
+      <td>
+        <b style="font-size:14px">${(c.effectiveRemaining ?? 0).toLocaleString('ar-EG')}</b>
+        <div class="sub">${quotaLabel(c)}</div>
+      </td>
       <td>${c.lastPaymentAt?new Date(c.lastPaymentAt).toLocaleString('ar-SA'):'-'}</td>
       <td><input class="amount" id="amount-${c.userId}" value="${esc(c.receivableSar)}"> ر.س</td>
       <td><textarea id="note-${c.userId}">${esc(c.internalNote)}</textarea></td>
       <td><div class="actions">
+        <button class="good" onclick="openAddMessagesModal('${c.userId}','${esc(c.name||'بدون اسم').replace(/'/g,"\\'")}')">➕ إضافة رسائل</button>
         <button class="good" onclick="act('${c.userId}','grant_free')">تفعيل مجاني</button>
         <button class="blue" onclick="act('${c.userId}','mark_paid',1750)">تسجيل دفع 1750</button>
         <button class="blue" onclick="saveDue('${c.userId}')">حفظ المستحق</button>
@@ -225,10 +238,61 @@ function renderHealth(d){
     ? '<table><thead><tr><th>المكوّن</th><th>الحالة</th><th>التفاصيل</th><th>بدأ</th><th>انتهى</th></tr></thead><tbody>'+inc.map(i=>`<tr><td>${esc(i.component)}</td><td>${i.status==='open'?'<span class="chip disconnected">مفتوح</span>':'<span class="chip connected">انتهى</span>'}</td><td>${esc(i.detail||'')}</td><td>${i.opened_at?new Date(i.opened_at).toLocaleString('ar-SA'):'—'}</td><td>${i.resolved_at?new Date(i.resolved_at).toLocaleString('ar-SA'):'—'}</td></tr>`).join('')+'</tbody></table>'
     : '<div class="sub" style="margin-top:6px">لا توجد أعطال مسجلة 🎉</div>';
 }
+let currentAddUserId=null;
+function openAddMessagesModal(userId,name){
+  currentAddUserId=userId;
+  document.getElementById('addMessagesCustomerName').textContent=name;
+  document.getElementById('addMessagesModal').style.display='flex';
+}
+function closeAddMessagesModal(){
+  currentAddUserId=null;
+  document.getElementById('addMessagesModal').style.display='none';
+}
+async function submitAddMessages(){
+  if(!currentAddUserId)return;
+  const messages=parseInt(document.getElementById('addMessagesCount').value,10);
+  const days=parseInt(document.getElementById('addMessagesDays').value,10);
+  const expireResetsQuota=document.getElementById('addMessagesResetFlag').checked;
+  if(!messages||messages<=0){toast('عدد الرسائل غير صحيح',true);return}
+  if(!days||days<=0){toast('عدد الأيام غير صحيح',true);return}
+  try{
+    const r=await fetch(`/api/admin/customers/${currentAddUserId}/add-messages`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages,days,expireResetsQuota})
+    });
+    const d=await r.json();
+    if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم إضافة '+messages.toLocaleString('ar-EG')+' رسالة');
+    closeAddMessagesModal();
+    loadCustomers();
+  }catch(e){toast(e.message,true)}
+}
 loadCustomers();
 loadCoupons();
 loadHealth();
 setInterval(loadHealth,30000);
 </script>
+<div id="addMessagesModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:#fff;padding:24px;border-radius:12px;min-width:340px;direction:rtl;font-family:Tahoma,Arial,sans-serif">
+    <h3 style="margin:0 0 16px;font-size:17px">إضافة رسائل لـ <span id="addMessagesCustomerName" style="color:#0f9f6e"></span></h3>
+    <label style="display:block;margin-bottom:12px;font-size:13px">
+      عدد الرسائل
+      <input id="addMessagesCount" type="number" min="1" value="3000" style="width:100%;padding:9px;margin-top:5px;border:1px solid #dfe7e3;border-radius:7px">
+    </label>
+    <label style="display:block;margin-bottom:12px;font-size:13px">
+      مدة الصلاحية (يوم)
+      <input id="addMessagesDays" type="number" min="1" value="30" style="width:100%;padding:9px;margin-top:5px;border:1px solid #dfe7e3;border-radius:7px">
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;cursor:pointer">
+      <input id="addMessagesResetFlag" type="checkbox" checked>
+      تصفير الرصيد عند انتهاء المدة
+    </label>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeAddMessagesModal()" style="padding:9px 16px;border:1px solid #dfe7e3;background:#fff;border-radius:7px;cursor:pointer">إلغاء</button>
+      <button onclick="submitAddMessages()" style="padding:9px 18px;background:#0f9f6e;color:#fff;border:none;border-radius:7px;cursor:pointer;font-weight:700">تفعيل</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
