@@ -9,8 +9,13 @@ function classifyConversation(lastMessageAt, { now = Date.now(), activeWindowMs 
   return now - ts <= activeWindowMs ? 'ongoing' : 'finished';
 }
 
-function cleanCustomerPhone(sender) {
-  const raw = String(sender || '').trim();
+function cleanCustomerPhone(senderOrRow) {
+  if (senderOrRow && typeof senderOrRow === 'object') {
+    const pn = String(senderOrRow.phone_number || '').trim();
+    if (pn) return `+${pn}`;
+    return cleanCustomerPhone(senderOrRow.sender);
+  }
+  const raw = String(senderOrRow || '').trim();
   if (raw.endsWith('@lid')) return raw;
   const digits = raw.replace(/@(s\.whatsapp\.net|c\.us)$/i, '').replace(/[^\d]/g, '');
   return digits ? `+${digits}` : raw;
@@ -93,6 +98,7 @@ function createConversationsController({ database = db } = {}) {
         database.query(
           `SELECT c.id,
                   c.sender,
+                  c.phone_number,
                   c.last_message_at,
                   COALESCE(first_msg.content, '') AS first_inquiry
            FROM conversations c
@@ -132,7 +138,8 @@ function createConversationsController({ database = db } = {}) {
       const payload = conversations.rows.map(row => ({
         id: row.id,
         sender: row.sender,
-        phone: cleanCustomerPhone(row.sender),
+        phoneNumber: row.phone_number || null,
+        phone: cleanCustomerPhone(row),
         title: buildConversationTitle(row.first_inquiry),
         lastMessageAt: row.last_message_at,
         status: classifyConversation(row.last_message_at, { now }),
