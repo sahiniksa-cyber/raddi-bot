@@ -83,3 +83,33 @@ test('checkMessageQuota refuses when expired and flag is set', async () => {
   assert.equal(result.canReply, false);
   assert.equal(result.reason, 'expired');
 });
+
+const { decrementMessageQuota } = require('../src/services/billing/message-quota');
+
+function fakeDbCapture(rows) {
+  const calls = [];
+  return {
+    calls,
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows };
+    },
+  };
+}
+
+test('decrementMessageQuota returns success and new remaining on update', async () => {
+  const database = fakeDbCapture([{ messages_remaining: 2846 }]);
+  const result = await decrementMessageQuota('user-1', { database });
+  assert.equal(result.success, true);
+  assert.equal(result.remaining, 2846);
+  assert.match(database.calls[0].sql, /UPDATE billing_accounts/);
+  assert.match(database.calls[0].sql, /messages_remaining = messages_remaining - 1/);
+  assert.match(database.calls[0].sql, /WHERE user_id = \$1/);
+  assert.match(database.calls[0].sql, /messages_remaining > 0/);
+});
+
+test('decrementMessageQuota returns failure when UPDATE matches no rows', async () => {
+  const database = fakeDbCapture([]);
+  const result = await decrementMessageQuota('user-1', { database });
+  assert.deepEqual(result, { success: false });
+});

@@ -30,4 +30,23 @@ async function checkMessageQuota(userId, { database = db } = {}) {
   return { canReply: true, remaining, expiresAt };
 }
 
-module.exports = { computeEffectiveRemaining, checkMessageQuota };
+async function decrementMessageQuota(userId, { database = db } = {}) {
+  const result = await database.query(
+    `UPDATE billing_accounts
+     SET messages_remaining = messages_remaining - 1,
+         updated_at = NOW()
+     WHERE user_id = $1
+       AND messages_remaining > 0
+       AND (
+         NOT expire_resets_quota
+         OR quota_expires_at IS NULL
+         OR quota_expires_at > NOW()
+       )
+     RETURNING messages_remaining`,
+    [userId],
+  );
+  if (!result.rows[0]) return { success: false };
+  return { success: true, remaining: result.rows[0].messages_remaining };
+}
+
+module.exports = { computeEffectiveRemaining, checkMessageQuota, decrementMessageQuota };
