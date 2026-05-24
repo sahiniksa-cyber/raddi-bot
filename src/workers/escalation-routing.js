@@ -80,7 +80,11 @@ function cleanCustomerJid(sender, { phoneNumber } = {}) {
   const pn = String(phoneNumber || '').trim();
   if (pn) return `+${pn}`;
   const raw = String(sender || '').trim();
-  if (raw.endsWith('@lid')) return raw;
+  if (raw.endsWith('@lid')) {
+    const digits = raw.replace(/@lid$/, '').replace(/[^\d]/g, '');
+    const last4 = digits.slice(-4);
+    return last4 ? `عميل ····${last4}` : 'عميل قديم';
+  }
   return cleanDigits(sender) || raw;
 }
 
