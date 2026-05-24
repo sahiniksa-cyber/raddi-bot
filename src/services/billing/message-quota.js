@@ -1,7 +1,5 @@
 'use strict';
 
-const db = require('../../db/client');
-
 function computeEffectiveRemaining(row) {
   if (!row) return 0;
   const remaining = Number(row.messages_remaining) || 0;
