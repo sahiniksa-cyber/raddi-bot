@@ -92,3 +92,18 @@ test('recoverQueuedAiReplyJobs retries an existing failed BullMQ AI job', async 
   assert.equal(result.recovered, 1);
   assert.equal(retried, 1);
 });
+
+test('recoverQueuedAiReplyJobs excludes messages with status quota_exceeded', async () => {
+  let capturedSql = '';
+  const database = {
+    isConfigured: () => true,
+    query: async (sql) => {
+      capturedSql = sql;
+      return { rows: [] };
+    },
+  };
+  const { recoverQueuedAiReplyJobs } = require('../src/workers/ai-recovery');
+  await recoverQueuedAiReplyJobs({ database, enqueue: async () => {}, aiQueue: { getJob: async () => null } });
+  assert.match(capturedSql, /'queued_for_ai'/);
+  assert.doesNotMatch(capturedSql, /quota_exceeded/, 'recovery query must not requeue quota_exceeded rows');
+});
