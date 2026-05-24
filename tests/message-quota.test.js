@@ -3,10 +3,26 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { computeEffectiveRemaining, checkMessageQuota } = require('../src/services/billing/message-quota');
+const {
+  computeEffectiveRemaining,
+  checkMessageQuota,
+  decrementMessageQuota,
+  addMessagesToQuota,
+} = require('../src/services/billing/message-quota');
 
 function fakeDb(rows) {
   return { query: async () => ({ rows }) };
+}
+
+function fakeDbCapture(rows) {
+  const calls = [];
+  return {
+    calls,
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows };
+    },
+  };
 }
 
 test('computeEffectiveRemaining returns the raw remaining when not expired', () => {
@@ -84,19 +100,6 @@ test('checkMessageQuota refuses when expired and flag is set', async () => {
   assert.equal(result.reason, 'expired');
 });
 
-const { decrementMessageQuota } = require('../src/services/billing/message-quota');
-
-function fakeDbCapture(rows) {
-  const calls = [];
-  return {
-    calls,
-    query: async (sql, params) => {
-      calls.push({ sql, params });
-      return { rows };
-    },
-  };
-}
-
 test('decrementMessageQuota returns success and new remaining on update', async () => {
   const database = fakeDbCapture([{ messages_remaining: 2846 }]);
   const result = await decrementMessageQuota('user-1', { database });
@@ -115,8 +118,6 @@ test('decrementMessageQuota returns failure when UPDATE matches no rows', async 
   const result = await decrementMessageQuota('user-1', { database });
   assert.deepEqual(result, { success: false });
 });
-
-const { addMessagesToQuota } = require('../src/services/billing/message-quota');
 
 test('addMessagesToQuota issues an UPSERT with INTERVAL and returns the new state', async () => {
   const database = fakeDbCapture([{

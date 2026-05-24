@@ -49,7 +49,7 @@ async function decrementMessageQuota(userId, { database = db } = {}) {
   return { success: true, remaining: result.rows[0].messages_remaining };
 }
 
-async function addMessagesToQuota(userId, { messages, days, expireResetsQuota, database = db }) {
+async function addMessagesToQuota(userId, { messages, days, expireResetsQuota, database = db } = {}) {
   const result = await database.query(
     `INSERT INTO billing_accounts (
        user_id, messages_remaining, quota_expires_at, expire_resets_quota,
