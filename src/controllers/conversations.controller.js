@@ -27,12 +27,26 @@ function buildConversationTitle(text) {
 }
 
 function normalizeMessage(row) {
+  const media = row.raw_payload?.media || null;
+  const kindRaw = String(media?.kind || media?.type || '').toLowerCase();
+  let mediaKind = null;
+  if (media) {
+    if (kindRaw.includes('image') || String(media.mimeType || '').startsWith('image/')) mediaKind = 'image';
+    else if (kindRaw === 'ptt') mediaKind = 'ptt';
+    else if (kindRaw.includes('audio') || String(media.mimeType || '').startsWith('audio/')) mediaKind = 'audio';
+    else if (kindRaw.includes('video')) mediaKind = 'video';
+    else if (kindRaw.includes('document')) mediaKind = 'document';
+    else mediaKind = kindRaw || 'other';
+  }
   return {
     speaker: row.role === 'assistant' || row.direction === 'outbound' ? 'AI' : 'العميل',
     role: row.role,
     direction: row.direction,
     content: row.content || '',
     at: row.created_at,
+    status: row.status || null,
+    hasMedia: !!media,
+    mediaKind,
   };
 }
 
@@ -89,7 +103,7 @@ function createConversationsController({ database = db } = {}) {
       const messagesByConversation = new Map(ids.map(id => [id, []]));
       if (ids.length > 0) {
         const messages = await database.query(
-          `SELECT conversation_id, role, direction, content, created_at
+          `SELECT conversation_id, role, direction, content, status, raw_payload, created_at
            FROM messages
            WHERE conversation_id = ANY($1::uuid[])
              AND user_id = $2
@@ -127,4 +141,5 @@ module.exports = {
   classifyConversation,
   cleanCustomerPhone,
   createConversationsController,
+  normalizeMessage,
 };
