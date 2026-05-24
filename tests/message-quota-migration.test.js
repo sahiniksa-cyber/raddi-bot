@@ -27,6 +27,9 @@ test('migration adds last_topup_amount and last_topup_at columns', () => {
   assert.match(migrationSource, /ADD COLUMN IF NOT EXISTS last_topup_at TIMESTAMPTZ/);
 });
 
-test('migration adds idx_billing_accounts_quota index', () => {
-  assert.match(migrationSource, /CREATE INDEX IF NOT EXISTS idx_billing_accounts_quota/);
+test('migration adds idx_billing_accounts_quota partial index', () => {
+  assert.match(
+    migrationSource,
+    /CREATE INDEX IF NOT EXISTS idx_billing_accounts_quota[\s\S]*?ON billing_accounts\(user_id, messages_remaining\)[\s\S]*?WHERE messages_remaining > 0/,
+  );
 });
