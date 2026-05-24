@@ -16,7 +16,11 @@ function cleanCustomerPhone(senderOrRow) {
     return cleanCustomerPhone(senderOrRow.sender);
   }
   const raw = String(senderOrRow || '').trim();
-  if (raw.endsWith('@lid')) return raw;
+  if (raw.endsWith('@lid')) {
+    const digits = raw.replace(/@lid$/, '').replace(/[^\d]/g, '');
+    const last4 = digits.slice(-4);
+    return last4 ? `عميل ····${last4}` : 'عميل قديم';
+  }
   const digits = raw.replace(/@(s\.whatsapp\.net|c\.us)$/i, '').replace(/[^\d]/g, '');
   return digits ? `+${digits}` : raw;
 }

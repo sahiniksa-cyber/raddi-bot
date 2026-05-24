@@ -13,7 +13,7 @@ const {
 test('cleanCustomerPhone extracts readable WhatsApp phone numbers', () => {
   assert.equal(cleanCustomerPhone('966501234567@s.whatsapp.net'), '+966501234567');
   assert.equal(cleanCustomerPhone('966501234567@c.us'), '+966501234567');
-  assert.equal(cleanCustomerPhone('278571713060916@lid'), '278571713060916@lid');
+  assert.equal(cleanCustomerPhone('278571713060916@lid'), 'عميل ····0916');
 });
 
 test('buildConversationTitle uses the first customer inquiry', () => {
@@ -134,7 +134,7 @@ test('cleanCustomerPhone returns +<digits> when row.phone_number is present', ()
 test('cleanCustomerPhone falls back to sender behavior when phone_number is null', () => {
   assert.equal(
     cleanCustomerPhone({ phone_number: null, sender: '276282495500304@lid' }),
-    '276282495500304@lid'
+    'عميل ····0304'
   );
   assert.equal(
     cleanCustomerPhone({ phone_number: null, sender: '966500000000@s.whatsapp.net' }),
@@ -144,7 +144,23 @@ test('cleanCustomerPhone falls back to sender behavior when phone_number is null
 
 test('cleanCustomerPhone preserves the string-only signature for backward compat', () => {
   assert.equal(cleanCustomerPhone('966500000000@s.whatsapp.net'), '+966500000000');
-  assert.equal(cleanCustomerPhone('276282495500304@lid'), '276282495500304@lid');
+  assert.equal(cleanCustomerPhone('276282495500304@lid'), 'عميل ····0304');
+});
+
+test('cleanCustomerPhone masks @lid sender to "عميل ····XXXX" (last 4 digits)', () => {
+  assert.equal(cleanCustomerPhone('276282495500304@lid'), 'عميل ····0304');
+  assert.equal(cleanCustomerPhone('278571713060916@lid'), 'عميل ····0916');
+});
+
+test('cleanCustomerPhone returns "عميل قديم" when lid has no digits', () => {
+  assert.equal(cleanCustomerPhone('@lid'), 'عميل قديم');
+});
+
+test('cleanCustomerPhone row form masks @lid sender when phone_number is null', () => {
+  assert.equal(
+    cleanCustomerPhone({ phone_number: null, sender: '276282495500304@lid' }),
+    'عميل ····0304'
+  );
 });
 
 test('conversations controller list includes phone_number in SELECT and exposes phoneNumber in payload', async () => {
