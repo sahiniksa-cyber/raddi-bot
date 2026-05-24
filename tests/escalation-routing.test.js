@@ -123,15 +123,26 @@ test('buildEscalationNotification prefers customerPhoneNumber over lid sender', 
   assert.ok(!text.includes('@lid'), 'must NOT include the lid');
 });
 
-test('buildEscalationNotification falls back to sender when customerPhoneNumber is missing', () => {
+test('buildEscalationNotification masks @lid sender to "عميل ····XXXX" when customerPhoneNumber is missing', () => {
   const text = buildEscalationNotification({
     contact: { name: 'علي', role: 'دعم', phone: '966500000000' },
     customerSender: '276282495500304@lid',
     inboundText: 'مشكلة',
     summary: 'يحتاج متابعة',
   });
-  // No phoneNumber → existing behavior: lid leaks through (acceptable for old conversations).
-  assert.ok(text.includes('276282495500304@lid'));
+  assert.ok(text.includes('عميل ····0304'), 'must include masked label, got: ' + text);
+  assert.ok(!text.includes('@lid'), 'must NOT include raw lid');
+});
+
+test('buildEscalationNotification uses "عميل قديم" when @lid has no digits', () => {
+  const text = buildEscalationNotification({
+    contact: { name: 'علي', role: 'دعم' },
+    customerSender: '@lid',
+    inboundText: 'مشكلة',
+    summary: 'يحتاج متابعة',
+  });
+  assert.ok(text.includes('عميل قديم'));
+  assert.ok(!text.includes('@lid'));
 });
 
 test('prepareEscalation threads customerPhoneNumber into the owner notification', () => {
