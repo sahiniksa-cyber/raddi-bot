@@ -75,6 +75,21 @@ function normalizeOutboundJid(target) {
   return clean ? `${clean}@s.whatsapp.net` : raw;
 }
 
+function extractPhoneNumber(key) {
+  if (!key || typeof key !== 'object') return null;
+  const candidates = [key.senderPn, key.participantPn, key.remoteJid];
+  for (const value of candidates) {
+    const raw = String(value || '').trim();
+    if (!raw) continue;
+    if (raw.endsWith('@lid')) continue;
+    if (raw.endsWith('@g.us')) continue;
+    if (raw === 'status@broadcast' || raw.endsWith('@broadcast')) continue;
+    const digits = raw.replace(/@.*$/, '').replace(/[^\d]/g, '');
+    if (digits) return digits;
+  }
+  return null;
+}
+
 function toWhatsappWebMessage(msg) {
   const remoteJid = msg.key?.remoteJid || null;
   return {
@@ -83,6 +98,7 @@ function toWhatsappWebMessage(msg) {
     to: msg.key?.participant || null,
     author: msg.key?.participant || null,
     fromMe: !!msg.key?.fromMe,
+    phoneNumber: extractPhoneNumber(msg.key),
     body: textFromBaileysMessage(msg.message || {}),
     timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : null,
     type: Object.keys(msg.message || {})[0] || 'unknown',
@@ -475,4 +491,4 @@ class BaileysConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { BaileysConnectionManager, normalizeOutboundJid };
+module.exports = { BaileysConnectionManager, normalizeOutboundJid, extractPhoneNumber, toWhatsappWebMessage };
