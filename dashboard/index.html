@@ -925,15 +925,11 @@ body{background-attachment:scroll}
     </div>
   </div>
 
-  <div class="stats-row" style="grid-template-columns:repeat(5,1fr)">
+  <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
     <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
     <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
     <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
     <div class="stat"><div class="v" id="stMdl">—</div><div class="l">النموذج</div></div>
-    <div class="stat" style="cursor:pointer" onclick="document.querySelector('.panel:has(#costTotal)').scrollIntoView({behavior:'smooth'})" title="اضغط لعرض تفاصيل التكلفة">
-      <div class="v" id="stCost" style="font-size:14px;color:var(--amber)">0 ر.س</div>
-      <div class="l">تكلفة AI <span style="font-size:9px;color:var(--text-soft)" id="stCostCalls"></span></div>
-    </div>
   </div>
 
   <!-- ═══ FULL SERVICE HEALTH CHECK ═══ -->
@@ -1281,31 +1277,34 @@ body{background-attachment:scroll}
     </div>
   </div>
 
-  <!-- ═══ AI COST TRACKER ═══ -->
+  <!-- ═══ MESSAGE QUOTA ═══ -->
   <div class="panel">
-    <div class="phdr">
-      <span>💰 تكلفة الذكاء الاصطناعي</span>
-      <button class="add-btn" onclick="resetCosts()" style="background:var(--red-bg);color:var(--red);border-color:var(--red-border)">🗑 تصفير</button>
+    <div class="panel-h"><span>💬 رصيد الرسائل</span></div>
+    <div id="quotaEmptyBanner" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:12px;border-radius:8px;margin:12px">
+      <strong>⚠️ انتهى الرصيد — البوت متوقف عن الرد</strong>
+      <div style="font-size:12px;margin-top:4px">لمواصلة الخدمة، اشحن رصيدك بالضغط على الزر أدناه.</div>
     </div>
-    <div class="pbdy">
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px">
-        <div style="background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:12px;padding:14px;text-align:center">
-          <div style="font-size:22px;font-weight:900;color:var(--amber)" id="costTotal">0.00 ر.س</div>
-          <div style="font-size:11.5px;color:var(--text-soft);margin-top:4px;font-weight:600">إجمالي التكلفة</div>
-          <div style="font-size:10px;color:var(--text-dim);margin-top:2px" id="costTotalSAR">بالريال السعودي</div>
-        </div>
-        <div style="background:var(--green-bg);border:1px solid var(--green-border);border-radius:12px;padding:14px;text-align:center">
-          <div style="font-size:22px;font-weight:900;color:var(--green2)" id="costCalls">0</div>
-          <div style="font-size:11.5px;color:var(--text-soft);margin-top:4px;font-weight:600">عدد الرسائل</div>
-        </div>
-        <div style="background:var(--indigo-bg);border:1px solid var(--indigo-border);border-radius:12px;padding:14px;text-align:center">
-          <div style="font-size:18px;font-weight:900;color:var(--indigo)" id="costTokens">—</div>
-          <div style="font-size:11.5px;color:var(--text-soft);margin-top:4px;font-weight:600">تكلفة الرسالة</div>
-          <div style="font-size:10px;color:var(--text-dim);margin-top:2px">متوسط لكل رسالة</div>
-        </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;padding:12px">
+      <div style="flex:1;min-width:120px;text-align:center;padding:12px;background:#f0fdf4;border-radius:8px">
+        <div style="font-size:24px;font-weight:900;color:#10b981" id="quotaRemaining">—</div>
+        <div style="font-size:12px;color:var(--text-soft)">المتبقي</div>
       </div>
-      <div id="costByModel" style="display:flex;flex-direction:column;gap:6px"></div>
-      <div style="font-size:11px;color:var(--text-dim);margin-top:12px" id="costResetAt"></div>
+      <div style="flex:1;min-width:120px;text-align:center;padding:12px;background:#eff6ff;border-radius:8px">
+        <div style="font-size:24px;font-weight:900;color:#3b82f6" id="quotaUsed">—</div>
+        <div style="font-size:12px;color:var(--text-soft)">المستخدم</div>
+      </div>
+      <div style="flex:1;min-width:120px;text-align:center;padding:12px;background:#fffbeb;border-radius:8px">
+        <div style="font-size:24px;font-weight:900;color:#f59e0b" id="quotaDaysLeft">—</div>
+        <div style="font-size:12px;color:var(--text-soft)">يوم متبقي</div>
+      </div>
+    </div>
+    <div style="margin:0 12px;background:#e5e7eb;border-radius:8px;height:8px;overflow:hidden">
+      <div id="quotaProgressBar" style="background:#10b981;height:100%;width:0%;transition:width 0.3s"></div>
+    </div>
+    <div style="margin:16px 12px;text-align:center">
+      <a id="quotaTopupBtn" href="#" target="_blank" rel="noopener" style="display:inline-block;background:#10b981;color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700">
+        🔄 طلب شحن رصيد
+      </a>
     </div>
   </div>
 
@@ -2162,38 +2161,33 @@ async function saveConf(){
 
 function toast(m,e=false){const t=document.getElementById('toast');t.textContent=m;t.className='toast show'+(e?' err':'');setTimeout(()=>t.className='toast',3500);}
 
-// ── COSTS ──
-async function loadCosts(){
+// ── MESSAGE QUOTA ──
+async function loadQuota(){
   try{
-    const d=await fetch('/api/costs').then(r=>r.json());
-    const usd=d.totalCostUSD||0;
-    const calls=d.totalCalls||0;
-    // تكلفة AI الحقيقية بالريال (دولار × 150)
-    const sarTotal=(usd*150).toFixed(2);
-    const sarPerMsg=calls>0?((usd/calls)*150).toFixed(2):'—';
-    document.getElementById('stCost').textContent=(usd*150).toFixed(2)+' ر.س';
-    document.getElementById('stCostCalls').textContent=calls?`(${calls})` :'';
-    document.getElementById('costTotal').textContent=sarTotal+' ر.س';
-    document.getElementById('costTotalSAR').textContent='بالريال السعودي';
-    document.getElementById('costCalls').textContent=calls;
-    document.getElementById('costTokens').textContent=sarPerMsg==='—'?'—':sarPerMsg+' ر.س';
-    if(d.resetAt) document.getElementById('costResetAt').textContent='منذ التصفير: '+new Date(d.resetAt).toLocaleString('ar');
-    // by model
-    const bm=document.getElementById('costByModel');bm.innerHTML='';
-    for(const[m,v] of Object.entries(d.byModel||{})){
-      const row=document.createElement('div');
-      row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:var(--card-soft);border:1px solid var(--border);border-radius:9px;padding:9px 13px;font-size:12px;gap:10px;flex-wrap:wrap';
-      const mSar=((v.costUSD||0)*150).toFixed(2);
-      const perMsg=v.calls>0?(((v.costUSD||0)/v.calls)*150).toFixed(2):'—';
-      row.innerHTML=`<span style="color:var(--text);font-weight:700">${esc(m)}</span><span style="color:var(--text-soft)">${v.calls} رسالة</span><span style="color:var(--indigo);font-size:11px;font-weight:600">${perMsg} ر.س/رسالة</span><span style="color:var(--amber);font-weight:800">${mSar} ر.س</span>`;
-      bm.appendChild(row);
+    const r=await fetch('/api/billing/messages');
+    const d=await r.json();
+    if(!d.success)return;
+    document.getElementById('quotaRemaining').textContent=Number(d.remaining||0).toLocaleString('ar-EG');
+    document.getElementById('quotaUsed').textContent=Number(d.used||0).toLocaleString('ar-EG');
+    document.getElementById('quotaDaysLeft').textContent=d.daysLeft!=null?d.daysLeft:'—';
+    const total=Number(d.totalLastTopup||0);
+    const remaining=Number(d.remaining||0);
+    const pct=total>0?Math.min(100,Math.max(0,(remaining/total)*100)):0;
+    const bar=document.getElementById('quotaProgressBar');
+    bar.style.width=pct+'%';
+    bar.style.background=pct<10?'#ef4444':pct<30?'#f59e0b':'#10b981';
+    const isEmpty=d.status==='empty'||d.status==='expired';
+    document.getElementById('quotaEmptyBanner').style.display=isEmpty?'block':'none';
+    const phone=d.supportWhatsappPhone;
+    const btn=document.getElementById('quotaTopupBtn');
+    if(phone){
+      const text=encodeURIComponent('مرحباً، أحتاج شحن رصيد رسائل لحسابي');
+      btn.href='https://wa.me/'+phone+'?text='+text;
+      btn.style.display='inline-block';
+    }else{
+      btn.style.display='none';
     }
-  }catch(_){}
-}
-async function resetCosts(){
-  if(!confirm('هل تريد تصفير إحصائيات التكلفة؟'))return;
-  await fetch('/api/costs/reset',{method:'POST'});
-  loadCosts();toast('✅ تم تصفير التكلفة');
+  }catch(e){console.warn('loadQuota failed',e);}
 }
 
 // ── TRAINING SESSION (4 مراحل، أسئلة عميقة) ──
@@ -2445,14 +2439,14 @@ async function initDashboard(){
   await loadUserInfo();
   const active=await loadBillingState();
   if(active){
-    loadConf();poll();loadCosts();loadPausedChats();loadConversations();checkStorageStatus();
+    loadConf();poll();loadQuota();loadPausedChats();loadConversations();checkStorageStatus();
   }
 }
 initDashboard();
 setInterval(()=>{if(!document.hidden&&billingActive())loadPausedChats();}, 30000);
 setInterval(()=>{if(!document.hidden&&billingActive())loadConversations();}, 30000);
 setInterval(()=>{if(!document.hidden&&billingActive())poll();}, 4000);
-setInterval(()=>{if(!document.hidden&&billingActive())loadCosts();}, 30000);
+setInterval(()=>{if(!document.hidden&&billingActive())loadQuota();}, 30000);
 </script>
 </body>
 </html>

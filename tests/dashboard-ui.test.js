@@ -43,3 +43,20 @@ test('dashboard does not auto restart WhatsApp from passive polling', () => {
   assert.ok(match, 'maybeRecoverStuckConnecting exists');
   assert.doesNotMatch(match[1], /\/api\/bot\/restart/);
 });
+
+test('dashboard does not show the legacy cost panel', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /إجمالي التكلفة/);
+  assert.doesNotMatch(html, /id="costTotal"/);
+});
+
+test('dashboard shows the message quota panel', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  assert.match(html, /رصيد الرسائل/);
+  assert.match(html, /id="quotaRemaining"/);
+  assert.match(html, /id="quotaTopupBtn"/);
+});
