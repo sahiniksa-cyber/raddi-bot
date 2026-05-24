@@ -55,3 +55,9 @@ test('buildSystemPrompt has positive-phrased rules instead of the old "ممنو�
   const prompt = ai.buildSystemPrompt([]);
   assert.match(prompt, /القواعد الذهبية/);
 });
+
+test('AIClient integrates stripAvoidedContent in getReply', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'ai-client.js'), 'utf8');
+  assert.match(src, /stripAvoidedContent/);
+  assert.match(src, /require\(['"]\.\/post-process-reply['"]\)/);
+});
