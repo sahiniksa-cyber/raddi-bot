@@ -88,3 +88,38 @@ test('conversations controller filters by status and parameterizes the cutoff', 
   assert.equal(res.body.status, 'finished');
   assert.match(listCalls[0].sql, /c\.last_message_at < \$2/);
 });
+
+test('normalizeMessage includes status, hasMedia, mediaKind for outbound messages', () => {
+  const { normalizeMessage } = require('../src/controllers/conversations.controller');
+  const sent = normalizeMessage({
+    role: 'assistant', direction: 'outbound', content: 'hi',
+    status: 'sent', raw_payload: null, created_at: '2026-05-24T10:00:00Z',
+  });
+  assert.equal(sent.status, 'sent');
+  assert.equal(sent.hasMedia, false);
+  assert.equal(sent.mediaKind, null);
+});
+
+test('normalizeMessage detects image media from raw_payload', () => {
+  const { normalizeMessage } = require('../src/controllers/conversations.controller');
+  const msg = normalizeMessage({
+    role: 'user', direction: 'inbound', content: '[صورة من العميل: فاتورة]',
+    status: 'answered_by_ai',
+    raw_payload: { media: { kind: 'image', mimeType: 'image/jpeg' } },
+    created_at: '2026-05-24T10:00:00Z',
+  });
+  assert.equal(msg.hasMedia, true);
+  assert.equal(msg.mediaKind, 'image');
+});
+
+test('normalizeMessage detects audio/ptt media kind', () => {
+  const { normalizeMessage } = require('../src/controllers/conversations.controller');
+  const msg = normalizeMessage({
+    role: 'user', direction: 'inbound', content: '[رسالة صوتية]',
+    status: 'answered_by_ai',
+    raw_payload: { media: { kind: 'ptt' } },
+    created_at: '2026-05-24T10:00:00Z',
+  });
+  assert.equal(msg.hasMedia, true);
+  assert.equal(msg.mediaKind, 'ptt');
+});
