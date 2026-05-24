@@ -15,6 +15,7 @@ const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { resolveReplyDelayMs } = require('./reply-delay');
 const { findAutoReply } = require('../services/bot/platform-features');
+const { checkMessageQuota } = require('../services/billing/message-quota');
 const {
   OpenAIMediaAnalyzer,
   buildMediaAnalysisText,
@@ -300,6 +301,18 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
   return result.rows[0].id;
 }
 
+async function markInboundMessagesQuotaExceeded({ database = db, messageIds = [], reason = 'empty' }) {
+  const ids = messageIds.filter(Boolean);
+  if (!ids.length || !database.isConfigured?.()) return;
+  await database.query(
+    `UPDATE messages
+     SET status = 'quota_exceeded',
+         raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb
+     WHERE id = ANY($1::uuid[])`,
+    [ids, JSON.stringify({ quotaExceededAt: new Date().toISOString(), reason })],
+  );
+}
+
 async function markInboundMessageFailed({ database = db, messageId, error }) {
   if (!messageId || !database.isConfigured()) return;
   await database.query(
@@ -370,6 +383,22 @@ async function processAiReply(job) {
     });
     const text = buildCombinedInboundText(enrichedMessages);
     if (!text.trim()) throw new Error('AI job has empty inbound text');
+
+    const quota = await checkMessageQuota(userId);
+    if (!quota.canReply) {
+      await markInboundMessagesQuotaExceeded({
+        messageIds: enrichedMessages.map(m => m.id),
+        reason: quota.reason,
+      });
+      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+        status: 'skipped_no_quota',
+        finished_at: new Date(),
+        attempts: job.attemptsMade + 1,
+        last_error: `quota ${quota.reason}`,
+      });
+      logger.warn('quota', `silent: ${userId} (${quota.reason}, ${quota.remaining} remaining)`);
+      return { skipped: true, reason: quota.reason };
+    }
 
     const instantReply = findAutoReply(config, text);
     if (instantReply) {
@@ -552,6 +581,7 @@ module.exports = {
   loadPendingInboundMessages,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
+  markInboundMessagesQuotaExceeded,
   storeAssistantMessage,
   processAiReply,
   waitForDatabaseReady,
