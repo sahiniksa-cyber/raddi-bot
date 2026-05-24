@@ -16,6 +16,7 @@ const {
   suspendAccess,
   updateReceivable,
 } = require('../services/billing/billing-service');
+const { addMessagesToQuota } = require('../services/billing/message-quota');
 
 function canOpenAdminConsole({ path: requestPath, user, settings }) {
   if (!settings?.adminSecretPath || requestPath !== settings.adminSecretPath) return false;
@@ -117,6 +118,31 @@ function createAdminRoutes(deps = {}) {
       if (!days) return res.status(400).json({ success: false, message: 'عدد الأيام غير صحيح' });
       await setAccessExpiry(userId, days, note);
       res.json({ success: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Add messages to a customer's quota (admin manual top-up)
+  router.post('/api/admin/customers/:userId/add-messages', requireOwner, async (req, res, next) => {
+    try {
+      const { userId } = req.params;
+      const messages = parseInt(req.body?.messages, 10) || 0;
+      const days = parseInt(req.body?.days, 10) || 0;
+      const expireResetsQuota = req.body?.expireResetsQuota !== false;
+
+      if (messages <= 0) return res.status(400).json({ success: false, message: 'عدد الرسائل غير صحيح' });
+      if (days <= 0) return res.status(400).json({ success: false, message: 'عدد الأيام غير صحيح' });
+
+      const result = await addMessagesToQuota(userId, { messages, days, expireResetsQuota });
+      res.json({
+        success: true,
+        messagesRemaining: result.messages_remaining,
+        quotaExpiresAt: result.quota_expires_at,
+        expireResetsQuota: result.expire_resets_quota,
+        lastTopupAmount: result.last_topup_amount,
+        lastTopupAt: result.last_topup_at,
+      });
     } catch (err) {
       next(err);
     }
