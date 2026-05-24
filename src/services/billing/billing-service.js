@@ -59,6 +59,32 @@ function buildAdminCustomerRow(row = {}) {
     whatsappPhone: row.whatsapp_phone || '',
     accessExpiresAt,
     remainingDays,
+    messagesRemaining: Number(row.messages_remaining || 0),
+    quotaExpiresAt: row.quota_expires_at || null,
+    expireResetsQuota: row.expire_resets_quota !== false,
+    lastTopupAmount: Number(row.last_topup_amount || 0),
+    lastTopupAt: row.last_topup_at || null,
+    effectiveRemaining: (() => {
+      const remaining = Number(row.messages_remaining || 0);
+      if (remaining <= 0) return 0;
+      const expiresAt = row.quota_expires_at ? new Date(row.quota_expires_at) : null;
+      const expired = row.expire_resets_quota !== false && expiresAt && expiresAt < new Date();
+      return expired ? 0 : remaining;
+    })(),
+    quotaStatus: (() => {
+      const remaining = Number(row.messages_remaining || 0);
+      const expiresAt = row.quota_expires_at ? new Date(row.quota_expires_at) : null;
+      const expired = row.expire_resets_quota !== false && expiresAt && expiresAt < new Date();
+      if (expired) return 'expired';
+      if (remaining > 0) return 'active';
+      if (!row.last_topup_at) return 'never_topped_up';
+      return 'empty';
+    })(),
+    quotaDaysLeft: (() => {
+      if (!row.quota_expires_at) return null;
+      const diff = new Date(row.quota_expires_at) - new Date();
+      return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+    })(),
   };
 }
 
@@ -128,6 +154,11 @@ async function listAdminCustomers() {
        COALESCE(ba.internal_note, '') AS internal_note,
        ba.last_payment_at,
        ba.access_expires_at,
+       ba.messages_remaining,
+       ba.quota_expires_at,
+       ba.expire_resets_quota,
+       ba.last_topup_amount,
+       ba.last_topup_at,
        COALESCE(ws.status, 'stopped') AS whatsapp_status,
        COALESCE(ws.phone, '') AS whatsapp_phone
      FROM users u
