@@ -62,3 +62,40 @@ test('paymentAlreadyUsedByAnotherUser detects reused provider payment ids', () =
   assert.equal(paymentAlreadyUsedByAnotherUser({ user_id: 'user-1' }, 'user-1'), false);
   assert.equal(paymentAlreadyUsedByAnotherUser({ user_id: 'user-2' }, 'user-1'), true);
 });
+
+test('buildAdminCustomerRow exposes quota fields with effective remaining', () => {
+  const { buildAdminCustomerRow } = require('../src/services/billing/billing-service');
+  const expired = new Date(Date.now() - 86400000);
+  const row = buildAdminCustomerRow({
+    id: 'u1',
+    email: 'a@b.com',
+    messages_remaining: 100,
+    quota_expires_at: expired.toISOString(),
+    expire_resets_quota: true,
+    last_topup_amount: 3000,
+    last_topup_at: expired.toISOString(),
+  });
+  assert.equal(row.messagesRemaining, 100);
+  assert.equal(row.effectiveRemaining, 0); // expired + flag = 0
+  assert.equal(row.quotaStatus, 'expired');
+  assert.equal(row.lastTopupAmount, 3000);
+});
+
+test('buildAdminCustomerRow returns quotaStatus=active when remaining>0 and not expired', () => {
+  const { buildAdminCustomerRow } = require('../src/services/billing/billing-service');
+  const future = new Date(Date.now() + 86400000);
+  const row = buildAdminCustomerRow({
+    id: 'u1', email: 'a@b.com',
+    messages_remaining: 100,
+    quota_expires_at: future.toISOString(),
+    expire_resets_quota: true,
+  });
+  assert.equal(row.quotaStatus, 'active');
+  assert.equal(row.effectiveRemaining, 100);
+});
+
+test('buildAdminCustomerRow returns quotaStatus=never_topped_up when last_topup_at is null', () => {
+  const { buildAdminCustomerRow } = require('../src/services/billing/billing-service');
+  const row = buildAdminCustomerRow({ id: 'u1', email: 'a@b.com', messages_remaining: 0 });
+  assert.equal(row.quotaStatus, 'never_topped_up');
+});

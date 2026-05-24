@@ -14,6 +14,8 @@ const {
   isPaidPlatformAccessPayment,
   normalizeMoyasarPayment,
 } = require('../services/billing/moyasar-client');
+const db = require('../db/client');
+const { computeEffectiveRemaining } = require('../services/billing/message-quota');
 
 function createBillingRoutes(deps = {}) {
   const router = express.Router();
@@ -80,6 +82,44 @@ function createBillingRoutes(deps = {}) {
       return res.redirect('/?payment=paid');
     } catch (err) {
       return next(err);
+    }
+  });
+
+  router.get('/api/billing/messages', requireAuth, async (req, res, next) => {
+    try {
+      const result = await db.query(
+        `SELECT messages_remaining, quota_expires_at, expire_resets_quota,
+                last_topup_amount, last_topup_at
+         FROM billing_accounts WHERE user_id = $1`,
+        [req.session.userId],
+      );
+      const row = result.rows[0] || {};
+      const remaining = computeEffectiveRemaining(row);
+      const total = Number(row.last_topup_amount || 0);
+      const used = Math.max(0, total - remaining);
+
+      const expiresAt = row.quota_expires_at ? new Date(row.quota_expires_at) : null;
+      const expired = !!row.expire_resets_quota && expiresAt && expiresAt < new Date();
+      const daysLeft = expiresAt
+        ? Math.max(0, Math.ceil((expiresAt - new Date()) / (1000 * 60 * 60 * 24)))
+        : null;
+
+      let status = 'empty';
+      if (expired) status = 'expired';
+      else if (remaining > 0) status = 'active';
+
+      res.json({
+        success: true,
+        remaining,
+        totalLastTopup: total,
+        used,
+        quotaExpiresAt: row.quota_expires_at || null,
+        daysLeft,
+        status,
+        supportWhatsappPhone: settings.supportWhatsappPhone || process.env.SUPPORT_WHATSAPP_PHONE || '',
+      });
+    } catch (err) {
+      next(err);
     }
   });
 
