@@ -213,6 +213,17 @@ const statements = [
   `ALTER TABLE billing_accounts
     ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ`,
 
+  `ALTER TABLE billing_accounts
+     ADD COLUMN IF NOT EXISTS messages_remaining INTEGER NOT NULL DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS quota_expires_at TIMESTAMPTZ NULL,
+     ADD COLUMN IF NOT EXISTS expire_resets_quota BOOLEAN NOT NULL DEFAULT TRUE,
+     ADD COLUMN IF NOT EXISTS last_topup_amount INTEGER NOT NULL DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS last_topup_at TIMESTAMPTZ NULL`,
+
+  `CREATE INDEX IF NOT EXISTS idx_billing_accounts_quota
+     ON billing_accounts(user_id, messages_remaining)
+     WHERE messages_remaining > 0`,
+
   `CREATE TABLE IF NOT EXISTS coupons (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code TEXT UNIQUE NOT NULL,
