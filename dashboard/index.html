@@ -887,24 +887,25 @@ body{background-attachment:scroll}
 <div class="sw">
   <div class="panel">
     <div class="phdr">
-      <span>سجل محادثات العملاء</span>
-      <button class="add-btn" onclick="loadConversations()">تحديث</button>
+      <span>💬 سجل محادثات العملاء</span>
+      <button class="add-btn" onclick="loadConversations()">🔄 تحديث</button>
     </div>
     <div class="pbdy">
-      <div class="conv-summary">
-        <div>
-          <div style="font-weight:900;color:var(--text)">عدد الأشخاص الذين تواصلوا</div>
-          <div class="hint">كل محادثة تعرض رقم العميل وعنوان المشكلة مباشرة، واضغط عليها لرؤية كلام العميل وردود الذكاء الاصطناعي.</div>
+      <div class="cv-shell">
+        <div class="cv-list-wrap">
+          <div class="cv-search">
+            <input id="cvSearch" type="search" placeholder="🔍 ابحث برقم العميل أو نص الرسالة..." oninput="filterConversations(this.value)">
+          </div>
+          <div class="cv-list" id="cvList">
+            <div class="cv-empty"><div class="cv-empty-icon">💬</div>جاري التحميل...</div>
+          </div>
         </div>
-        <div class="conv-count" id="convCount">0</div>
-      </div>
-      <div class="conv-tabs" id="convTabs">
-        <button type="button" class="conv-tab active" data-status="all" onclick="setConvFilter('all')">الكل <span class="conv-tab-count" id="convTabAll">0</span></button>
-        <button type="button" class="conv-tab" data-status="ongoing" onclick="setConvFilter('ongoing')">مستمرة <span class="conv-tab-count" id="convTabOngoing">0</span></button>
-        <button type="button" class="conv-tab" data-status="finished" onclick="setConvFilter('finished')">منتهية <span class="conv-tab-count" id="convTabFinished">0</span></button>
-      </div>
-      <div class="conv-list" id="convList">
-        <div class="hint">لا توجد محادثات بعد</div>
+        <div class="cv-panel" id="cvPanel">
+          <div class="cv-empty" id="cvPanelEmpty">
+            <div class="cv-empty-icon">👈</div>
+            اختر محادثة من القائمة لقراءتها
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1981,18 +1982,6 @@ async function runHealthCheck(){
 }
 
 let convFilter='all';
-function setConvFilter(status){
-  convFilter=status;
-  document.querySelectorAll('#convTabs .conv-tab').forEach(t=>t.classList.toggle('active',t.dataset.status===status));
-  loadConversations();
-}
-function updateConvTabCounts(counts){
-  if(!counts)return;
-  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v??0;};
-  set('convTabAll',counts.all);
-  set('convTabOngoing',counts.ongoing);
-  set('convTabFinished',counts.finished);
-}
 async function loadConversations(){
   const count=document.getElementById('convCount');
   const list=document.getElementById('convList');
@@ -2004,7 +1993,6 @@ async function loadConversations(){
     const d=await r.json();
     if(!d.success)throw new Error(d.message||'تعذر تحميل المحادثات');
     if(count)count.textContent=d.total||0;
-    updateConvTabCounts(d.counts);
     if(!d.conversations||!d.conversations.length){
       const emptyMsg=convFilter==='ongoing'?'لا توجد محادثات مستمرة الآن':convFilter==='finished'?'لا توجد محادثات منتهية':'لا توجد محادثات بعد';
       list.innerHTML='<div class="hint">'+emptyMsg+'</div>';
