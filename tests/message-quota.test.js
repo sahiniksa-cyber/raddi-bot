@@ -106,6 +106,8 @@ test('decrementMessageQuota returns success and new remaining on update', async 
   assert.match(database.calls[0].sql, /messages_remaining = messages_remaining - 1/);
   assert.match(database.calls[0].sql, /WHERE user_id = \$1/);
   assert.match(database.calls[0].sql, /messages_remaining > 0/);
+  assert.match(database.calls[0].sql, /expire_resets_quota/);
+  assert.match(database.calls[0].sql, /quota_expires_at > NOW\(\)/);
 });
 
 test('decrementMessageQuota returns failure when UPDATE matches no rows', async () => {
