@@ -1,5 +1,7 @@
 'use strict';
 
+const db = require('../../db/client');
+
 function computeEffectiveRemaining(row) {
   if (!row) return 0;
   const remaining = Number(row.messages_remaining) || 0;
@@ -9,4 +11,23 @@ function computeEffectiveRemaining(row) {
   return expired ? 0 : remaining;
 }
 
-module.exports = { computeEffectiveRemaining };
+async function checkMessageQuota(userId, { database = db } = {}) {
+  const result = await database.query(
+    `SELECT messages_remaining, quota_expires_at, expire_resets_quota
+     FROM billing_accounts WHERE user_id = $1`,
+    [userId],
+  );
+  const row = result.rows[0];
+  if (!row) return { canReply: false, remaining: 0, reason: 'no_account' };
+
+  const remaining = Number(row.messages_remaining) || 0;
+  const expiresAt = row.quota_expires_at ? new Date(row.quota_expires_at) : null;
+  const expired = !!row.expire_resets_quota && expiresAt && expiresAt < new Date();
+
+  if (expired) return { canReply: false, remaining: 0, reason: 'expired', expiresAt };
+  if (remaining <= 0) return { canReply: false, remaining: 0, reason: 'empty' };
+
+  return { canReply: true, remaining, expiresAt };
+}
+
+module.exports = { computeEffectiveRemaining, checkMessageQuota };
