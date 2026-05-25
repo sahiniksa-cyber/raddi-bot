@@ -157,6 +157,14 @@ html[dir="rtl"] select{background-position:left 14px center}
 .kw-row{display:flex;gap:8px;margin-bottom:8px;align-items:flex-start}
 .kw-row input,.kw-row textarea{margin-bottom:0}
 .kw-row input{flex:1}.kw-row textarea{flex:2;min-height:42px}
+.variant-row{display:flex;gap:8px;margin-bottom:6px;align-items:center}
+.variant-row input{flex:1;min-width:0}
+.variant-row .vl{flex:1.2}
+.variant-row .vp{flex:1}
+.variant-row .variant-del{background:#fef2f2;border:1px solid #fca5a5;color:#dc2626;border-radius:6px;width:30px;height:30px;cursor:pointer;font-size:14px;line-height:1;padding:0}
+.add-variant-btn{background:#f0fdf4;border:1px dashed #86efac;color:#15803d;border-radius:8px;padding:6px 12px;font-family:var(--font);font-size:12px;cursor:pointer;margin-top:4px;display:block}
+.add-variant-btn:hover{background:#dcfce7}
+.prod-variants{margin-top:6px}
 .del-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--red-border);background:var(--red-bg);color:var(--red);font-size:15px;cursor:pointer;flex-shrink:0;transition:all .18s;display:flex;align-items:center;justify-content:center}
 .del-btn:hover{background:var(--red);color:#fff;border-color:var(--red)}
 .add-btn{padding:8px 16px;border-radius:9px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;transition:all .18s}
@@ -2201,11 +2209,29 @@ function addKW(k='',v=''){
   d.innerHTML=`<input type="text" placeholder="الكلمة" value="${esc(k)}" class="kw-k"><textarea placeholder="الرد" class="kw-v">${esc(v)}</textarea><button class="del-btn" onclick="this.parentElement.remove()">×</button>`;
   c.appendChild(d);
 }
-function renderProd(arr){document.getElementById('prodContainer').innerHTML='';arr.forEach(p=>addProd(p.name,p.description,p.price));}
-function addProd(n='',d='',p=''){
+function renderProd(arr){
+  document.getElementById('prodContainer').innerHTML='';
+  arr.forEach(p=>addProd(p.name,p.description,p.price,p.variants||[]));
+}
+function addProd(n='',d='',p='',variants=[]){
   const c=document.getElementById('prodContainer'),el=document.createElement('div');el.className='prod-card';
-  el.innerHTML=`<div class="g2"><div><label>المنتج</label><input type="text" class="pn" placeholder="اسم المنتج" value="${esc(n)}"></div><div><label>السعر</label><input type="text" class="pp" placeholder="150 ريال" value="${esc(p)}"></div></div><label>الوصف</label><input type="text" class="pd" placeholder="وصف مختصر" value="${esc(d)}"><button class="prod-del" onclick="this.parentElement.remove();updProd()">× حذف</button>`;
-  c.appendChild(el);updProd();
+  el.innerHTML=`<div class="g2"><div><label>المنتج</label><input type="text" class="pn" placeholder="اسم المنتج" value="${esc(n)}"></div><div><label>السعر</label><input type="text" class="pp" placeholder="150 ريال" value="${esc(p)}"></div></div><label>الوصف</label><input type="text" class="pd" placeholder="وصف مختصر" value="${esc(d)}"><label style="margin-top:10px;font-size:12px;color:var(--text-soft)">الخيارات المتاحة (اختياري)</label><div class="prod-variants"></div><button class="add-variant-btn" type="button" onclick="addVariantRow(this)">+ إضافة خيار</button><button class="prod-del" onclick="this.parentElement.remove();updProd()">× حذف</button>`;
+  c.appendChild(el);
+  const variantsContainer=el.querySelector('.prod-variants');
+  for(const v of (variants||[])){if(v&&(v.label||v.price))appendVariantRow(variantsContainer,v.label||'',v.price||'');}
+  updProd();
+}
+function appendVariantRow(container,label='',price=''){
+  const row=document.createElement('div');
+  row.className='variant-row';
+  row.innerHTML=`<input type="text" class="vl" placeholder="مثال: شهر / صغير / 100 مل" value="${esc(label)}"><input type="text" class="vp" placeholder="السعر" value="${esc(price)}"><button class="variant-del" type="button" onclick="this.parentElement.remove()">×</button>`;
+  container.appendChild(row);
+}
+function addVariantRow(btn){
+  const card=btn.closest('.prod-card');
+  if(!card)return;
+  const container=card.querySelector('.prod-variants');
+  if(container)appendVariantRow(container,'','');
 }
 function updProd(){
   const cnt=document.querySelectorAll('.prod-card').length;
@@ -2253,7 +2279,23 @@ async function saveConf(){
   const kws={};
   document.querySelectorAll('.kw-row').forEach(r=>{const k=r.querySelector('.kw-k')?.value?.trim(),v=r.querySelector('.kw-v')?.value?.trim();if(k&&v)kws[k]=v;});
   const prods=[];
-  document.querySelectorAll('.prod-card').forEach(r=>{const n=r.querySelector('.pn')?.value?.trim();if(n)prods.push({name:n,description:r.querySelector('.pd')?.value?.trim()||'',price:r.querySelector('.pp')?.value?.trim()||''});});
+  document.querySelectorAll('.prod-card').forEach(r=>{
+    const n=r.querySelector('.pn')?.value?.trim();
+    if(!n)return;
+    const variants=[];
+    r.querySelectorAll('.variant-row').forEach(vr=>{
+      const label=vr.querySelector('.vl')?.value?.trim()||'';
+      const price=vr.querySelector('.vp')?.value?.trim()||'';
+      if(label||price)variants.push({label,price});
+    });
+    const product={
+      name:n,
+      description:r.querySelector('.pd')?.value?.trim()||'',
+      price:r.querySelector('.pp')?.value?.trim()||'',
+    };
+    if(variants.length>0)product.variants=variants;
+    prods.push(product);
+  });
   // Escalation contacts
   const escContacts=[];
   document.querySelectorAll('.esc-card').forEach(r=>{const n=r.querySelector('.esc-name')?.value?.trim(),p=r.querySelector('.esc-phone')?.value?.trim();if(n&&p)escContacts.push({name:n,phone:p,role:r.querySelector('.esc-role')?.value?.trim()||'',when:r.querySelector('.esc-when')?.value?.trim()||'',messageTemplate:r.querySelector('.esc-template')?.value?.trim()||''});});
