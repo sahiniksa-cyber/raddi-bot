@@ -70,7 +70,8 @@ test('AI productsBlock works unchanged when variants is absent', () => {
   const ai = makePromptClient([{ name: 'كتاب', price: '40 ريال' }]);
   const prompt = ai.buildSystemPrompt([]);
   assert.match(prompt, /1\. كتاب — 40 ريال/);
-  assert.doesNotMatch(prompt, /•/);
+  // No variant sub-bullets (the line "   • " prefix is the variants marker)
+  assert.doesNotMatch(prompt, /\n   • /);
 });
 
 test('AI productsBlock skips fully-empty variants and keeps the rest', () => {
