@@ -54,6 +54,49 @@
       </div>
     </section>
 
+    <section id="adminApiKeysSection" class="panel" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
+        <div>
+          <b style="font-size:16px">🔑 مفاتيح AI العامة</b>
+          <div class="sub">هذي المفاتيح تُستخدم لكل العملاء بشكل افتراضي. لو حطيت مفتاح خاص لعميل معين، يطغى على العام.</div>
+        </div>
+      </div>
+      <div style="padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700">
+          OpenAI
+          <input type="password" id="adminOpenaiKeyInput" placeholder="sk-proj-..." autocomplete="off" style="padding:9px 11px;border:1px solid var(--border);border-radius:7px;font-family:inherit;direction:ltr">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="sub" id="adminOpenaiKeyStatus" style="flex:1"></span>
+            <button type="button" data-provider="openai" class="save-key-btn" style="padding:6px 14px;border:1px solid var(--border);background:#fff;border-radius:7px;cursor:pointer;font-weight:700;font-size:12px;color:var(--green)">حفظ</button>
+          </div>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700">
+          Google AI
+          <input type="password" id="adminGoogleKeyInput" placeholder="AIza..." autocomplete="off" style="padding:9px 11px;border:1px solid var(--border);border-radius:7px;font-family:inherit;direction:ltr">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="sub" id="adminGoogleKeyStatus" style="flex:1"></span>
+            <button type="button" data-provider="google" class="save-key-btn" style="padding:6px 14px;border:1px solid var(--border);background:#fff;border-radius:7px;cursor:pointer;font-weight:700;font-size:12px;color:var(--green)">حفظ</button>
+          </div>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700">
+          Anthropic
+          <input type="password" id="adminAnthropicKeyInput" placeholder="sk-ant-..." autocomplete="off" style="padding:9px 11px;border:1px solid var(--border);border-radius:7px;font-family:inherit;direction:ltr">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="sub" id="adminAnthropicKeyStatus" style="flex:1"></span>
+            <button type="button" data-provider="anthropic" class="save-key-btn" style="padding:6px 14px;border:1px solid var(--border);background:#fff;border-radius:7px;cursor:pointer;font-weight:700;font-size:12px;color:var(--green)">حفظ</button>
+          </div>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700">
+          OpenRouter
+          <input type="password" id="adminOpenrouterKeyInput" placeholder="sk-or-..." autocomplete="off" style="padding:9px 11px;border:1px solid var(--border);border-radius:7px;font-family:inherit;direction:ltr">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="sub" id="adminOpenrouterKeyStatus" style="flex:1"></span>
+            <button type="button" data-provider="openrouter" class="save-key-btn" style="padding:6px 14px;border:1px solid var(--border);background:#fff;border-radius:7px;cursor:pointer;font-weight:700;font-size:12px;color:var(--green)">حفظ</button>
+          </div>
+        </label>
+      </div>
+    </section>
+
     <div class="toolbar">
       <input id="search" type="search" placeholder="بحث بالاسم أو البريد" oninput="render()">
       <button onclick="loadCustomers()">تحديث</button>
@@ -272,6 +315,65 @@ loadCustomers();
 loadCoupons();
 loadHealth();
 setInterval(loadHealth,30000);
+</script>
+<script>
+(async function initAdminApiKeys() {
+  async function loadMasked() {
+    try {
+      const r = await fetch('/api/admin/api-keys', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const { keys } = await r.json();
+      const statuses = {
+        adminOpenaiKeyStatus: keys.openai,
+        adminGoogleKeyStatus: keys.google,
+        adminAnthropicKeyStatus: keys.anthropic,
+        adminOpenrouterKeyStatus: keys.openrouter,
+      };
+      for (const [id, masked] of Object.entries(statuses)) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = masked ? `محفوظ: ${masked}` : 'فارغ';
+      }
+    } catch (e) {
+      console.warn('[admin api-keys] load failed:', e.message);
+    }
+  }
+
+  function attachSaveHandlers() {
+    document.querySelectorAll('.save-key-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const provider = btn.dataset.provider;
+        const inputId = `admin${provider.charAt(0).toUpperCase()}${provider.slice(1)}KeyInput`;
+        const input = document.getElementById(inputId);
+        if (!input) return;
+        const apiKey = input.value.trim();
+        try {
+          const r = await fetch('/api/admin/api-keys', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ provider, apiKey }),
+          });
+          const data = await r.json();
+          if (data.success) {
+            input.value = '';
+            await loadMasked();
+          } else {
+            alert(data.message || 'فشل الحفظ');
+          }
+        } catch (e) {
+          alert('فشل الحفظ: ' + e.message);
+        }
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { attachSaveHandlers(); loadMasked(); });
+  } else {
+    attachSaveHandlers();
+    loadMasked();
+  }
+})();
 </script>
 <div id="addMessagesModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
   <div style="background:#fff;padding:24px;border-radius:12px;min-width:340px;direction:rtl;font-family:Tahoma,Arial,sans-serif">
