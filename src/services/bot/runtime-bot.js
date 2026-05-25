@@ -192,14 +192,20 @@ class RuntimeBot {
       const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [uid]);
       return { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
     });
-    const loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
+    this._loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
+    this._saveBotConfig = deps.saveBotConfig || null;
     const doLoadSessionState = deps.loadSessionState || (() => this.loadSessionState());
 
-    const [customer, admin] = await Promise.all([loadBotConfig(this.userId), loadAdminKeys()]);
-    this.config = mergeApiKeys(customer, admin);
+    const customer = await loadBotConfig(this.userId);
+    this.config = { ...DEFAULT_CONFIG, ...customer };
     this.ai.updateConfig(this.config);
     await doLoadSessionState();
     return this;
+  }
+
+  async resolveConfig() {
+    const admin = await (this._loadAdminKeys || getAllAdminApiKeys)();
+    return mergeApiKeys(this.config, admin);
   }
 
   async loadSessionState() {
@@ -328,12 +334,16 @@ class RuntimeBot {
   }
 
   async saveConfig() {
-    await db.query(
-      `INSERT INTO bot_configs (user_id, config, source)
-       VALUES ($1, $2::jsonb, 'src-server')
-       ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, source = EXCLUDED.source`,
-      [this.userId, JSON.stringify(this.config)],
-    );
+    if (this._saveBotConfig) {
+      await this._saveBotConfig(this.userId, this.config);
+    } else {
+      await db.query(
+        `INSERT INTO bot_configs (user_id, config, source)
+         VALUES ($1, $2::jsonb, 'src-server')
+         ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, source = EXCLUDED.source`,
+        [this.userId, JSON.stringify(this.config)],
+      );
+    }
     this.ai.updateConfig(this.config);
   }
 
@@ -396,7 +406,9 @@ class RuntimeBot {
     this.logger.log(message);
   }
 
-  buildAIClient() {
+  async buildAIClient() {
+    const merged = await this.resolveConfig();
+    this.ai.updateConfig(merged);
     return this.ai.buildClient();
   }
 
@@ -405,6 +417,8 @@ class RuntimeBot {
   }
 
   async getAIReply(history, opts) {
+    const merged = await this.resolveConfig();
+    this.ai.updateConfig(merged);
     return this.ai.getReply(history, opts);
   }
 
