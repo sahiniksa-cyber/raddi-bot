@@ -1,11 +1,20 @@
 'use strict';
 
+const API_KEY_FIELDS = ['openaiApiKey', 'googleApiKey', 'anthropicApiKey', 'openrouterApiKey'];
+
+function stripApiKeysFromConfig(config) {
+  if (!config || typeof config !== 'object') return {};
+  const out = { ...config };
+  for (const k of API_KEY_FIELDS) delete out[k];
+  return out;
+}
+
 function createConfigController({ getUserBot }) {
   if (typeof getUserBot !== 'function') throw new Error('getUserBot dependency is required');
 
   return {
     getConfig(req, res) {
-      res.json(getUserBot(req.session.userId).config);
+      res.json(stripApiKeysFromConfig(getUserBot(req.session.userId).config));
     },
 
     saveConfig(req, res) {
@@ -36,4 +45,4 @@ function createConfigController({ getUserBot }) {
   };
 }
 
-module.exports = { createConfigController };
+module.exports = { createConfigController, stripApiKeysFromConfig, API_KEY_FIELDS };
