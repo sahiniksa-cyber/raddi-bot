@@ -17,14 +17,15 @@ test('dashboard exposes conversations as a top-level tab', () => {
   assert.match(html, /onclick="goTab\('conversations'\)"/);
 });
 
-test('conversation rows show problem title, customer phone, and collapsible details', () => {
+test('conversation list rendering wires the core helpers', () => {
   const html = dashboardHtml();
 
   assert.match(html, /renderConversationList/);
   assert.match(html, /selectConversation/);
   assert.match(html, /filterConversations/);
-  assert.match(html, /cv-card/);
-  assert.match(html, /cv-dot/);
+  // Table-based redesign (post-2026-05-25) — rows live in cv-table with avatar + status dot.
+  assert.match(html, /cv-table/);
+  assert.match(html, /cv-status-dot/);
 });
 
 test('escalation template variables are clickable insert buttons', () => {

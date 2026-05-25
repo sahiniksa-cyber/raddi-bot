@@ -2025,6 +2025,23 @@ async function loadConversations(){
   }
 }
 
+function formatSaudiPhone(raw){
+  if(!raw)return '';
+  const digits=String(raw).replace(/[^\d]/g,'');
+  if(!digits)return '';
+  if(digits.startsWith('966')&&digits.length>=12){
+    const tail=digits.slice(3);
+    if(tail.length===9)return `+966 ${tail.slice(0,2)} ${tail.slice(2,5)} ${tail.slice(5)}`;
+  }
+  return '+'+digits;
+}
+
+function customerDisplay(c){
+  const formatted=formatSaudiPhone(c.phoneNumber);
+  if(formatted)return { name: formatted, phone: formatted, available: true };
+  return { name: 'عميل (رقم غير متوفر)', phone: 'غير متوفر', available: false };
+}
+
 function renderConversationList(items){
   const list=document.getElementById('cvList');
   if(!list)return;
@@ -2032,35 +2049,53 @@ function renderConversationList(items){
     list.innerHTML='<div class="cv-empty"><div class="cv-empty-icon">💬</div>لا توجد محادثات</div>';
     return;
   }
-  list.innerHTML=items.map(c=>{
-    const count=(c.messages||[]).length;
-    const dotClass=c.status==='ongoing'?'ongoing':'finished';
+  const rows=items.map(c=>{
     const isActive=c.id===cvSelectedId;
-    return `<div class="cv-card ${isActive?'active':''}" data-id="${esc(c.id)}" onclick="onConvCardClick('${esc(c.id)}')">
-      <div class="cv-card-row">
-        <div style="flex:1;min-width:0">
-          <div class="phone">${esc(c.phone||c.sender||'')}${!c.phoneNumber ? '<span class="old-badge">قديمة</span>' : ''}</div>
-          <div class="title">${esc(c.title||'استفسار عميل')}</div>
+    const dotClass=c.status==='ongoing'?'ongoing':'finished';
+    const display=customerDisplay(c);
+    return `<tr class="${isActive?'active':''}" data-id="${esc(c.id)}" onclick="onConvCardClick('${esc(c.id)}')">
+      <td class="cv-col-name">
+        <div class="cv-customer-cell">
+          <div class="cv-avatar"><span>👤</span><span class="cv-status-dot ${dotClass}"></span></div>
+          <div class="cv-customer-info">
+            <div class="cv-customer-name">${esc(display.name)}${!display.available?'<span class="old-badge">قديمة</span>':''}</div>
+          </div>
         </div>
-        <span class="cv-dot ${dotClass}" title="${c.status==='ongoing'?'نشطة':'منتهية'}"></span>
-      </div>
-      <div class="meta">
-        <span>${count} رسالة</span>
-        <span>${esc(formatConvTime(c.lastMessageAt))}</span>
-      </div>
-    </div>`;
+      </td>
+      <td class="cv-col-phone"><span class="cv-customer-phone">${esc(display.phone)}</span></td>
+      <td class="cv-col-time"><span class="cv-time">${esc(formatConvTime(c.lastMessageAt))}</span></td>
+    </tr>`;
   }).join('');
+  list.innerHTML=`<table class="cv-table">
+    <thead><tr>
+      <th>اسم العميل</th>
+      <th>رقم جوال العميل</th>
+      <th>متى أرسل العميل</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 function onConvCardClick(id){
-  if(window.innerWidth<=900) toggleAccordionCard(id);
-  else selectConversation(id);
+  selectConversation(id);
+  if(window.innerWidth<=900){
+    const shell=document.querySelector('.cv-shell');
+    if(shell)shell.classList.add('has-selection');
+  }
+}
+
+function backToConvList(){
+  const shell=document.querySelector('.cv-shell');
+  if(shell)shell.classList.remove('has-selection');
 }
 
 function selectConversation(id){
   cvSelectedId=id;
   const conv=cvConversations.find(c=>c.id===id);
   if(!conv)return;
+  document.querySelectorAll('.cv-table tbody tr').forEach(el=>{
+    el.classList.toggle('active', el.dataset.id===id);
+  });
   document.querySelectorAll('.cv-card').forEach(el=>{
     el.classList.toggle('active', el.dataset.id===id);
   });
@@ -2105,16 +2140,33 @@ function renderConversationPanel(conv){
   if(!panel)return;
   const messages=conv.messages||[];
   const bubblesHtml=messages.length
-    ? messages.map(renderBubble).join('')
+    ? '<div class="cv-day-pill">اليوم</div>'+messages.map(renderBubble).join('')
     : '<div class="cv-empty"><div class="cv-empty-icon">💭</div>لا توجد رسائل محفوظة</div>';
   const dotClass=conv.status==='ongoing'?'ongoing':'finished';
-  const statusLabel=conv.status==='ongoing'?'نشطة':'منتهية';
+  const statusLabel=conv.status==='ongoing'?'متصل الآن':'آخر ظهور قبل قليل';
+  const display=customerDisplay(conv);
   panel.innerHTML=`<div class="cv-panel-header">
-    <div class="phone">${esc(conv.phone||conv.sender||'')}${!conv.phoneNumber ? '<span class="old-badge">قديمة</span>' : ''}</div>
-    <div class="title">${esc(conv.title||'استفسار عميل')}</div>
-    <div class="meta"><span class="cv-dot ${dotClass}"></span> ${statusLabel} · آخر تحديث ${esc(formatConvTime(conv.lastMessageAt))}</div>
+    <div class="cv-panel-header-left">
+      <button type="button" class="cv-back-btn" onclick="backToConvList()" title="رجوع">←</button>
+      <div class="cv-avatar lg"><span>👤</span><span class="cv-status-dot ${dotClass}"></span></div>
+      <div class="cv-panel-header-info">
+        <div class="cv-panel-header-name">${esc(display.name)}${!display.available?'<span class="old-badge">قديمة</span>':''}</div>
+        <div class="cv-panel-header-status ${dotClass}">${esc(statusLabel)}</div>
+      </div>
+    </div>
+    <div class="cv-panel-header-actions">
+      <button type="button" title="المزيد" disabled>⋮</button>
+      <button type="button" title="اتصال" disabled>📞</button>
+      <button type="button" title="فيديو" disabled>🎥</button>
+    </div>
   </div>
-  <div class="cv-bubbles" id="cvBubbles">${bubblesHtml}</div>`;
+  <div class="cv-bubbles" id="cvBubbles">${bubblesHtml}</div>
+  <div class="cv-footer">
+    <button type="button" class="cv-icon-btn" title="إيموجي" disabled>😊</button>
+    <button type="button" class="cv-icon-btn" title="مرفق" disabled>📎</button>
+    <input type="text" class="cv-message-input" placeholder="اكتب رسالة..." disabled>
+    <button type="button" class="cv-mic-btn" title="رسالة صوتية" disabled>🎤</button>
+  </div>`;
   const bubbles=document.getElementById('cvBubbles');
   if(bubbles)bubbles.scrollTop=bubbles.scrollHeight;
 }
