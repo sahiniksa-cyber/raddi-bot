@@ -327,7 +327,7 @@ function createApp() {
       return res.json({ success: false, message: `محادثات غير كافية (${sample.length} رد)` });
     }
 
-    const { openai, model } = bot.buildAIClient();
+    const { openai, model } = await bot.buildAIClient();
     const aiResult = await openai.chat.completions.create({
       model,
       max_tokens: 1400,
@@ -349,7 +349,7 @@ function createApp() {
     const sourceText = String(text || '').trim();
     if (sourceText.length < 3) return res.status(400).json({ success: false, message: 'النص قصير' });
 
-    const { openai, model } = bot.buildAIClient();
+    const { openai, model } = await bot.buildAIClient();
     const prompts = {
       welcome: `حسّن رسالة الترحيب لمتجر "${storeName || bot.config.storeName || 'المتجر'}" لتكون واضحة وطبيعية ومناسبة لواتساب. لا تذكر AI أو بوت. أعد النص فقط.`,
       description: 'حوّل وصف المتجر إلى وصف واضح ومفيد للذكاء الاصطناعي: ماذا يبيع المتجر، لمن، أهم المزايا، وأي حدود مهمة. لا تجعله تسويقياً مبالغاً فيه. أعد الوصف فقط.',
@@ -387,7 +387,7 @@ function createApp() {
     if (answers.length < 10) return res.status(400).json({ success: false, message: 'يجب الإجابة على 10 أسئلة على الأقل' });
 
     const qa = answers.map((answer, i) => `س${i + 1}: ${answer.q}\nج${i + 1}: ${answer.a}`).join('\n\n');
-    const { openai, model } = bot.buildAIClient();
+    const { openai, model } = await bot.buildAIClient();
     const aiResult = await openai.chat.completions.create({
       model,
       max_tokens: 1800,
