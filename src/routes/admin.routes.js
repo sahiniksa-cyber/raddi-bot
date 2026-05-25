@@ -17,12 +17,40 @@ const {
   updateReceivable,
 } = require('../services/billing/billing-service');
 const { addMessagesToQuota } = require('../services/billing/message-quota');
+const { setAdminApiKey, getAdminApiKeysMasked } = require('../services/admin/admin-api-keys');
 
 function canOpenAdminConsole({ path: requestPath, user, settings }) {
   if (!settings?.adminSecretPath || requestPath !== settings.adminSecretPath) return false;
   if (!user) return false;
   if (user.role === 'admin') return true;
   return (settings.adminEmails || []).includes(String(user.email || '').toLowerCase());
+}
+
+function createAdminApiKeysHandlers(deps = {}) {
+  const getMasked = deps.getAdminApiKeysMasked || getAdminApiKeysMasked;
+  const setKey = deps.setAdminApiKey || setAdminApiKey;
+
+  async function getApiKeys(req, res) {
+    try {
+      const keys = await getMasked();
+      res.status(200).json({ success: true, keys });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  async function putApiKey(req, res) {
+    try {
+      const { provider, apiKey } = req.body || {};
+      const result = await setKey(provider, apiKey, req.session?.userId);
+      res.status(200).json({ success: true, ...result });
+    } catch (err) {
+      const isClient = /provider/i.test(err.message);
+      res.status(isClient ? 400 : 500).json({ success: false, message: err.message });
+    }
+  }
+
+  return { getApiKeys, putApiKey };
 }
 
 function createAdminRoutes(deps = {}) {
@@ -189,10 +217,15 @@ function createAdminRoutes(deps = {}) {
     }
   });
 
+  const apiKeyHandlers = createAdminApiKeysHandlers();
+  router.get('/api/admin/api-keys', requireOwner, apiKeyHandlers.getApiKeys);
+  router.put('/api/admin/api-keys', requireOwner, apiKeyHandlers.putApiKey);
+
   return router;
 }
 
 module.exports = {
   canOpenAdminConsole,
   createAdminRoutes,
+  createAdminApiKeysHandlers,
 };
