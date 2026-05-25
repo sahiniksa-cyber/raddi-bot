@@ -193,7 +193,9 @@ function createApp() {
   app.use(createQueueRoutes(routeDeps));
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup });
-  const wrapConfigController = require('./controllers/config.controller').createConfigController({ getUserBot: syncBotLookup });
+  const configControllerModule = require('./controllers/config.controller');
+  const wrapConfigController = configControllerModule.createConfigController({ getUserBot: syncBotLookup });
+  const { mergeConfigForSave } = configControllerModule;
   const wrapConversationsController = require('./controllers/conversations.controller').createConversationsController({ database: db });
 
   app.get('/api/status', requireAuth, asyncRoute(async (req, res) => wrapBotController.status(req, res)));
@@ -209,11 +211,8 @@ function createApp() {
   app.post('/api/config', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const incoming = req.body || {};
-    const merged = { ...bot.config, ...incoming };
-    if (!incoming.openaiApiKey?.trim() && bot.config.openaiApiKey?.trim()) merged.openaiApiKey = bot.config.openaiApiKey;
-    if (!incoming.openrouterApiKey?.trim() && bot.config.openrouterApiKey?.trim()) merged.openrouterApiKey = bot.config.openrouterApiKey;
-    if (!incoming.googleApiKey?.trim() && bot.config.googleApiKey?.trim()) merged.googleApiKey = bot.config.googleApiKey;
-    if (!incoming.anthropicApiKey?.trim() && bot.config.anthropicApiKey?.trim()) merged.anthropicApiKey = bot.config.anthropicApiKey;
+    const isAdmin = req.session?.isAdmin === true;
+    const merged = mergeConfigForSave({ existing: bot.config, incoming, isAdmin });
     bot.config = merged;
     await bot.saveConfig();
     res.json({ success: true });
