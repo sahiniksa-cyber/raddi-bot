@@ -187,11 +187,18 @@ class RuntimeBot {
     };
   }
 
-  async load() {
-    const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [this.userId]);
-    this.config = { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
+  async load(deps = {}) {
+    const loadBotConfig = deps.loadBotConfig || (async (uid) => {
+      const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [uid]);
+      return { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
+    });
+    const loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
+    const doLoadSessionState = deps.loadSessionState || (() => this.loadSessionState());
+
+    const [customer, admin] = await Promise.all([loadBotConfig(this.userId), loadAdminKeys()]);
+    this.config = mergeApiKeys(customer, admin);
     this.ai.updateConfig(this.config);
-    await this.loadSessionState();
+    await doLoadSessionState();
     return this;
   }
 
