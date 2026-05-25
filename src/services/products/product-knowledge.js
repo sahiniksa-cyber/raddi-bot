@@ -76,12 +76,18 @@ function parsePromptProducts(instructions) {
 function structuredProducts(products = []) {
   return (Array.isArray(products) ? products : [])
     .filter(product => String(product?.name || '').trim())
-    .map(product => ({
-      name: String(product.name || '').trim(),
-      description: String(product.description || '').trim(),
-      price: String(product.price || '').trim(),
-      source: product.source || 'fields',
-    }));
+    .map(product => {
+      const out = {
+        name: String(product.name || '').trim(),
+        description: String(product.description || '').trim(),
+        price: String(product.price || '').trim(),
+        source: product.source || 'fields',
+      };
+      if (Array.isArray(product.variants) && product.variants.length > 0) {
+        out.variants = product.variants;
+      }
+      return out;
+    });
 }
 
 function mergeProducts(products) {
@@ -99,6 +105,7 @@ function mergeProducts(products) {
       price: existing.price || product.price,
       description: [existing.description, product.description].filter(Boolean).join('\n').trim(),
       source: existing.source === 'fields' ? existing.source : (existing.source || product.source),
+      variants: existing.variants || product.variants,
     });
   }
   return [...byName.values()];

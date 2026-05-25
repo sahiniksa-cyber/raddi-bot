@@ -9,12 +9,21 @@ function normalizeImportedProduct(product) {
 
   const price = String(product.price || product.sale_price || product.regular_price || '').trim();
   const description = String(product.description || product.short_description || product.summary || '').trim();
-  return {
+  const rawVariants = Array.isArray(product.variants) ? product.variants : [];
+  const variants = rawVariants
+    .map(v => ({
+      label: String(v?.label || '').trim(),
+      price: String(v?.price || '').trim(),
+    }))
+    .filter(v => v.label || v.price);
+  const out = {
     name,
     price,
     description,
     source: product.source || product.platform || 'import',
   };
+  if (variants.length > 0) out.variants = variants;
+  return out;
 }
 
 function mergeImportedProducts(existingProducts = [], importedProducts = []) {
@@ -37,6 +46,9 @@ function mergeImportedProducts(existingProducts = [], importedProducts = []) {
       current.description = [current.description, product.description].filter(Boolean).join('\n');
     }
     if (!current.source && product.source) current.source = product.source;
+    if (!current.variants && Array.isArray(product.variants) && product.variants.length > 0) {
+      current.variants = product.variants;
+    }
   }
 
   return merged;
@@ -52,12 +64,18 @@ function organizeProductsForConfig(config = {}, importedProducts = []) {
 
   return {
     ...config,
-    products: catalog.map(product => ({
-      name: product.name,
-      price: product.price || '',
-      description: product.description || '',
-      source: product.source || 'platform',
-    })),
+    products: catalog.map(product => {
+      const out = {
+        name: product.name,
+        price: product.price || '',
+        description: product.description || '',
+        source: product.source || 'platform',
+      };
+      if (Array.isArray(product.variants) && product.variants.length > 0) {
+        out.variants = product.variants;
+      }
+      return out;
+    }),
   };
 }
 
