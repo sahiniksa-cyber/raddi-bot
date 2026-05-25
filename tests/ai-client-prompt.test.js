@@ -50,10 +50,15 @@ test('buildSystemPrompt still includes the store name and welcome message somewh
   assert.ok(prompt.includes('هلا والله'), 'welcomeMessage must appear in the prompt');
 });
 
-test('buildSystemPrompt has positive-phrased rules instead of the old "ممنوع" block', () => {
+test('buildSystemPrompt does not contain hardcoded behavioral rules', () => {
   const ai = makeClient();
   const prompt = ai.buildSystemPrompt([]);
-  assert.match(prompt, /القواعد الذهبية/);
+  // No hardcoded "rules block" of any kind — behavior is configured from dashboard
+  assert.doesNotMatch(prompt, /القواعد الذهبية/);
+  assert.doesNotMatch(prompt, /🚫 ممنوع/);
+  assert.doesNotMatch(prompt, /اختم بسؤال/);
+  assert.doesNotMatch(prompt, /بدون علامات اقتباس/);
+  assert.doesNotMatch(prompt, /لو رحبت بالعميل سابقاً/);
 });
 
 test('AIClient integrates stripAvoidedContent in getReply', () => {
