@@ -9,6 +9,8 @@ const db = require('../../db/client');
 const Logger = require('../../../lib/logger');
 const AIClient = require('../../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../../lib/constants');
+const { mergeApiKeys } = require('../config/api-keys-resolver');
+const { getAllAdminApiKeys } = require('../admin/admin-api-keys');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
 const { resolveWhatsappEngine } = require('./engine-config');
@@ -478,4 +480,14 @@ function cleanupRuntimeStorage(rootDir, currentUserId = '') {
   } catch (_) {}
 }
 
-module.exports = { RuntimeBot, cleanupRuntimeStorage };
+async function resolveConfigForAI(userId, deps = {}) {
+  const loadBotConfig = deps.loadBotConfig || (async (uid) => {
+    const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [uid]);
+    return { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
+  });
+  const loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
+  const [customer, admin] = await Promise.all([loadBotConfig(userId), loadAdminKeys()]);
+  return mergeApiKeys(customer, admin);
+}
+
+module.exports = { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI };

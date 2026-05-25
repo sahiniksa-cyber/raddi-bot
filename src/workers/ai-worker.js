@@ -15,6 +15,7 @@ const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { resolveReplyDelayMs } = require('./reply-delay');
 const { findAutoReply } = require('../services/bot/platform-features');
+const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { checkMessageQuota } = require('../services/billing/message-quota');
 const {
   OpenAIMediaAnalyzer,
@@ -350,7 +351,7 @@ async function processAiReply(job) {
       attempts: job.attemptsMade,
     });
 
-    const config = await loadConfig(userId);
+    const config = await resolveConfigForAI(userId);
     const conversation = await resolveConversation({
       userId,
       conversationId: payload.conversationId,
