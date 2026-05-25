@@ -15,4 +15,5 @@ test('init.js declares admin_api_keys table with provider PK and api_key column'
   assert.match(initSrc, /api_key\s+TEXT\s+NOT NULL/i);
   assert.match(initSrc, /updated_at\s+TIMESTAMPTZ/i);
   assert.match(initSrc, /updated_by\s+UUID/i);
+  assert.match(initSrc, /CREATE TRIGGER trg_admin_api_keys_updated_at/i);
 });

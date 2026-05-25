@@ -327,6 +327,11 @@ const statements = [
   `CREATE TRIGGER trg_billing_payment_methods_updated_at
     BEFORE UPDATE ON billing_payment_methods
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `DROP TRIGGER IF EXISTS trg_admin_api_keys_updated_at ON admin_api_keys`,
+  `CREATE TRIGGER trg_admin_api_keys_updated_at
+    BEFORE UPDATE ON admin_api_keys
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
 ];
 
 async function migrate() {
