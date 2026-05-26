@@ -112,3 +112,27 @@
   font-weight: 600;
   direction: rtl;
 }
+
+/* === Polished panel header avatar === */
+.cv-panel-avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 14px; font-weight: 700; flex-shrink: 0; user-select: none; }
+
+/* === Back button Lucide override === */
+.cv-back-btn i[data-lucide] { width: 18px; height: 18px; stroke-width: 1.5; }
+.cv-panel-header-actions button i[data-lucide] { width: 15px; height: 15px; stroke-width: 1.5; }
+.cv-footer .cv-icon-btn i[data-lucide] { width: 17px; height: 17px; stroke-width: 1.5; }
+.cv-footer .cv-mic-btn i[data-lucide] { width: 17px; height: 17px; color: #fff; stroke-width: 2; }
+
+/* === Bubble status + copy Lucide === */
+.cv-bubble-status { width: 13px; height: 13px; color: #53bdeb; stroke-width: 2; vertical-align: middle; }
+.cv-bubble-status.failed { color: var(--red); }
+.cv-bubble-copy i[data-lucide] { width: 11px; height: 11px; stroke-width: 1.5; vertical-align: middle; }
+
+/* === Bot avatar next to AI bubbles === */
+.cv-bubble-wrap.ai { flex-direction: row-reverse; display: flex; gap: 7px; align-items: flex-end; }
+.cv-bubble-wrap.customer { display: flex; }
+.cv-bubble-content { display: flex; flex-direction: column; max-width: 100%; }
+.cv-bot-avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--green-bg); border: 1px solid var(--green-border); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 4px; }
+.cv-bot-avatar i[data-lucide] { width: 13px; height: 13px; color: var(--green); stroke-width: 1.5; }
+
+/* === Empty state svg === */
+.cv-empty .cv-empty-svg { width: 42px; height: 42px; color: var(--text-dim); margin-bottom: 10px; stroke-width: 1.2; opacity: 0.5; }
