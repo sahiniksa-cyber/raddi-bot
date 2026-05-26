@@ -2114,31 +2114,31 @@ function renderConversationPanel(conv){
   const messages=conv.messages||[];
   const bubblesHtml=messages.length
     ? '<div class="cv-day-pill">اليوم</div>'+messages.map(renderBubble).join('')
-    : '<div class="cv-empty"><div class="cv-empty-icon">💭</div>لا توجد رسائل محفوظة</div>';
+    : '<div class="cv-empty"><i data-lucide="message-square-dashed" class="cv-empty-svg"></i>لا توجد رسائل محفوظة</div>';
   const dotClass=conv.status==='ongoing'?'ongoing':'finished';
   const statusLabel=conv.status==='ongoing'?'متصل الآن':'آخر ظهور قبل قليل';
   const display=customerDisplay(conv);
+  const firstName=display.name;
   panel.innerHTML=`<div class="cv-panel-header">
     <div class="cv-panel-header-left">
-      <button type="button" class="cv-back-btn" onclick="backToConvList()" title="رجوع">←</button>
-      <div class="cv-avatar lg"><span>👤</span><span class="cv-status-dot ${dotClass}"></span></div>
+      <button type="button" class="cv-back-btn" onclick="backToConvList()" title="رجوع"><i data-lucide="chevron-right"></i></button>
+      <div class="cv-panel-avatar" style="background:${avatarGradient(firstName)}">${esc(firstChar(firstName))}</div>
       <div class="cv-panel-header-info">
         <div class="cv-panel-header-name">${esc(display.name)}${!display.available?'<span class="old-badge">قديمة</span>':''}</div>
         <div class="cv-panel-header-status ${dotClass}">${esc(statusLabel)}</div>
       </div>
     </div>
     <div class="cv-panel-header-actions">
-      <button type="button" title="المزيد" disabled>⋮</button>
-      <button type="button" title="اتصال" disabled>📞</button>
-      <button type="button" title="فيديو" disabled>🎥</button>
+      <button type="button" title="بحث في المحادثة" disabled><i data-lucide="search"></i></button>
+      <button type="button" title="المزيد" disabled><i data-lucide="more-vertical"></i></button>
     </div>
   </div>
   <div class="cv-bubbles" id="cvBubbles">${bubblesHtml}</div>
   <div class="cv-footer">
-    <button type="button" class="cv-icon-btn" title="إيموجي" disabled>😊</button>
-    <button type="button" class="cv-icon-btn" title="مرفق" disabled>📎</button>
+    <button type="button" class="cv-icon-btn" title="إيموجي" disabled><i data-lucide="smile"></i></button>
+    <button type="button" class="cv-icon-btn" title="مرفق" disabled><i data-lucide="paperclip"></i></button>
     <input type="text" class="cv-message-input" placeholder="اكتب رسالة..." disabled>
-    <button type="button" class="cv-mic-btn" title="رسالة صوتية" disabled>🎤</button>
+    <button type="button" class="cv-mic-btn" title="إرسال" disabled><i data-lucide="send"></i></button>
   </div>`;
   const bubbles=document.getElementById('cvBubbles');
   if(bubbles)bubbles.scrollTop=bubbles.scrollHeight;
@@ -2147,10 +2147,10 @@ function renderConversationPanel(conv){
 
 function bubbleStatusIcon(status){
   if(!status)return '';
-  if(status==='sent')return '<span class="cv-bubble-status" title="مُرسلة">✓</span>';
-  if(status==='queued_for_send')return '<span class="cv-bubble-status" title="بانتظار الإرسال">⏳</span>';
-  if(status==='expired'||status==='canceled_no_quota')return '<span class="cv-bubble-status" title="ملغاة">🚫</span>';
-  if(status==='send_failed')return '<span class="cv-bubble-status" title="فشل الإرسال">✗</span>';
+  if(status==='sent')return '<i data-lucide="check" class="cv-bubble-status" title="مُرسلة"></i>';
+  if(status==='queued_for_send')return '<i data-lucide="clock" class="cv-bubble-status" title="بانتظار الإرسال"></i>';
+  if(status==='expired'||status==='canceled_no_quota')return '<i data-lucide="ban" class="cv-bubble-status" title="ملغاة"></i>';
+  if(status==='send_failed')return '<i data-lucide="x" class="cv-bubble-status failed" title="فشل الإرسال"></i>';
   return '';
 }
 
@@ -2181,12 +2181,17 @@ function renderBubble(m){
   }
   if(isFailed)bubbleClass+=' failed';
 
+  const botAvatar=isAi?'<div class="cv-bot-avatar"><i data-lucide="bot"></i></div>':'';
+
   return `<div class="cv-bubble-wrap ${wrapClass}">
-    <div class="${bubbleClass}">
-      <button class="cv-bubble-copy" onclick="copyBubble(this,'${copyAttr}')" type="button">📋</button>
-      ${bubbleInner}
+    ${botAvatar}
+    <div class="cv-bubble-content">
+      <div class="${bubbleClass}">
+        <button class="cv-bubble-copy" onclick="copyBubble(this,'${copyAttr}')" type="button"><i data-lucide="copy"></i></button>
+        ${bubbleInner}
+      </div>
+      <div class="cv-bubble-time">${timeStr}${statusIcon}</div>
     </div>
-    <div class="cv-bubble-time">${timeStr}${statusIcon}</div>
   </div>`;
 }
 
@@ -2194,9 +2199,10 @@ function copyBubble(btn, text){
   const decoded=String(text||'').replace(/\\n/g,'\n');
   if(navigator.clipboard?.writeText){
     navigator.clipboard.writeText(decoded).then(()=>{
-      btn.textContent='✓';
-      setTimeout(()=>{btn.textContent='📋';},1200);
-    }).catch(()=>{ btn.textContent='✗'; });
+      btn.innerHTML='<i data-lucide="check"></i>';
+      if(window.lucide)lucide.createIcons();
+      setTimeout(()=>{btn.innerHTML='<i data-lucide="copy"></i>';if(window.lucide)lucide.createIcons();},1200);
+    }).catch(()=>{ btn.innerHTML='<i data-lucide="x"></i>'; if(window.lucide)lucide.createIcons(); });
   }
 }
 function toggleAccordionCard(id){
