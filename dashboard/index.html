@@ -983,48 +983,9 @@ body{background-attachment:scroll}
       </div>
       <input type="hidden" id="mdlSel" value="google/gemini-2.0-flash">
 
-      <!-- Dynamic Key Input — يتغير حسب الموديل المختار -->
+      <!-- API keys managed by Raddi team — no input needed -->
       <div class="key-area">
-        <!-- Google AI Section -->
-        <div class="key-section" id="googleKeySection">
-          <label style="color:#25d366">🟢 Google AI API Key</label>
-          <div class="key-row">
-            <input type="password" id="googleKeyInput" placeholder="AIza..." dir="ltr">
-            <button class="key-get-btn" onclick="window.open('https://aistudio.google.com/app/apikey','_blank')">احصل عليه ↗</button>
-          </div>
-          <div class="hint">مجاني تماماً — من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--green)">aistudio.google.com</a></div>
-        </div>
-        <!-- Anthropic Section -->
-        <div class="key-section" id="anthropicKeySection" style="display:none">
-          <label style="color:#818cf8">🟣 Anthropic API Key</label>
-          <div class="key-row">
-            <input type="password" id="anthropicKeyInput" placeholder="sk-ant-..." dir="ltr">
-            <button class="key-get-btn" onclick="window.open('https://console.anthropic.com/settings/keys','_blank')">احصل عليه ↗</button>
-          </div>
-          <div class="hint">من <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#818cf8">console.anthropic.com</a></div>
-        </div>
-        <!-- OpenAI Section -->
-        <div class="key-section" id="openaiKeySection" style="display:none">
-          <label style="color:#f59e0b">🟡 OpenAI API Key — مفتاح ChatGPT/GPT-4o</label>
-          <div class="key-row">
-            <input type="password" id="openaiKeyInput" placeholder="sk-proj-..." dir="ltr">
-            <button class="key-get-btn" onclick="window.open('https://platform.openai.com/api-keys','_blank')">احصل عليه ↗</button>
-          </div>
-          <div class="hint">الصق مفتاحك هنا من <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#f59e0b">platform.openai.com</a> — أو استخدم OpenRouter أسفله كبديل</div>
-        </div>
-        <!-- OpenRouter — مطلوب لـ GPT-4o -->
-        <details style="margin-top:12px" id="orDetails">
-          <summary style="font-size:12.5px;color:var(--text-soft);cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:8px 0">
-            <span style="background:var(--bg-soft);border:1px solid var(--border);border-radius:8px;padding:5px 11px">🔑 مفتاح OpenRouter <small style="color:var(--text-dim)">(مطلوب لـ GPT-4o — وبديل لأي موديل آخر)</small></span>
-          </summary>
-          <div style="margin-top:8px">
-            <div class="key-row">
-              <input type="password" id="openrouterKeyInput" placeholder="sk-or-..." dir="ltr" style="margin-bottom:0">
-              <button class="key-get-btn" onclick="window.open('https://openrouter.ai/keys','_blank')">احصل عليه ↗</button>
-            </div>
-            <div class="hint" style="margin-top:4px">مفتاح واحد يشغّل الكل — من <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--green)">openrouter.ai</a> (مجاني في البداية)</div>
-          </div>
-        </details>
+        <p style="color: #666; font-size: 13px; margin: 8px 0 0;">مفاتيح الذكاء الاصطناعي يديرها فريق ردّي. لا حاجة لإدخالها هنا.</p>
       </div>
 
     </div>
@@ -1848,12 +1809,6 @@ function fillForm(c){
   document.getElementById('maxLen').value=c.maxResponseLength||300;
   document.getElementById('errorMessage').value=c.errorMessage||'';
   setModel(c.model||'google/gemini-2.0-flash');
-  // مفاتيح API
-  document.getElementById('openaiKeyInput').value=c.openaiApiKey||'';
-  document.getElementById('googleKeyInput').value=c.googleApiKey||'';
-  document.getElementById('anthropicKeyInput').value=c.anthropicApiKey||'';
-  document.getElementById('openrouterKeyInput').value=c.openrouterApiKey||'';
-
   // Reply style
   const r=c.replyStyle||{};
   document.getElementById('rsEmployeeName').value=r.employeeName||'';
@@ -2377,10 +2332,6 @@ async function saveConf(){
   const welcomeMode=document.getElementById('welcomeMode').value||'separate';
 
   const nc={...config,
-    openaiApiKey:document.getElementById('openaiKeyInput').value.trim()||config.openaiApiKey||'',
-    googleApiKey:document.getElementById('googleKeyInput').value.trim()||config.googleApiKey||'',
-    anthropicApiKey:document.getElementById('anthropicKeyInput').value.trim()||config.anthropicApiKey||'',
-    openrouterApiKey:document.getElementById('openrouterKeyInput').value.trim()||config.openrouterApiKey||'',
     model:document.getElementById('mdlSel').value,
     storeName:document.getElementById('storeName').value.trim(),
     storeDescription:document.getElementById('storeDesc').value.trim(),

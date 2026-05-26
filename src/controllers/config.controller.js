@@ -1,23 +1,38 @@
 'use strict';
 
+const API_KEY_FIELDS = ['openaiApiKey', 'googleApiKey', 'anthropicApiKey', 'openrouterApiKey'];
+
+function stripApiKeysFromConfig(config) {
+  if (!config || typeof config !== 'object') return {};
+  const out = { ...config };
+  for (const k of API_KEY_FIELDS) delete out[k];
+  return out;
+}
+
+function mergeConfigForSave({ existing, incoming, isAdmin }) {
+  const existingObj = existing || {};
+  const incomingObj = incoming || {};
+  const filteredIncoming = { ...incomingObj };
+  if (!isAdmin) {
+    for (const k of API_KEY_FIELDS) delete filteredIncoming[k];
+  }
+  return { ...existingObj, ...filteredIncoming };
+}
+
 function createConfigController({ getUserBot }) {
   if (typeof getUserBot !== 'function') throw new Error('getUserBot dependency is required');
 
   return {
     getConfig(req, res) {
-      res.json(getUserBot(req.session.userId).config);
+      res.json(stripApiKeysFromConfig(getUserBot(req.session.userId).config));
     },
 
     saveConfig(req, res) {
       try {
         const bot = getUserBot(req.session.userId);
         const incoming = req.body || {};
-        const merged = { ...bot.config, ...incoming };
-
-        if (!incoming.openaiApiKey?.trim() && bot.config.openaiApiKey?.trim()) merged.openaiApiKey = bot.config.openaiApiKey;
-        if (!incoming.openrouterApiKey?.trim() && bot.config.openrouterApiKey?.trim()) merged.openrouterApiKey = bot.config.openrouterApiKey;
-        if (!incoming.googleApiKey?.trim() && bot.config.googleApiKey?.trim()) merged.googleApiKey = bot.config.googleApiKey;
-        if (!incoming.anthropicApiKey?.trim() && bot.config.anthropicApiKey?.trim()) merged.anthropicApiKey = bot.config.anthropicApiKey;
+        const isAdmin = req.session?.isAdmin === true;
+        const merged = mergeConfigForSave({ existing: bot.config, incoming, isAdmin });
 
         bot.config = merged;
         bot.saveConfig();
@@ -36,4 +51,4 @@ function createConfigController({ getUserBot }) {
   };
 }
 
-module.exports = { createConfigController };
+module.exports = { createConfigController, stripApiKeysFromConfig, API_KEY_FIELDS, mergeConfigForSave };

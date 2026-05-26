@@ -192,8 +192,10 @@ function createApp() {
   app.use('/api', createBillingApiGate({ settings: billingSettings }));
   app.use(createQueueRoutes(routeDeps));
 
-  const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup });
-  const wrapConfigController = require('./controllers/config.controller').createConfigController({ getUserBot: syncBotLookup });
+  const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup, database: db });
+  const configControllerModule = require('./controllers/config.controller');
+  const wrapConfigController = configControllerModule.createConfigController({ getUserBot: syncBotLookup });
+  const { mergeConfigForSave } = configControllerModule;
   const wrapConversationsController = require('./controllers/conversations.controller').createConversationsController({ database: db });
 
   app.get('/api/status', requireAuth, asyncRoute(async (req, res) => wrapBotController.status(req, res)));
@@ -209,11 +211,8 @@ function createApp() {
   app.post('/api/config', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const incoming = req.body || {};
-    const merged = { ...bot.config, ...incoming };
-    if (!incoming.openaiApiKey?.trim() && bot.config.openaiApiKey?.trim()) merged.openaiApiKey = bot.config.openaiApiKey;
-    if (!incoming.openrouterApiKey?.trim() && bot.config.openrouterApiKey?.trim()) merged.openrouterApiKey = bot.config.openrouterApiKey;
-    if (!incoming.googleApiKey?.trim() && bot.config.googleApiKey?.trim()) merged.googleApiKey = bot.config.googleApiKey;
-    if (!incoming.anthropicApiKey?.trim() && bot.config.anthropicApiKey?.trim()) merged.anthropicApiKey = bot.config.anthropicApiKey;
+    const isAdmin = req.session?.isAdmin === true;
+    const merged = mergeConfigForSave({ existing: bot.config, incoming, isAdmin });
     bot.config = merged;
     await bot.saveConfig();
     res.json({ success: true });
@@ -327,7 +326,7 @@ function createApp() {
       return res.json({ success: false, message: `محادثات غير كافية (${sample.length} رد)` });
     }
 
-    const { openai, model } = bot.buildAIClient();
+    const { openai, model } = await bot.buildAIClient();
     const aiResult = await openai.chat.completions.create({
       model,
       max_tokens: 1400,
@@ -349,7 +348,7 @@ function createApp() {
     const sourceText = String(text || '').trim();
     if (sourceText.length < 3) return res.status(400).json({ success: false, message: 'النص قصير' });
 
-    const { openai, model } = bot.buildAIClient();
+    const { openai, model } = await bot.buildAIClient();
     const prompts = {
       welcome: `حسّن رسالة الترحيب لمتجر "${storeName || bot.config.storeName || 'المتجر'}" لتكون واضحة وطبيعية ومناسبة لواتساب. لا تذكر AI أو بوت. أعد النص فقط.`,
       description: 'حوّل وصف المتجر إلى وصف واضح ومفيد للذكاء الاصطناعي: ماذا يبيع المتجر، لمن، أهم المزايا، وأي حدود مهمة. لا تجعله تسويقياً مبالغاً فيه. أعد الوصف فقط.',
@@ -387,7 +386,7 @@ function createApp() {
     if (answers.length < 10) return res.status(400).json({ success: false, message: 'يجب الإجابة على 10 أسئلة على الأقل' });
 
     const qa = answers.map((answer, i) => `س${i + 1}: ${answer.q}\nج${i + 1}: ${answer.a}`).join('\n\n');
-    const { openai, model } = bot.buildAIClient();
+    const { openai, model } = await bot.buildAIClient();
     const aiResult = await openai.chat.completions.create({
       model,
       max_tokens: 1800,

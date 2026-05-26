@@ -9,6 +9,8 @@ const db = require('../../db/client');
 const Logger = require('../../../lib/logger');
 const AIClient = require('../../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../../lib/constants');
+const { mergeApiKeys } = require('../config/api-keys-resolver');
+const { getAllAdminApiKeys } = require('../admin/admin-api-keys');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
 const { resolveWhatsappEngine } = require('./engine-config');
@@ -152,6 +154,21 @@ class RuntimeBot {
         this.logger.warn('auth', `failed to remove persisted WhatsApp backup: ${err.message}`);
       }
     });
+    this.connection.on('connection_conflict', () => {
+      if (this.sessionDesiredState !== 'running') return;
+      const retryMs = this.leaseTtlMs() + 5000;
+      clearTimeout(this._autoRecoverTimer);
+      this._autoRecoverTimer = setTimeout(() => {
+        this._autoRecoverTimer = null;
+        if (this.sessionDesiredState === 'running' && this.connection.status === 'stopped') {
+          this.logger.info('connection', '440 auto-recovery: re-acquiring WhatsApp lease');
+          this.startBot('440_recovery').catch((err) => {
+            this.logger.warn('connection', `440 auto-recovery failed: ${err.message}`);
+          });
+        }
+      }, retryMs);
+      if (typeof this._autoRecoverTimer.unref === 'function') this._autoRecoverTimer.unref();
+    });
   }
 
   get client() {
@@ -185,12 +202,25 @@ class RuntimeBot {
     };
   }
 
-  async load() {
-    const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [this.userId]);
-    this.config = { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
+  async load(deps = {}) {
+    const loadBotConfig = deps.loadBotConfig || (async (uid) => {
+      const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [uid]);
+      return { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
+    });
+    this._loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
+    this._saveBotConfig = deps.saveBotConfig || null;
+    const doLoadSessionState = deps.loadSessionState || (() => this.loadSessionState());
+
+    const customer = await loadBotConfig(this.userId);
+    this.config = { ...DEFAULT_CONFIG, ...customer };
     this.ai.updateConfig(this.config);
-    await this.loadSessionState();
+    await doLoadSessionState();
     return this;
+  }
+
+  async resolveConfig() {
+    const admin = await (this._loadAdminKeys || getAllAdminApiKeys)();
+    return mergeApiKeys(this.config, admin);
   }
 
   async loadSessionState() {
@@ -319,12 +349,16 @@ class RuntimeBot {
   }
 
   async saveConfig() {
-    await db.query(
-      `INSERT INTO bot_configs (user_id, config, source)
-       VALUES ($1, $2::jsonb, 'src-server')
-       ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, source = EXCLUDED.source`,
-      [this.userId, JSON.stringify(this.config)],
-    );
+    if (this._saveBotConfig) {
+      await this._saveBotConfig(this.userId, this.config);
+    } else {
+      await db.query(
+        `INSERT INTO bot_configs (user_id, config, source)
+         VALUES ($1, $2::jsonb, 'src-server')
+         ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, source = EXCLUDED.source`,
+        [this.userId, JSON.stringify(this.config)],
+      );
+    }
     this.ai.updateConfig(this.config);
   }
 
@@ -387,7 +421,9 @@ class RuntimeBot {
     this.logger.log(message);
   }
 
-  buildAIClient() {
+  async buildAIClient() {
+    const merged = await this.resolveConfig();
+    this.ai.updateConfig(merged);
     return this.ai.buildClient();
   }
 
@@ -396,6 +432,8 @@ class RuntimeBot {
   }
 
   async getAIReply(history, opts) {
+    const merged = await this.resolveConfig();
+    this.ai.updateConfig(merged);
     return this.ai.getReply(history, opts);
   }
 
@@ -478,4 +516,14 @@ function cleanupRuntimeStorage(rootDir, currentUserId = '') {
   } catch (_) {}
 }
 
-module.exports = { RuntimeBot, cleanupRuntimeStorage };
+async function resolveConfigForAI(userId, deps = {}) {
+  const loadBotConfig = deps.loadBotConfig || (async (uid) => {
+    const result = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [uid]);
+    return { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
+  });
+  const loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
+  const [customer, admin] = await Promise.all([loadBotConfig(userId), loadAdminKeys()]);
+  return mergeApiKeys(customer, admin);
+}
+
+module.exports = { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI };

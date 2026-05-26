@@ -58,6 +58,13 @@ const statements = [
   `ALTER TABLE whatsapp_sessions
     ADD COLUMN IF NOT EXISTS connection_lease_expires_at TIMESTAMPTZ`,
 
+  `CREATE TABLE IF NOT EXISTS admin_api_keys (
+    provider TEXT PRIMARY KEY,
+    api_key TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+  )`,
+
   `CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -319,6 +326,11 @@ const statements = [
   `DROP TRIGGER IF EXISTS trg_billing_payment_methods_updated_at ON billing_payment_methods`,
   `CREATE TRIGGER trg_billing_payment_methods_updated_at
     BEFORE UPDATE ON billing_payment_methods
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `DROP TRIGGER IF EXISTS trg_admin_api_keys_updated_at ON admin_api_keys`,
+  `CREATE TRIGGER trg_admin_api_keys_updated_at
+    BEFORE UPDATE ON admin_api_keys
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
 ];
 

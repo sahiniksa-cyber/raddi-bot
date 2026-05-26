@@ -93,6 +93,17 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   if (!sender) throw new Error('Missing sender in outgoing payload');
   if (!reply) throw new Error('Missing reply in outgoing payload');
 
+  // Guard: @lid JIDs have no phone number — Baileys cannot send to them
+  if (sender.endsWith('@lid')) {
+    await markReplyMessage(replyMessageId, 'skipped_lid', {
+      sentBy: WORKER_NAME,
+      skippedAt: new Date().toISOString(),
+      reason: 'sender_is_lid_only',
+    });
+    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] skipped @lid sender ${sender}`);
+    return { skipped: true, reason: 'sender_is_lid_only' };
+  }
+
   if (await skipStaleOutgoingJob(job, { replyMessageId })) {
     return { skipped: true, reason: 'stale_outgoing_reply' };
   }
