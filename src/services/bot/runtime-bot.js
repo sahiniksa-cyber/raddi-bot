@@ -154,6 +154,21 @@ class RuntimeBot {
         this.logger.warn('auth', `failed to remove persisted WhatsApp backup: ${err.message}`);
       }
     });
+    this.connection.on('connection_conflict', () => {
+      if (this.sessionDesiredState !== 'running') return;
+      const retryMs = this.leaseTtlMs() + 5000;
+      clearTimeout(this._autoRecoverTimer);
+      this._autoRecoverTimer = setTimeout(() => {
+        this._autoRecoverTimer = null;
+        if (this.sessionDesiredState === 'running' && this.connection.status === 'stopped') {
+          this.logger.info('connection', '440 auto-recovery: re-acquiring WhatsApp lease');
+          this.startBot('440_recovery').catch((err) => {
+            this.logger.warn('connection', `440 auto-recovery failed: ${err.message}`);
+          });
+        }
+      }, retryMs);
+      if (typeof this._autoRecoverTimer.unref === 'function') this._autoRecoverTimer.unref();
+    });
   }
 
   get client() {
