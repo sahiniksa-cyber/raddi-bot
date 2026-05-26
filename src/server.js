@@ -169,6 +169,7 @@ function createApp() {
   const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, message: { success: false, message: 'كثير طلبات' } });
   app.use('/api', apiLimiter);
   app.use('/fonts', express.static(path.join(process.cwd(), 'dashboard/fonts')));
+  app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
 
   const routeDeps = {
     dashboardDir: path.join(process.cwd(), 'dashboard'),
