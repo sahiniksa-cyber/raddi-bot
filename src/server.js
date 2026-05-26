@@ -192,7 +192,7 @@ function createApp() {
   app.use('/api', createBillingApiGate({ settings: billingSettings }));
   app.use(createQueueRoutes(routeDeps));
 
-  const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup });
+  const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup, database: db });
   const configControllerModule = require('./controllers/config.controller');
   const wrapConfigController = configControllerModule.createConfigController({ getUserBot: syncBotLookup });
   const { mergeConfigForSave } = configControllerModule;

@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { TIMERS } = require('../../lib/constants');
 
 function describeStartState(state = {}) {
@@ -14,8 +15,12 @@ function describeStartState(state = {}) {
   return 'طلب التشغيل وصل. إذا لم تتغير الحالة خلال لحظات، اضغط تشغيل مرة ثانية.';
 }
 
-function createBotController({ getUserBot }) {
+function createBotController({ getUserBot, database = null }) {
   if (typeof getUserBot !== 'function') throw new Error('getUserBot dependency is required');
+
+  const db = database || (() => {
+    try { return require('../db/client'); } catch (_) { return null; }
+  })();
 
   return {
     status(req, res) {
@@ -107,13 +112,45 @@ function createBotController({ getUserBot }) {
         return res.json({ success: false, message: 'bot is not connected' });
       }
 
+      const cleanPhone = phone.replace(/\+/g, '').replace(/[\s\-()]/g, '');
+      const sender = `${cleanPhone}@s.whatsapp.net`;
+      const text = message.trim();
+
       try {
-        const cleanPhone = phone.replace(/\+/g, '').replace(/[\s\-()]/g, '');
         await Promise.race([
-          bot.client.sendMessage(`${cleanPhone}@c.us`, message.trim()),
+          bot.client.sendMessage(sender, text),
           new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), TIMERS.SEND_MESSAGE_TIMEOUT_MS)),
         ]);
         bot.log(`direct message sent to ${cleanPhone}`);
+
+        // Persist to DB so the message appears in conversation history
+        if (db && typeof db.isConfigured === 'function' && db.isConfigured()) {
+          try {
+            const userId = bot.userId || req.session.userId;
+            const convResult = await db.query(
+              `INSERT INTO conversations (user_id, sender, last_message_at)
+               VALUES ($1, $2, NOW())
+               ON CONFLICT (user_id, sender) DO UPDATE SET last_message_at = NOW()
+               RETURNING id`,
+              [userId, sender],
+            );
+            const conversationId = convResult.rows[0]?.id;
+            if (conversationId) {
+              const providerMessageId = `manual:${userId}:${crypto.randomUUID()}`;
+              await db.query(
+                `INSERT INTO messages
+                   (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+                 VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'sent', $6::jsonb)`,
+                [conversationId, userId, sender, text, providerMessageId,
+                  JSON.stringify({ source: 'manual_send' })],
+              );
+            }
+          } catch (dbErr) {
+            // Log but don't fail — message was already sent
+            bot.log?.(`warning: failed to persist manual send to DB: ${dbErr.message}`);
+          }
+        }
+
         res.json({ success: true });
       } catch (err) {
         res.status(500).json({ success: false, message: err.message });
