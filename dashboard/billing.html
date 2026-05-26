@@ -6,20 +6,20 @@
   <title>تفعيل المنصة — جواب</title>
   <style>
     body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#f9f9fb;color:#14213d;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-    .card{background:#fff;border:1px solid #e5e7eb;border-radius:24px;padding:48px 36px;max-width:480px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(20,33,61,.08)}
-    .icon{font-size:64px;margin-bottom:18px}
-    h1{margin:0 0 12px;font-size:24px;font-weight:900;color:#1a1a1a}
-    .desc{color:#64748b;line-height:1.9;font-size:14px;margin-bottom:28px}
-    .code-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:20px;margin-bottom:20px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:48px 36px;max-width:480px;width:100%;text-align:center;box-shadow:0 4px 16px rgba(15,23,42,.04)}
+    .icon{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;font-size:24px;margin-bottom:18px;background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;border-radius:12px}
+    h1{margin:0 0 12px;font-size:18px;font-weight:700;letter-spacing:-0.02em;color:#1a1a1a}
+    .desc{color:#64748b;line-height:1.75;font-size:13px;margin-bottom:28px}
+    .code-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:20px;margin-bottom:20px}
     .code-box label{display:block;font-size:13px;color:#15803d;font-weight:700;margin-bottom:10px}
     .code-row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
-    input{border-radius:10px;border:1px solid #e5e7eb;padding:12px 14px;font:inherit;flex:1;min-width:180px;max-width:240px;direction:ltr;text-align:center;font-size:16px}
-    input:focus{outline:none;border-color:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.12)}
-    button{border-radius:10px;border:1px solid #e5e7eb;padding:12px 20px;font:inherit;cursor:pointer;font-weight:800;background:#1a1a1a;color:#fff;transition:all .18s}
-    button:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(26,26,26,.15)}
-    .ghost{background:#fff;color:#1a1a1a;font-weight:700}
+    input{border-radius:9px;border:1.5px solid #e5e7eb;padding:12px 14px;font:inherit;flex:1;min-width:180px;max-width:240px;direction:ltr;text-align:center;font-size:14px}
+    input:focus{outline:none;border-color:#16a34a;box-shadow:0 0 0 3px #f0fdf4}
+    button{border-radius:9px;border:1px solid #e5e7eb;padding:10px 20px;font:inherit;cursor:pointer;font-weight:600;font-size:13.5px;background:#16a34a;color:#fff;transition:all .18s}
+    button:hover{background:#15803d}
+    .ghost{background:#fff;color:#1a1a1a;border:1px solid #e5e7eb;font-weight:600}
     .ghost:hover{background:#f8fafc}
-    .status{padding:12px;border-radius:10px;margin-top:14px;font-size:13px;line-height:1.7;display:none}
+    .status{padding:12px;border-radius:9px;margin-top:14px;font-size:12.5px;line-height:1.7;display:none}
     .status.show{display:block}
     .status.err{background:#fef2f2;border:1px solid #fecaca;color:#dc2626}
     .status.ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d}
