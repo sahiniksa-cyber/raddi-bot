@@ -764,20 +764,23 @@ body{background-attachment:scroll}
     transition-duration:.01ms!important;
   }
 }
+.tab i[data-lucide]{width:14px;height:14px;stroke-width:1.5}
+.tab{display:inline-flex;align-items:center;gap:6px}
 </style>
 <link rel="stylesheet" href="conversations.css">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
 
 <div class="topbar">
   <div class="logo">جواب</div>
   <div class="nav-tabs">
-    <button class="tab active" onclick="goTab('connect')" id="tab-connect">📱 الربط</button>
-    <button class="tab" onclick="goTab('settings')" id="tab-settings">⚙️ الإعدادات</button>
-    <button class="tab" onclick="goTab('train')" id="tab-train">🎓 دربني</button>
-    <button class="tab" onclick="goTab('conversations')" id="tab-conversations">💬 المحادثات</button>
-    <button class="tab" onclick="goTab('pricing')" id="tab-pricing">📞 التفعيل</button>
-    <button class="tab" onclick="goTab('account')" id="tab-account">👤 حسابي</button>
+    <button class="tab active" onclick="goTab('connect')" id="tab-connect"><i data-lucide="smartphone"></i> الربط</button>
+    <button class="tab" onclick="goTab('settings')" id="tab-settings"><i data-lucide="settings"></i> الإعدادات</button>
+    <button class="tab" onclick="goTab('train')" id="tab-train"><i data-lucide="graduation-cap"></i> دربني</button>
+    <button class="tab" onclick="goTab('conversations')" id="tab-conversations"><i data-lucide="message-circle"></i> المحادثات</button>
+    <button class="tab" onclick="goTab('pricing')" id="tab-pricing"><i data-lucide="badge-check"></i> التفعيل</button>
+    <button class="tab" onclick="goTab('account')" id="tab-account"><i data-lucide="user"></i> حسابي</button>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <div class="conn-badge">
@@ -1997,6 +2000,25 @@ function customerDisplay(c){
   return { name: 'عميل (رقم غير متوفر)', phone: 'غير متوفر', available: false };
 }
 
+function firstChar(name){
+  if(!name)return '?';
+  const t=String(name).trim();
+  return t ? t.charAt(0) : '?';
+}
+function avatarGradient(name){
+  const palettes=[
+    'linear-gradient(135deg,#6366f1,#8b5cf6)',
+    'linear-gradient(135deg,#f59e0b,#ef4444)',
+    'linear-gradient(135deg,#0ea5e9,#6366f1)',
+    'linear-gradient(135deg,#ec4899,#f97316)',
+    'linear-gradient(135deg,#14b8a6,#06b6d4)',
+    'linear-gradient(135deg,#a855f7,#ec4899)',
+  ];
+  let h=0; const s=String(name||'');
+  for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
+  return palettes[h%palettes.length];
+}
+
 function renderConversationList(items){
   const list=document.getElementById('cvList');
   if(!list)return;
@@ -2006,29 +2028,28 @@ function renderConversationList(items){
   }
   const rows=items.map(c=>{
     const isActive=c.id===cvSelectedId;
-    const dotClass=c.status==='ongoing'?'ongoing':'finished';
     const display=customerDisplay(c);
-    return `<tr class="${isActive?'active':''}" data-id="${esc(c.id)}" onclick="onConvCardClick('${esc(c.id)}')">
-      <td class="cv-col-name">
-        <div class="cv-customer-cell">
-          <div class="cv-avatar"><span>👤</span><span class="cv-status-dot ${dotClass}"></span></div>
-          <div class="cv-customer-info">
-            <div class="cv-customer-name">${esc(display.name)}${!display.available?'<span class="old-badge">قديمة</span>':''}</div>
-          </div>
+    const firstName=display.name;
+    const lastMsg=(c.messages && c.messages.length) ? c.messages[c.messages.length-1] : null;
+    const preview=lastMsg ? String(lastMsg.content||'').replace(/\n/g,' ').slice(0,60) : 'لا توجد رسائل';
+    const unread=Number(c.unreadCount||0);
+    const time=formatConvTime(c.lastMessageAt);
+    return `<div class="cv-item ${isActive?'active':''}" data-id="${esc(c.id)}" onclick="onConvCardClick('${esc(c.id)}')">
+      <div class="cv-item-avatar" style="background:${avatarGradient(firstName)}">${esc(firstChar(firstName))}</div>
+      <div class="cv-item-body">
+        <div class="cv-item-top">
+          <span class="cv-item-name">${esc(firstName)}${!display.available?'<span class="old-badge">قديمة</span>':''}</span>
+          <span class="cv-item-time">${esc(time)}</span>
         </div>
-      </td>
-      <td class="cv-col-phone"><span class="cv-customer-phone">${esc(display.phone)}</span></td>
-      <td class="cv-col-time"><span class="cv-time">${esc(formatConvTime(c.lastMessageAt))}</span></td>
-    </tr>`;
+        <div class="cv-item-bottom">
+          <span class="cv-item-preview">${esc(preview)}</span>
+          ${unread>0?`<span class="cv-item-unread">${unread}</span>`:''}
+        </div>
+      </div>
+    </div>`;
   }).join('');
-  list.innerHTML=`<table class="cv-table">
-    <thead><tr>
-      <th>اسم العميل</th>
-      <th>رقم جوال العميل</th>
-      <th>متى أرسل العميل</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  list.innerHTML=rows;
+  if(window.lucide) lucide.createIcons();
 }
 
 function onConvCardClick(id){
@@ -2048,10 +2069,7 @@ function selectConversation(id){
   cvSelectedId=id;
   const conv=cvConversations.find(c=>c.id===id);
   if(!conv)return;
-  document.querySelectorAll('.cv-table tbody tr').forEach(el=>{
-    el.classList.toggle('active', el.dataset.id===id);
-  });
-  document.querySelectorAll('.cv-card').forEach(el=>{
+  document.querySelectorAll('.cv-item').forEach(el=>{
     el.classList.toggle('active', el.dataset.id===id);
   });
   if(typeof renderConversationPanel==='function')renderConversationPanel(conv);
@@ -2124,6 +2142,7 @@ function renderConversationPanel(conv){
   </div>`;
   const bubbles=document.getElementById('cvBubbles');
   if(bubbles)bubbles.scrollTop=bubbles.scrollHeight;
+  if(window.lucide) lucide.createIcons();
 }
 
 function bubbleStatusIcon(status){
@@ -2641,6 +2660,7 @@ async function initDashboard(){
   }
 }
 initDashboard();
+if (window.lucide) lucide.createIcons({ attrs: { 'stroke-width': 1.5 } });
 setInterval(()=>{if(!document.hidden&&billingActive())loadPausedChats();}, 30000);
 setInterval(()=>{if(!document.hidden&&billingActive())loadConversations();}, 30000);
 setInterval(()=>{if(!document.hidden&&billingActive())poll();}, 4000);

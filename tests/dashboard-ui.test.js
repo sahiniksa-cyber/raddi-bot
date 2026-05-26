@@ -23,9 +23,10 @@ test('conversation list rendering wires the core helpers', () => {
   assert.match(html, /renderConversationList/);
   assert.match(html, /selectConversation/);
   assert.match(html, /filterConversations/);
-  // Table-based redesign (post-2026-05-25) — rows live in cv-table with avatar + status dot.
-  assert.match(html, /cv-table/);
-  assert.match(html, /cv-status-dot/);
+  // WhatsApp-style redesign (post-2026-05-26) — vertical list of cv-item rows with colored avatars and unread badges.
+  assert.match(html, /cv-item/);
+  assert.match(html, /cv-item-avatar/);
+  assert.match(html, /avatarGradient/);
 });
 
 test('escalation template variables are clickable insert buttons', () => {
