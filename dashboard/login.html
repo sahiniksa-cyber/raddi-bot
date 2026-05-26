@@ -290,17 +290,20 @@ input:focus{
 }
 
 .submit-btn,.action-btn{
-  min-height:60px;
-  border-radius:999px;
-  background:#1a1a1a!important;
+  min-height:auto;
+  padding:11px!important;
+  font-weight:600!important;
+  border-radius:10px!important;
+  background:#16a34a!important;
   color:#fff!important;
-  box-shadow:0 16px 34px rgba(26,26,26,.18)!important;
-  transition:transform .18s ease,box-shadow .18s ease!important;
+  box-shadow:0 1px 2px rgba(22,163,74,.15)!important;
+  transition:background .18s ease,box-shadow .18s ease!important;
 }
 
 .submit-btn:hover,.action-btn:hover{
-  transform:translateY(-1px);
-  box-shadow:0 22px 44px rgba(26,26,26,.2)!important;
+  transform:none;
+  background:#15803d!important;
+  box-shadow:0 2px 4px rgba(22,163,74,.2)!important;
 }
 
 .back-link{
@@ -308,8 +311,10 @@ input:focus{
 }
 
 .error-box,.success-box,.dev-code{
-  border-radius:22px;
-  box-shadow:0 12px 26px rgba(35,44,64,.06);
+  border-radius:9px;
+  font-size:12.5px;
+  line-height:1.6;
+  box-shadow:none;
 }
 
 .success-box{
@@ -322,7 +327,8 @@ input:focus{
 
 .screen-title{
   color:#1a1a1a;
-  font-size:20px;
+  font-size:18px;
+  font-weight:700;
 }
 
 .screen-sub{
@@ -336,12 +342,12 @@ input:focus{
 }
 
 .feat{
-  min-height:124px;
-  padding:22px 16px;
-  border:1px solid rgba(255,255,255,.72);
-  border-radius:28px;
+  min-height:104px;
+  padding:18px 14px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
   background:#fff;
-  box-shadow:0 16px 38px rgba(35,44,64,.08);
+  box-shadow:0 1px 3px rgba(15,23,42,.04);
   display:flex;
   flex-direction:column;
   justify-content:center;
@@ -349,8 +355,8 @@ input:focus{
 }
 
 .feat:hover{
-  transform:translateY(-2px);
-  box-shadow:0 24px 60px rgba(35,44,64,.12);
+  transform:translateY(-1px);
+  box-shadow:0 4px 12px rgba(15,23,42,.06);
 }
 
 .feat:nth-child(1){background:linear-gradient(135deg,#dff7e9,#ffffff)}
@@ -364,7 +370,8 @@ input:focus{
 
 .feat-label{
   color:rgba(26,26,26,.62);
-  font-size:12px;
+  font-size:11px;
+  font-weight:500;
 }
 
 .remember-row{
