@@ -121,8 +121,9 @@ function buildEscalationNotification({ contact, customerSender, customerPhoneNum
 function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNumber, inboundText }) {
   const explicit = extractEscalationRequest(reply);
   const contact = resolveEscalationContact(config, explicit?.contactName, inboundText);
-  const ruleMatched = !explicit && contact && shouldEscalateByContactRule(contact, inboundText);
-  const shouldSend = explicit || ruleMatched;
+  // Only escalate on the AI's explicit [تحويل:...] tag. A customer keyword match
+  // alone is NOT enough — it caused the owner to be spammed for routine questions.
+  const shouldSend = Boolean(explicit);
   const customerReply = explicit?.customerReply || String(reply || '').trim();
 
   const contactTarget = contact?.target || contact?.jid || contact?.groupJid || contact?.phone;
@@ -141,6 +142,7 @@ function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNu
       reply: buildEscalationNotification({ contact, customerSender, customerPhoneNumber, inboundText, summary }),
       contact,
       summary,
+      contactTarget: target,
     },
   };
 }

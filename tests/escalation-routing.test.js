@@ -60,7 +60,7 @@ test('prepareEscalation targets the requested contact and keeps marker private',
   assert.doesNotMatch(result.ownerMessage.reply, /\[تحويل:/);
 });
 
-test('prepareEscalation can route by contact rule when the model omits the marker', () => {
+test('prepareEscalation does NOT escalate on a contact rule match alone — only an explicit [تحويل:...] marker triggers it', () => {
   const config = {
     escalationContacts: [
       { name: 'المتجر', phone: '0593216744', role: 'رقم المتجر', when: 'أي احد يسأل عن اشتراك أدوبي' },
@@ -75,8 +75,7 @@ test('prepareEscalation can route by contact rule when the model omits the marke
   });
 
   assert.equal(result.customerReply, 'كم المدة اللي تحتاجها؟');
-  assert.equal(result.ownerMessage.sender, '966593216744@c.us');
-  assert.match(result.ownerMessage.reply, /قاعدة التحويل/);
+  assert.equal(result.ownerMessage, null, 'rule-only match must not trigger an owner notification');
 });
 
 test('prepareEscalation can send owner notifications to a WhatsApp group JID', () => {
@@ -87,7 +86,7 @@ test('prepareEscalation can send owner notifications to a WhatsApp group JID', (
   };
 
   const result = prepareEscalation({
-    reply: 'I will check that for you',
+    reply: 'I will check that for you [تحويل:support|refund request]',
     config,
     customerSender: '966500000000@s.whatsapp.net',
     inboundText: 'refund please',
