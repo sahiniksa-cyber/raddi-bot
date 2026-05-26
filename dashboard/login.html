@@ -37,30 +37,30 @@ body::after{content:'';position:fixed;bottom:-30%;right:-10%;width:600px;height:
   background:radial-gradient(circle,rgba(99,102,241,.05) 0%,transparent 65%);pointer-events:none;z-index:0}
 
 .logo-wrap{text-align:center;margin-bottom:28px;position:relative;z-index:1}
-.logo{font-size:42px;font-weight:900;background:linear-gradient(135deg,var(--green),var(--green-light));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.025em;display:block}
-.logo-sub{font-size:14px;color:var(--text-soft);margin-top:6px;font-weight:600}
+.logo{font-size:42px;font-weight:700;background:none;color:#16a34a;
+  -webkit-background-clip:initial;-webkit-text-fill-color:#16a34a;letter-spacing:-.03em;display:block}
+.logo-sub{font-size:14px;color:var(--text-soft);margin-top:6px;font-weight:500}
 
 .card{background:var(--card);border:1px solid var(--border);
-  border-radius:24px;padding:36px;width:100%;max-width:440px;
-  position:relative;z-index:1;box-shadow:var(--shadow-lg)}
+  border-radius:18px;padding:36px;width:100%;max-width:440px;
+  position:relative;z-index:1;box-shadow:0 4px 16px rgba(15,23,42,.04)}
 
 /* ─── TABS ─── */
 .tabs{display:flex;background:var(--bg-soft);border:1px solid var(--border);border-radius:13px;padding:4px;margin-bottom:28px;gap:2px}
-.tab-btn{flex:1;padding:11px;border:none;border-radius:10px;background:transparent;
-  color:var(--text-soft);font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .18s}
-.tab-btn.active{background:#fff;color:var(--green2);box-shadow:var(--shadow-sm)}
+.tab-btn{flex:1;padding:8px 12px;border:none;border-radius:10px;background:transparent;
+  color:var(--text-soft);font-family:var(--font);font-size:13px;font-weight:500;cursor:pointer;transition:all .18s}
+.tab-btn.active{background:#fff;color:#16a34a;font-weight:600;box-shadow:0 1px 3px rgba(15,23,42,.06)}
 .tab-btn:hover:not(.active){color:var(--text-2)}
 
 /* ─── INPUTS ─── */
 .form-group{margin-bottom:18px;position:relative}
-label{display:block;font-size:11.5px;font-weight:700;color:var(--text-muted);margin-bottom:7px;
+label{display:block;font-size:11.5px;font-weight:600;color:var(--text-muted);margin-bottom:7px;
   letter-spacing:.04em;text-transform:uppercase}
 input[type=email],input[type=password],input[type=text]{
-  width:100%;background:#fff;border:1.5px solid var(--border);
-  border-radius:11px;padding:13px 16px;color:var(--text);font-size:15px;
-  font-family:var(--font);outline:none;transition:border-color .18s,box-shadow .18s}
-input:focus{border-color:var(--green-light);box-shadow:0 0 0 3px var(--green-bg)}
+  width:100%;background:#f1f5f9;border:1.5px solid #e5e7eb;
+  border-radius:9px;padding:10px 13px;color:var(--text);font-size:13.5px;font-weight:500;
+  font-family:var(--font);outline:none;transition:border-color .18s,box-shadow .18s,background .18s}
+input:focus{border-color:#16a34a;background:#fff;box-shadow:0 0 0 3px #f0fdf4}
 input::placeholder{color:var(--text-dim)}
 
 .pass-toggle{position:absolute;left:14px;top:38px;background:transparent;border:none;
@@ -69,28 +69,28 @@ input::placeholder{color:var(--text-dim)}
 
 /* ─── REMEMBER ME ─── */
 .remember-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:8px}
-.remember-label{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text-muted);user-select:none;font-weight:600}
+.remember-label{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text-muted);user-select:none;font-weight:500}
 .remember-label input[type=checkbox]{width:16px;height:16px;accent-color:var(--green);cursor:pointer}
 .forgot-link{font-size:13px;color:var(--text-soft);background:transparent;border:none;
-  font-family:var(--font);cursor:pointer;text-decoration:underline;transition:color .18s;padding:0;font-weight:600}
+  font-family:var(--font);cursor:pointer;text-decoration:underline;transition:color .18s;padding:0;font-weight:500}
 .forgot-link:hover{color:var(--green2)}
 
 /* ─── BUTTON ─── */
-.submit-btn{width:100%;padding:14px;border:none;border-radius:12px;
-  background:linear-gradient(135deg,var(--green-light),var(--green));
-  color:#fff;font-family:var(--font);font-size:16px;font-weight:800;
+.submit-btn{width:100%;padding:11px;border:none;border-radius:10px;
+  background:#16a34a;
+  color:#fff;font-family:var(--font);font-size:14px;font-weight:600;
   cursor:pointer;transition:all .18s;margin-top:6px;
   display:flex;align-items:center;justify-content:center;gap:8px;
-  box-shadow:0 2px 4px rgba(22,163,74,.25),0 1px 2px rgba(22,163,74,.15)}
-.submit-btn:hover{transform:translateY(-1px);box-shadow:0 4px 8px rgba(22,163,74,.3),0 2px 4px rgba(22,163,74,.2)}
+  box-shadow:0 1px 2px rgba(22,163,74,.15)}
+.submit-btn:hover{background:#15803d;box-shadow:0 2px 4px rgba(22,163,74,.2)}
 .submit-btn:disabled{opacity:.55;cursor:not-allowed;transform:none}
 
 /* ─── MESSAGES ─── */
 .error-box{background:var(--red-bg);border:1px solid var(--red-border);
-  border-radius:11px;padding:12px 16px;font-size:13px;color:var(--red);margin-bottom:14px;display:none;font-weight:600}
+  border-radius:9px;padding:12px 16px;font-size:12.5px;line-height:1.6;color:var(--red);margin-bottom:14px;display:none;font-weight:500}
 .error-box.show{display:block}
 .success-box{background:var(--green-bg);border:1px solid var(--green-border);
-  border-radius:11px;padding:12px 16px;font-size:13px;color:var(--green2);margin-bottom:14px;display:none;font-weight:600}
+  border-radius:9px;padding:12px 16px;font-size:12.5px;line-height:1.6;color:var(--green2);margin-bottom:14px;display:none;font-weight:500}
 .success-box.show{display:block}
 
 /* ─── PASS STRENGTH ─── */
@@ -98,12 +98,12 @@ input::placeholder{color:var(--text-dim)}
 .pass-strength.weak{background:linear-gradient(90deg,var(--red-soft) 33%,var(--bg-soft) 33%)}
 .pass-strength.ok{background:linear-gradient(90deg,#f59e0b 66%,var(--bg-soft) 66%)}
 .pass-strength.strong{background:var(--green-light)}
-.pass-label{font-size:11px;color:var(--text-soft);margin-top:5px;font-weight:600}
+.pass-label{font-size:11px;color:var(--text-soft);margin-top:5px;font-weight:500}
 
 /* ─── BACK LINK ─── */
 .back-link{display:flex;align-items:center;gap:6px;background:transparent;border:none;
   color:var(--text-soft);font-family:var(--font);font-size:13px;cursor:pointer;
-  padding:0;margin-bottom:22px;transition:color .18s;font-weight:600}
+  padding:0;margin-bottom:22px;transition:color .18s;font-weight:500}
 .back-link:hover{color:var(--green2)}
 
 /* ─── OTP INPUT ─── */
