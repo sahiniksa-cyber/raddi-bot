@@ -25,32 +25,32 @@
   --purple:#7c3aed;--purple-bg:#f5f3ff;--purple-border:#ddd6fe;
   --sky:#0284c7;--sky-soft:#0ea5e9;
   --shadow-xs:0 1px 2px rgba(15,23,42,.04);
-  --shadow-sm:0 1px 3px rgba(15,23,42,.06),0 1px 2px rgba(15,23,42,.04);
-  --shadow:0 4px 6px -1px rgba(15,23,42,.05),0 2px 4px -2px rgba(15,23,42,.04);
-  --shadow-lg:0 10px 20px -5px rgba(15,23,42,.08),0 4px 8px -4px rgba(15,23,42,.04);
-  --shadow-xl:0 20px 30px -10px rgba(15,23,42,.1),0 8px 16px -8px rgba(15,23,42,.05);
+  --shadow-sm:0 1px 3px rgba(15,23,42,.06);
+  --shadow:0 4px 12px rgba(15,23,42,.05);
+  --shadow-lg:0 8px 24px rgba(15,23,42,.06);
+  --shadow-xl:0 16px 32px rgba(15,23,42,.08);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg)}
 body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 
 /* TOP BAR */
-.topbar{background:#ffffff;border-bottom:1px solid var(--border);padding:0 28px;height:64px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;box-shadow:var(--shadow-xs)}
-.logo{font-size:26px;font-weight:900;background:linear-gradient(135deg,var(--green),var(--green-light));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.025em}
-.nav-tabs{display:flex;gap:2px;background:var(--bg-soft);padding:4px;border-radius:12px}
-.tab{padding:8px 18px;border-radius:9px;border:none;background:transparent;color:var(--text-soft);font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;transition:all .18s}
-.tab.active{background:#ffffff;color:var(--green);box-shadow:var(--shadow-sm)}
+.topbar{background:#ffffff;border-bottom:1px solid var(--border);padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200}
+.logo{font-size:20px;font-weight:700;color:var(--green);letter-spacing:-.03em;user-select:none}
+.nav-tabs{display:flex;gap:2px;background:var(--bg-soft);padding:4px;border-radius:11px;border:1px solid var(--border)}
+.tab{padding:6px 15px;border-radius:8px;border:none;background:transparent;color:var(--text-soft);font-family:var(--font);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;white-space:nowrap}
+.tab.active{background:#ffffff;color:var(--green);font-weight:600;box-shadow:var(--shadow-xs)}
 .tab:hover:not(.active){color:var(--text-2)}
-.conn-badge{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;background:var(--card);font-family:var(--font);font-size:13px;font-weight:700;color:var(--text-2);border:1px solid var(--border);box-shadow:var(--shadow-xs)}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--text-dim);flex-shrink:0;transition:background .3s}
+.conn-badge{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--green-bg);border:1px solid var(--green-border);font-family:var(--font);font-size:12px;font-weight:600;color:var(--green2)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text-dim);flex-shrink:0;transition:background .3s;display:inline-block}
 .dot.blink{animation:blink 1s infinite;background:var(--red-soft)}
-.dot.green{background:var(--green-light);box-shadow:0 0 0 3px var(--green-bg);animation:none}
+.dot.green{background:var(--green-light);box-shadow:0 0 0 2px #dcfce7;animation:none}
 .dot.yellow{background:var(--amber-soft);animation:blink 1s infinite}
 .dot.gray{background:var(--text-dim);animation:none}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
 
-.user-pill{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;background:var(--card);border:1px solid var(--border);font-size:13px;font-weight:700;color:var(--text-muted);box-shadow:var(--shadow-xs)}
-.user-pill button{background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:14px;padding:0 2px;transition:color .2s}
+.user-pill{display:flex;align-items:center;gap:7px;padding:5px 13px;border-radius:999px;background:var(--bg-soft);border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-muted)}
+.user-pill button{background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;padding:0 2px;transition:color .15s;display:flex;align-items:center}
 .user-pill button:hover{color:var(--red-soft) !important}
 
 .view{display:none;animation:fadeIn .25s ease}
