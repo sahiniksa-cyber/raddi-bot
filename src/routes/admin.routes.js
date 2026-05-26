@@ -18,6 +18,11 @@ const {
 } = require('../services/billing/billing-service');
 const { addMessagesToQuota } = require('../services/billing/message-quota');
 const { setAdminApiKey, getAdminApiKeysMasked } = require('../services/admin/admin-api-keys');
+const {
+  createPreActivation,
+  listPreActivations,
+  deletePreActivation,
+} = require('../services/admin/pre-activations');
 
 function canOpenAdminConsole({ path: requestPath, user, settings }) {
   if (!settings?.adminSecretPath || requestPath !== settings.adminSecretPath) return false;
@@ -220,6 +225,41 @@ function createAdminRoutes(deps = {}) {
   const apiKeyHandlers = createAdminApiKeysHandlers();
   router.get('/api/admin/api-keys', requireOwner, apiKeyHandlers.getApiKeys);
   router.put('/api/admin/api-keys', requireOwner, apiKeyHandlers.putApiKey);
+
+  // Pre-activations: admin pre-registers an email + duration so that when the
+  // customer signs up with that email their account is auto-activated.
+  router.post('/api/admin/pre-activations', requireOwner, async (req, res) => {
+    try {
+      const { email, durationDays, note } = req.body || {};
+      const row = await createPreActivation({
+        email,
+        durationDays: Number(durationDays),
+        note,
+        createdByAdmin: req.session?.userId || null,
+      });
+      res.json({ success: true, preActivation: row });
+    } catch (err) {
+      res.status(400).json({ success: false, message: err.message });
+    }
+  });
+
+  router.get('/api/admin/pre-activations', requireOwner, async (req, res, next) => {
+    try {
+      const rows = await listPreActivations({ includeUsed: req.query.includeUsed === '1' });
+      res.json({ success: true, items: rows });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/api/admin/pre-activations/:id', requireOwner, async (req, res, next) => {
+    try {
+      const result = await deletePreActivation({ id: Number(req.params.id) });
+      res.json({ success: true, deleted: result.deleted });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   return router;
 }

@@ -343,6 +343,24 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS escalation_log_dedup_idx
     ON escalation_log (user_id, conversation_id, contact_target, sent_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS pre_activations (
+    id BIGSERIAL PRIMARY KEY,
+    email TEXT NOT NULL,
+    duration_days INTEGER NOT NULL CHECK (duration_days > 0),
+    note TEXT,
+    created_by_admin TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    used_at TIMESTAMPTZ,
+    used_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+  )`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS pre_activations_email_unused_idx
+    ON pre_activations (LOWER(email))
+    WHERE used_at IS NULL`,
+
+  `CREATE INDEX IF NOT EXISTS pre_activations_created_at_idx
+    ON pre_activations (created_at DESC)`,
 ];
 
 async function migrate() {

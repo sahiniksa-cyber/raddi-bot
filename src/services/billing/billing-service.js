@@ -393,6 +393,7 @@ module.exports = {
   paymentAlreadyUsedByAnotherUser,
   reactivateAccess,
   redeemCoupon,
+  setAccess,
   setAccessExpiry,
   suspendAccess,
   updateAutoRenew,
