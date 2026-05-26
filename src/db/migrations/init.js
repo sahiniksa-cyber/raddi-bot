@@ -332,6 +332,17 @@ const statements = [
   `CREATE TRIGGER trg_admin_api_keys_updated_at
     BEFORE UPDATE ON admin_api_keys
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `CREATE TABLE IF NOT EXISTS escalation_log (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    contact_target TEXT NOT NULL,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS escalation_log_dedup_idx
+    ON escalation_log (user_id, conversation_id, contact_target, sent_at DESC)`,
 ];
 
 async function migrate() {

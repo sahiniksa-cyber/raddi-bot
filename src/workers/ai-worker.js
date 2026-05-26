@@ -486,20 +486,39 @@ async function processAiReply(job) {
     });
 
     if (escalation.ownerMessage) {
-      await enqueueOutgoingWhatsapp({
-        userId,
-        conversationId: conversation.id,
-        messageId: payload.messageId,
-        providerMessageId: payload.providerMessageId,
-        sender: escalation.ownerMessage.sender,
-        reply: escalation.ownerMessage.reply,
-        escalation: true,
-        escalationSummary: escalation.ownerMessage.summary,
-        customerSender: conversation.sender,
-        customerPhoneNumber: conversation.phone_number,
-      }, {
-        jobKey: buildEscalationJobKey(replyMessageId),
-      });
+      const contactTarget = escalation.ownerMessage.contactTarget || escalation.ownerMessage.sender;
+      const cooldown = await db.query(
+        `SELECT 1 FROM escalation_log
+         WHERE user_id = $1 AND conversation_id = $2 AND contact_target = $3 AND sent_at > NOW() - INTERVAL '30 minutes'
+         LIMIT 1`,
+        [userId, conversation.id, contactTarget],
+      );
+
+      if (cooldown.rowCount > 0) {
+        console.warn(
+          `${new Date().toISOString()} [${WORKER_NAME}] skipping escalation — cooldown active for user=${userId} conversation=${conversation.id} target=${contactTarget}`,
+        );
+      } else {
+        await enqueueOutgoingWhatsapp({
+          userId,
+          conversationId: conversation.id,
+          messageId: payload.messageId,
+          providerMessageId: payload.providerMessageId,
+          sender: escalation.ownerMessage.sender,
+          reply: escalation.ownerMessage.reply,
+          escalation: true,
+          escalationSummary: escalation.ownerMessage.summary,
+          customerSender: conversation.sender,
+          customerPhoneNumber: conversation.phone_number,
+        }, {
+          jobKey: buildEscalationJobKey(replyMessageId),
+        });
+
+        await db.query(
+          `INSERT INTO escalation_log (user_id, conversation_id, contact_target) VALUES ($1, $2, $3)`,
+          [userId, conversation.id, contactTarget],
+        );
+      }
     }
 
     await markInboundMessagesAnswered({

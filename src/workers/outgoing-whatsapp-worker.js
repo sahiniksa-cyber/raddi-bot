@@ -53,8 +53,14 @@ async function getPersistedJobCreatedAt(jobKey) {
   return result.rows[0]?.created_at ? new Date(result.rows[0].created_at).getTime() : null;
 }
 
+const ESCALATION_MAX_AGE_MS = 60 * 60 * 1000; // 60 minutes
+
 function shouldSkipStaleOutgoingPayload(payload = {}, ageMs, maxAgeMs) {
-  if (payload.escalation) return false;
+  if (payload.escalation) {
+    // Now that ai-worker has dedup via escalation_log, we can safely cap escalation
+    // age. Previously this was unlimited, which caused multi-hour spam on restart.
+    return ageMs > ESCALATION_MAX_AGE_MS;
+  }
   return maxAgeMs > 0 && ageMs > maxAgeMs;
 }
 
