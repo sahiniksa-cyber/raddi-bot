@@ -128,6 +128,8 @@ input::placeholder{color:var(--text-dim)}
 
 /* ─── ICON CENTER ─── */
 .icon-center{font-size:48px;text-align:center;margin-bottom:14px}
+.icon-center i[data-lucide]{width:42px;height:42px;color:var(--green);stroke-width:1.5}
+.pass-toggle i[data-lucide]{width:18px;height:18px}
 
 /* ─── CODE BOX (dev mode) ─── */
 .dev-code{background:var(--amber-bg);border:1px solid var(--amber-border);
@@ -416,6 +418,7 @@ input:focus{
   }
 }
 </style>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
 
@@ -447,7 +450,7 @@ input:focus{
       <label>كلمة المرور</label>
       <input type="password" id="loginPass" placeholder="••••••••" dir="ltr"
              autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
-      <button class="pass-toggle" onclick="togglePass('loginPass',this)" type="button" tabindex="-1">👁</button>
+      <button class="pass-toggle" onclick="togglePass('loginPass',this)" type="button" tabindex="-1"><i data-lucide="eye"></i></button>
     </div>
     <div class="remember-row">
       <label class="remember-label">
@@ -482,7 +485,7 @@ input:focus{
       <input type="password" id="regPass" placeholder="8 أحرف على الأقل" dir="ltr"
              autocomplete="new-password" oninput="checkStrength(this.value)"
              onkeydown="if(event.key==='Enter')doRegister()">
-      <button class="pass-toggle" onclick="togglePass('regPass',this)" type="button" tabindex="-1">👁</button>
+      <button class="pass-toggle" onclick="togglePass('regPass',this)" type="button" tabindex="-1"><i data-lucide="eye"></i></button>
       <div class="pass-strength" id="passStrength"></div>
       <div class="pass-label" id="passLabel"></div>
     </div>
@@ -494,7 +497,7 @@ input:focus{
   <!-- ══ SCREEN: VERIFY EMAIL (after register) ══ -->
   <div id="scVerify" style="display:none">
     <button class="back-link" onclick="showScreen('register')">← رجوع</button>
-    <div class="icon-center">📧</div>
+    <div class="icon-center"><i data-lucide="mail"></i></div>
     <div class="screen-title" style="text-align:center">تحقق من إيميلك</div>
     <div class="screen-sub" style="text-align:center">
       أرسلنا رمز مكون من 6 أرقام إلى<br>
@@ -571,7 +574,7 @@ input:focus{
       <input type="password" id="newPass1" placeholder="8 أحرف على الأقل" dir="ltr"
              oninput="checkStrength2(this.value)"
              onkeydown="if(event.key==='Enter')document.getElementById('newPass2').focus()">
-      <button class="pass-toggle" onclick="togglePass('newPass1',this)" type="button" tabindex="-1">👁</button>
+      <button class="pass-toggle" onclick="togglePass('newPass1',this)" type="button" tabindex="-1"><i data-lucide="eye"></i></button>
       <div class="pass-strength" id="passStrength2"></div>
       <div class="pass-label" id="passLabel2"></div>
     </div>
@@ -579,7 +582,7 @@ input:focus{
       <label>تأكيد كلمة المرور</label>
       <input type="password" id="newPass2" placeholder="أعد كتابة كلمة المرور" dir="ltr"
              onkeydown="if(event.key==='Enter')doResetPassword()">
-      <button class="pass-toggle" onclick="togglePass('newPass2',this)" type="button" tabindex="-1">👁</button>
+      <button class="pass-toggle" onclick="togglePass('newPass2',this)" type="button" tabindex="-1"><i data-lucide="eye"></i></button>
     </div>
     <button class="submit-btn" id="newPassBtn" onclick="doResetPassword()">
       <span id="newPassBtnTxt">✅ حفظ كلمة المرور</span>
@@ -656,7 +659,13 @@ function togglePass(inputId, btn) {
   const inp = document.getElementById(inputId);
   const isPass = inp.type === 'password';
   inp.type = isPass ? 'text' : 'password';
-  btn.textContent = isPass ? '🙈' : '👁';
+  const icon = btn.querySelector('i[data-lucide]');
+  if (icon) {
+    icon.setAttribute('data-lucide', isPass ? 'eye-off' : 'eye');
+    if (window.lucide) lucide.createIcons({ attrs: { 'stroke-width': 1.5 } });
+  } else {
+    btn.textContent = isPass ? '🙈' : '👁';
+  }
 }
 
 // ── PASSWORD STRENGTH ──
@@ -826,6 +835,8 @@ document.addEventListener('keydown', e => {
     else if (active === 'scForgot' || active === 'scResetCode' || active === 'scNewPass') showScreen('login');
   }
 });
+
+if(window.lucide) lucide.createIcons({ attrs:{ 'stroke-width':1.5 }});
 </script>
 </body>
 </html>

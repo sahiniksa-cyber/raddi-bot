@@ -8,6 +8,7 @@
     body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#f9f9fb;color:#14213d;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
     .card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:48px 36px;max-width:480px;width:100%;text-align:center;box-shadow:0 4px 16px rgba(15,23,42,.04)}
     .icon{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;font-size:24px;margin-bottom:18px;background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;border-radius:12px}
+    .icon i[data-lucide]{width:24px;height:24px;color:#15803d;stroke-width:1.5}
     h1{margin:0 0 12px;font-size:18px;font-weight:700;letter-spacing:-0.02em;color:#1a1a1a}
     .desc{color:#64748b;line-height:1.75;font-size:13px;margin-bottom:28px}
     .code-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:20px;margin-bottom:20px}
@@ -25,10 +26,11 @@
     .status.ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d}
     .links{margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
   </style>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
   <div class="card">
-    <div class="icon">📞</div>
+    <div class="icon"><i data-lucide="badge-check"></i></div>
     <h1>المنصة تحتاج تفعيل</h1>
     <p class="desc">لاستخدام منصة جواب، تواصل مع خدمة العملاء للحصول على كود التفعيل ومعرفة تفاصيل الاشتراك.</p>
 
@@ -69,6 +71,7 @@ async function applyCode(){
   else showMessage(d.message||'كود التفعيل غير صحيح',true);
 }
 init().catch(()=>showMessage('تعذر تحميل الصفحة',true));
+if(window.lucide)lucide.createIcons({attrs:{'stroke-width':1.5}});
 </script>
 </body>
 </html>
