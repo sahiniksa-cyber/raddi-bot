@@ -136,6 +136,30 @@
         <tbody id="couponRows"><tr><td colspan="6" class="empty">جاري التحميل...</td></tr></tbody>
       </table>
     </section>
+
+    <h2 style="margin-top:32px;font-size:18px">✉️ تفعيل مسبق بالإيميل</h2>
+    <div class="sub" style="margin-bottom:10px">سجّل إيميل العميل قبل أن ينشئ حسابه. عند التسجيل بنفس الإيميل سيُفعَّل الحساب تلقائياً للمدة المختارة.</div>
+    <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
+      <input id="paEmail" type="email" placeholder="بريد العميل" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:220px">
+      <select id="paDays" style="padding:10px;border:1px solid var(--border);border-radius:8px">
+        <option value="3">3 أيام</option>
+        <option value="7">7 أيام</option>
+        <option value="14">14 يوم</option>
+        <option value="30" selected>30 يوم</option>
+        <option value="60">60 يوم</option>
+        <option value="90">90 يوم</option>
+        <option value="custom">مخصص…</option>
+      </select>
+      <input id="paDaysCustom" type="number" min="1" placeholder="أيام مخصصة" style="display:none;width:120px;padding:10px;border:1px solid var(--border);border-radius:8px">
+      <input id="paNote" placeholder="ملاحظة (اختياري)" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:180px">
+      <button onclick="createPreActivation()" style="padding:10px 16px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">تفعيل</button>
+    </div>
+    <section class="panel" style="margin-bottom:32px">
+      <table>
+        <thead><tr><th>البريد</th><th>المدة (أيام)</th><th>ملاحظة</th><th>أُنشئ في</th><th>إجراء</th></tr></thead>
+        <tbody id="preActivationRows"><tr><td colspan="5" class="empty">جاري التحميل...</td></tr></tbody>
+      </table>
+    </section>
   </main>
   <div class="toast" id="toast"></div>
 
@@ -311,8 +335,57 @@ async function submitAddMessages(){
     loadCustomers();
   }catch(e){toast(e.message,true)}
 }
+let preActivations=[];
+document.addEventListener('change',function(e){
+  if(e.target&&e.target.id==='paDays'){
+    document.getElementById('paDaysCustom').style.display=(e.target.value==='custom')?'inline-block':'none';
+  }
+});
+async function loadPreActivations(){
+  try{
+    const r=await fetch('/api/admin/pre-activations');
+    if(!r.ok)return;
+    const d=await r.json();preActivations=d.items||[];renderPreActivations();
+  }catch(_){}
+}
+function renderPreActivations(){
+  const tbody=document.getElementById('preActivationRows');
+  if(!preActivations.length){tbody.innerHTML='<tr><td colspan="5" class="empty">لا توجد تفعيلات مسبقة</td></tr>';return}
+  tbody.innerHTML=preActivations.map(p=>`<tr>
+    <td><b>${esc(p.email)}</b></td>
+    <td>${esc(String(p.duration_days))}</td>
+    <td>${esc(p.note||'')}</td>
+    <td>${p.created_at?new Date(p.created_at).toLocaleString('ar-SA'):'—'}</td>
+    <td><button class="bad" onclick="deletePreActivation(${p.id})">حذف</button></td>
+  </tr>`).join('');
+}
+async function createPreActivation(){
+  const email=(document.getElementById('paEmail').value||'').trim();
+  if(!email){toast('أدخل البريد',true);return}
+  const sel=document.getElementById('paDays').value;
+  const durationDays=sel==='custom'?parseInt(document.getElementById('paDaysCustom').value||'0',10):parseInt(sel,10);
+  if(!durationDays||durationDays<=0){toast('أدخل عدد الأيام',true);return}
+  const note=document.getElementById('paNote').value||'';
+  try{
+    const r=await fetch('/api/admin/pre-activations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,durationDays,note})});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم تسجيل التفعيل المسبق');
+    document.getElementById('paEmail').value='';
+    document.getElementById('paNote').value='';
+    loadPreActivations();
+  }catch(e){toast(e.message,true)}
+}
+async function deletePreActivation(id){
+  if(!confirm('حذف التفعيل المسبق؟'))return;
+  try{
+    const r=await fetch('/api/admin/pre-activations/'+id,{method:'DELETE'});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم الحذف');loadPreActivations();
+  }catch(e){toast(e.message,true)}
+}
 loadCustomers();
 loadCoupons();
+loadPreActivations();
 loadHealth();
 setInterval(loadHealth,30000);
 </script>

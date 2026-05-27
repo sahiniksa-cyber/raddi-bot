@@ -4,6 +4,8 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
 const db = require('../db/client');
+const { consumePreActivationForUser } = require('../services/admin/pre-activations');
+const { setAccess, setAccessExpiry } = require('../services/billing/billing-service');
 
 function saveSession(req) {
   return new Promise((resolve, reject) => {
@@ -72,6 +74,19 @@ function createAuthController() {
            RETURNING id, email, name, role`,
           [id, email, name, phone || null, hash, role],
         );
+
+        // Auto-activate the account if an admin pre-registered this email.
+        // Failures here must not block signup — the user is already created.
+        try {
+          const preActivation = await consumePreActivationForUser({ email, userId: id });
+          if (preActivation && preActivation.durationDays > 0) {
+            await setAccess(id, 'active', 'pre_activation', `pre-activation #${preActivation.id}`);
+            await setAccessExpiry(id, preActivation.durationDays, `pre-activation #${preActivation.id}`);
+          }
+        } catch (preErr) {
+          // Swallow — pre-activation is best-effort. Log via console only.
+          console.error('pre-activation consume failed:', preErr.message);
+        }
 
         req.session.userId = id;
         req.session.userName = name;
