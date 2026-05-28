@@ -168,6 +168,10 @@ function createApp() {
           defaultSrc: ["'self'"],
           // Lucide and other CDN scripts used by billing/admin dashboards.
           scriptSrc: ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
+          // Helmet 7 defaults script-src-attr to 'none' which blocks the
+          // dashboard's 69 inline onclick handlers. We allow them explicitly
+          // until the dashboard is refactored to addEventListener.
+          scriptSrcAttr: ["'unsafe-inline'"],
           styleSrc: ["'self'", "'unsafe-inline'"],
           imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
           fontSrc: ["'self'", 'data:'],
