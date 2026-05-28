@@ -766,6 +766,11 @@ body{background-attachment:scroll}
 }
 .tab i[data-lucide]{width:14px;height:14px;stroke-width:1.5}
 .tab{display:inline-flex;align-items:center;gap:6px}
+.cv-banner-warn{display:none;padding:10px 16px;font-size:13.5px;font-weight:700;text-align:center;border-bottom:1px solid;line-height:1.55}
+.cv-banner-warn.warn-yellow{background:linear-gradient(135deg,#fef3c7,#fffbeb);color:#78350f;border-color:#fcd34d}
+.cv-banner-warn.warn-red{background:linear-gradient(135deg,#fee2e2,#fef2f2);color:#7f1d1d;border-color:#fca5a5}
+.cv-banner-warn a{color:inherit;text-decoration:underline;font-weight:800;margin:0 6px}
+.cv-banner-warn .cv-banner-close{background:transparent;border:none;color:inherit;cursor:pointer;font-size:18px;padding:0 6px;font-weight:900;margin-right:6px}
 </style>
 <link rel="stylesheet" href="conversations.css">
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -801,6 +806,9 @@ body{background-attachment:scroll}
   <a href="https://docs.railway.com/reference/volumes" target="_blank" style="color:#92400e;font-weight:800;text-decoration:underline;margin-right:8px">طريقة الإضافة ↗</a>
   <button onclick="document.getElementById('storageWarning').style.display='none'" style="background:transparent;border:none;color:#92400e;cursor:pointer;font-size:18px;padding:0 6px;margin-right:6px;font-weight:900" title="إخفاء">×</button>
 </div>
+
+<!-- Quota warning banner (yellow < 100, red < 20) -->
+<div id="cvQuotaBanner" class="cv-banner-warn" role="alert"></div>
 
 <!-- ══ CONNECT VIEW ══ -->
 <div class="view active" id="view-connect">
@@ -1842,6 +1850,8 @@ function fillForm(c){
 
 async function clearAllConversations(){
   if(!confirm('هل تريد مسح ذاكرة جميع المحادثات الحالية؟ لن يتذكر البوت أي عميل.'))return;
+  const v=prompt('للتأكيد، اكتب: مسح');
+  if(v!=='مسح')return;
   try{
     await fetch('/api/clear',{method:'POST'});
     toast('✅ تم مسح ذاكرة المحادثات');
@@ -1959,6 +1969,43 @@ async function runHealthCheck(){
 
 let cvConversations = [];
 let cvSelectedId = null;
+const messagesById = new Map();
+let cvDelegationBound = false;
+function ensureCvDelegation(){
+  if(cvDelegationBound)return;
+  cvDelegationBound=true;
+  document.addEventListener('click', function(e){
+    // Copy bubble (XSS-safe)
+    const cBtn=e.target.closest && e.target.closest('.cv-bubble-copy');
+    if(cBtn){
+      const id=cBtn.getAttribute('data-copy-id');
+      const m=id?messagesById.get(id):null;
+      const text=m?String(m.content||''):'';
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(()=>{
+          cBtn.innerHTML='<i data-lucide="check"></i>';
+          if(window.lucide)lucide.createIcons();
+          setTimeout(()=>{cBtn.innerHTML='<i data-lucide="copy"></i>';if(window.lucide)lucide.createIcons();},1200);
+        }).catch(()=>{cBtn.innerHTML='<i data-lucide="x"></i>';if(window.lucide)lucide.createIcons();});
+      }
+      return;
+    }
+    // Conversation card click (XSS-safe)
+    const card=e.target.closest && e.target.closest('.cv-item[data-conv-id]');
+    if(card){
+      const id=card.getAttribute('data-conv-id');
+      if(id)onConvCardClick(id);
+      return;
+    }
+    // Resume chat per-row (XSS-safe)
+    const rBtn=e.target.closest && e.target.closest('button[data-resume-sender]');
+    if(rBtn){
+      const sender=rBtn.getAttribute('data-resume-sender');
+      if(sender)resumeChat(sender);
+      return;
+    }
+  });
+}
 
 async function loadConversations(){
   const list=document.getElementById('cvList');
@@ -1972,6 +2019,7 @@ async function loadConversations(){
     const d=await r.json();
     if(!d.success)throw new Error(d.message||'تعذر تحميل المحادثات');
     cvConversations=d.conversations||[];
+    messagesById.clear();
     renderConversationList(cvConversations);
     if(cvSelectedId){
       const stillExists=cvConversations.find(c=>c.id===cvSelectedId);
@@ -2034,7 +2082,7 @@ function renderConversationList(items){
     const preview=lastMsg ? String(lastMsg.content||'').replace(/\n/g,' ').slice(0,60) : 'لا توجد رسائل';
     const unread=Number(c.unreadCount||0);
     const time=formatConvTime(c.lastMessageAt);
-    return `<div class="cv-item ${isActive?'active':''}" data-id="${esc(c.id)}" onclick="onConvCardClick('${esc(c.id)}')">
+    return `<div class="cv-item ${isActive?'active':''}" data-id="${esc(c.id)}" data-conv-id="${esc(c.id)}">
       <div class="cv-item-avatar" style="background:${avatarGradient(firstName)}">${esc(firstChar(firstName))}</div>
       <div class="cv-item-body">
         <div class="cv-item-top">
@@ -2169,7 +2217,11 @@ function renderBubble(m){
   const statusIcon=isAi?bubbleStatusIcon(m.status):'';
   const timeStr=esc(formatConvTime(m.at));
   const safeContent=esc(m.content||'');
-  const copyAttr=String(m.content||'').replace(/'/g,"\\'").replace(/\n/g,'\\n');
+
+  // Register bubble in map for delegated copy handler
+  let mid=m.id;
+  if(!mid){ mid='bub-'+Math.random().toString(36).slice(2,10); m.id=mid; }
+  messagesById.set(String(mid), m);
 
   let bubbleClass='cv-bubble';
   let bubbleInner=safeContent;
@@ -2187,23 +2239,12 @@ function renderBubble(m){
     ${botAvatar}
     <div class="cv-bubble-content">
       <div class="${bubbleClass}">
-        <button class="cv-bubble-copy" onclick="copyBubble(this,'${copyAttr}')" type="button"><i data-lucide="copy"></i></button>
+        <button class="cv-bubble-copy" data-copy-id="${esc(mid)}" type="button"><i data-lucide="copy"></i></button>
         ${bubbleInner}
       </div>
       <div class="cv-bubble-time">${timeStr}${statusIcon}</div>
     </div>
   </div>`;
-}
-
-function copyBubble(btn, text){
-  const decoded=String(text||'').replace(/\\n/g,'\n');
-  if(navigator.clipboard?.writeText){
-    navigator.clipboard.writeText(decoded).then(()=>{
-      btn.innerHTML='<i data-lucide="check"></i>';
-      if(window.lucide)lucide.createIcons();
-      setTimeout(()=>{btn.innerHTML='<i data-lucide="copy"></i>';if(window.lucide)lucide.createIcons();},1200);
-    }).catch(()=>{ btn.innerHTML='<i data-lucide="x"></i>'; if(window.lucide)lucide.createIcons(); });
-  }
 }
 function toggleAccordionCard(id){
   const card=document.querySelector('.cv-card[data-id="'+id+'"]');
@@ -2401,6 +2442,7 @@ async function loadQuota(){
     bar.style.background=pct<10?'#ef4444':pct<30?'#f59e0b':'#10b981';
     const isEmpty=d.status==='empty'||d.status==='expired';
     document.getElementById('quotaEmptyBanner').style.display=isEmpty?'block':'none';
+    updateQuotaWarnBanner(remaining);
     const phone=d.supportWhatsappPhone;
     const btn=document.getElementById('quotaTopupBtn');
     if(phone){
@@ -2411,6 +2453,41 @@ async function loadQuota(){
       btn.style.display='none';
     }
   }catch(e){console.warn('loadQuota failed',e);}
+}
+
+function updateQuotaWarnBanner(remaining){
+  const el=document.getElementById('cvQuotaBanner');
+  if(!el)return;
+  if(el.dataset.dismissed==='1'){el.style.display='none';return;}
+  const n=Number(remaining||0);
+  el.classList.remove('warn-yellow','warn-red');
+  if(n<20){
+    el.classList.add('warn-red');
+    el.innerHTML='';
+    const t=document.createElement('span');
+    t.textContent='تحذير حرج: الرصيد المتبقي '+n+' رسالة فقط — اشحن الآن لمتابعة الخدمة. ';
+    const a=document.createElement('a');
+    a.href='billing.html'; a.textContent='شحن الرصيد';
+    const btn=document.createElement('button');
+    btn.type='button'; btn.className='cv-banner-close'; btn.title='إخفاء'; btn.textContent='×';
+    btn.addEventListener('click',()=>{el.dataset.dismissed='1';el.style.display='none';});
+    el.appendChild(t); el.appendChild(a); el.appendChild(btn);
+    el.style.display='block';
+  } else if(n<100){
+    el.classList.add('warn-yellow');
+    el.innerHTML='';
+    const t=document.createElement('span');
+    t.textContent='تنبيه: الرصيد المتبقي '+n+' رسالة — يفضّل الشحن قريباً. ';
+    const a=document.createElement('a');
+    a.href='billing.html'; a.textContent='شحن الرصيد';
+    const btn=document.createElement('button');
+    btn.type='button'; btn.className='cv-banner-close'; btn.title='إخفاء'; btn.textContent='×';
+    btn.addEventListener('click',()=>{el.dataset.dismissed='1';el.style.display='none';});
+    el.appendChild(t); el.appendChild(a); el.appendChild(btn);
+    el.style.display='block';
+  } else {
+    el.style.display='none';
+  }
 }
 
 // ── TRAINING SESSION (4 مراحل، أسئلة عميقة) ──
@@ -2576,7 +2653,7 @@ async function loadPausedChats(){
     d.paused.forEach(p=>{
       const row=document.createElement('div');
       row.style.cssText='display:flex;align-items:center;justify-content:space-between;background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:9px;padding:10px 14px;font-size:13px;gap:8px;flex-wrap:wrap';
-      row.innerHTML=`<span style="font-weight:700;color:var(--amber);direction:ltr">+${esc(p.sender)}</span><span style="color:var(--text-soft);font-size:11px">يستأنف بعد ${p.remainingMin} دقيقة</span><button onclick="resumeChat('${esc(p.sender)}')" style="padding:5px 12px;border-radius:7px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer">▶ استئناف</button>`;
+      row.innerHTML=`<span style="font-weight:700;color:var(--amber);direction:ltr">+${esc(p.sender)}</span><span style="color:var(--text-soft);font-size:11px">يستأنف بعد ${esc(String(p.remainingMin))} دقيقة</span><button data-resume-sender="${esc(p.sender)}" style="padding:5px 12px;border-radius:7px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer">▶ استئناف</button>`;
       list.appendChild(row);
     });
   }catch(_){}
@@ -2659,6 +2736,7 @@ async function checkStorageStatus(){
 
 // ── INIT ──
 async function initDashboard(){
+  ensureCvDelegation();
   await loadUserInfo();
   const active=await loadBillingState();
   if(active){
@@ -2667,10 +2745,21 @@ async function initDashboard(){
 }
 initDashboard();
 if (window.lucide) lucide.createIcons({ attrs: { 'stroke-width': 1.5 } });
-setInterval(()=>{if(!document.hidden&&billingActive())loadPausedChats();}, 30000);
-setInterval(()=>{if(!document.hidden&&billingActive())loadConversations();}, 30000);
-setInterval(()=>{if(!document.hidden&&billingActive())poll();}, 4000);
-setInterval(()=>{if(!document.hidden&&billingActive())loadQuota();}, 30000);
+function startPolling(fn, baseMs){
+  let curr=baseMs;
+  async function tick(){
+    if(document.hidden){setTimeout(tick, baseMs);return;}
+    if(!billingActive()){setTimeout(tick, baseMs);return;}
+    try{ await fn(); curr=baseMs; }
+    catch(_){ curr=Math.min(60000, curr*2); }
+    setTimeout(tick, curr);
+  }
+  setTimeout(tick, baseMs);
+}
+startPolling(loadPausedChats, 30000);
+startPolling(loadConversations, 30000);
+startPolling(poll, 4000);
+startPolling(loadQuota, 30000);
 </script>
 </body>
 </html>

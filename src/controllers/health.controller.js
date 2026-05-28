@@ -57,7 +57,10 @@ function createHealthController({ storageStatus = null } = {}) {
           checks.database = true;
         }
       } catch (err) {
-        checks.databaseError = err.message;
+        // Do NOT leak driver error details to clients — log only.
+        console.error(`[ready] database ping failed: ${err.stack || err.message}`);
+        checks.database = false;
+        checks.databaseStatus = 'db_unhealthy';
       }
 
       try {
@@ -65,7 +68,9 @@ function createHealthController({ storageStatus = null } = {}) {
           checks.redis = (await redis.ping()) === 'PONG';
         }
       } catch (err) {
-        checks.redisError = err.message;
+        console.error(`[ready] redis ping failed: ${err.stack || err.message}`);
+        checks.redis = false;
+        checks.redisStatus = 'redis_unhealthy';
       }
 
       const ok = checks.app && checks.database && checks.redis;

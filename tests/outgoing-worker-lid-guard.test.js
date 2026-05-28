@@ -39,17 +39,28 @@ function makeJob(data = {}) {
   };
 }
 
-test('processOutgoingWhatsapp skips @lid sender without calling getUserBot', async (t) => {
-  // getUserBot must NOT be called for @lid senders
-  const getUserBot = t.mock.fn(() => {
-    throw new Error('getUserBot must not be called for @lid sender');
-  });
+test('processOutgoingWhatsapp attempts best-effort send to @lid then marks skipped on failure', async (t) => {
+  const prev = process.env.OWNER_ALERT_PHONE;
+  delete process.env.OWNER_ALERT_PHONE; // disable owner alert path to keep test simple
 
-  const result = await processOutgoingWhatsapp(makeJob(), { getUserBot });
+  try {
+    // New behavior: @lid is no longer silently skipped. We attempt a best-effort
+    // send (which fails because there's no real socket) and then mark the message
+    // skipped_lid.
+    const getUserBot = t.mock.fn(async () => {
+      throw new Error('no_bot_available_in_test');
+    });
 
-  assert.equal(result.skipped, true);
-  assert.equal(result.reason, 'sender_is_lid_only');
-  assert.equal(getUserBot.mock.calls.length, 0, 'getUserBot must NOT be called');
+    const result = await processOutgoingWhatsapp(makeJob(), { getUserBot });
+
+    assert.equal(result.skipped, true);
+    assert.equal(result.reason, 'sender_is_lid_only');
+    assert.equal(result.lid, true);
+    // getUserBot IS called now (for the best-effort send attempt)
+    assert.ok(getUserBot.mock.calls.length >= 1, 'getUserBot is invoked for best-effort @lid send');
+  } finally {
+    if (prev !== undefined) process.env.OWNER_ALERT_PHONE = prev;
+  }
 });
 
 test('processOutgoingWhatsapp does NOT skip normal @s.whatsapp.net sender', async (t) => {

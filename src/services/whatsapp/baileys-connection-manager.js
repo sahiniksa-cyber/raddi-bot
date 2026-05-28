@@ -155,10 +155,14 @@ class BaileysConnectionManager extends EventEmitter {
     this._stableTimer = null;
     this._effectiveRetryCount = 0;
     this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
+    this._acceptWindowInitialized = true;
   }
 
   computeAcceptMessagesAfterMs() {
-    return Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '60000', 10);
+    // Default 30 minutes (was 60s). This widens the inbound acceptance window so we
+    // don't silently drop messages received while the bot was briefly disconnected.
+    // dedup is handled by provider_message_id, so a longer window cannot cause duplicates.
+    return Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '1800000', 10);
   }
 
   log(level, stage, message, meta) {
@@ -206,7 +210,13 @@ class BaileysConnectionManager extends EventEmitter {
     this.lastError = null;
     this.qr = null;
     this.startupTime = Date.now();
-    this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
+    // acceptMessagesAfterMs is set once at construction time. Resetting it on every
+    // reconnect would invalidate the grace window we already paid for and could drop
+    // messages that arrived during the brief disconnect.
+    if (retryCount === 0 && !this._acceptWindowInitialized) {
+      this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
+      this._acceptWindowInitialized = true;
+    }
     this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 

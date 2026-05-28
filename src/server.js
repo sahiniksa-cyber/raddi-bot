@@ -8,6 +8,20 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
+const { randomUUID } = require('crypto');
+
+// helmet is required for CSP/security headers. Wrapped in try/catch so the
+// server still boots in environments where the dependency is being installed
+// for the first time (e.g. fresh worktrees before `npm install`). The real
+// production path always has helmet present via package.json.
+let helmet = null;
+try { helmet = require('helmet'); } catch (_) {
+  console.warn('[server] helmet not installed — CSP headers disabled. Run `npm install helmet`.');
+}
+
+const requireSameOrigin = require('./middleware/require-same-origin');
+const { assertPublicUrl } = require('./middleware/ssrf-guard');
+const { checkMessageQuota, decrementMessageQuota } = require('./services/billing/message-quota');
 
 const db = require('./db/client');
 const redis = require('./queues/redis');
@@ -24,6 +38,11 @@ const { createBillingAccessGate, createBillingApiGate } = require('./middleware/
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { findAutoReply } = require('./services/bot/platform-features');
+const {
+  buildTrainAnalyzeRequest,
+  buildEnhanceInstructionsRequest,
+  buildLearnStyleRequest,
+} = require('./services/ai/meta-prompts');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
 const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
 const { getQueues } = require('./queues/message-queue');
@@ -138,13 +157,49 @@ function createApp() {
   const app = express();
   const billingSettings = getBillingSettings();
   app.set('trust proxy', 1);
+
+  // Security headers via helmet (CSP, COOP, etc). Falls back to the manual
+  // headers below when helmet is unavailable.
+  if (helmet) {
+    app.use(helmet({
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          defaultSrc: ["'self'"],
+          // Lucide and other CDN scripts used by billing/admin dashboards.
+          scriptSrc: ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+          fontSrc: ["'self'", 'data:'],
+          connectSrc: ["'self'"],
+          frameAncestors: ["'none'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+        },
+      },
+      // Disable COEP — would block third-party Lucide scripts without CORP headers.
+      crossOriginEmbedderPolicy: false,
+      // Keep referrer policy consistent with previous behaviour.
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    }));
+  } else {
+    app.use((req, res, next) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+      next();
+    });
+  }
+  // Skip global JSON body parsing for webhook paths that need the raw body
+  // for HMAC signature verification (e.g. /billing/moyasar/webhook). Those
+  // routes attach their own express.raw() parser inline.
+  const RAW_BODY_PATHS = new Set([
+    '/billing/moyasar/webhook',
+  ]);
   app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    next();
+    if (RAW_BODY_PATHS.has(req.path)) return next();
+    return bodyParser.json({ limit: '2mb' })(req, res, next);
   });
-  app.use(bodyParser.json({ limit: '2mb' }));
 
   const sessionConfig = {
     name: 'jwab.sid',
@@ -168,6 +223,71 @@ function createApp() {
 
   const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, message: { success: false, message: 'كثير طلبات' } });
   app.use('/api', apiLimiter);
+
+  // Lightweight CSRF protection: enforce same-origin for state-changing
+  // requests on sensitive routes. Webhooks (e.g. Moyasar) must NOT be mounted
+  // under these paths, or must be added to the skip-list below.
+  const CSRF_PROTECTED_PREFIXES = [
+    '/api/admin/',
+    '/api/config',
+    '/api/send-message',
+    '/api/clear',
+    '/api/bot/',
+  ];
+  const CSRF_SKIP_PATHS = new Set([
+    // Add explicit webhook paths here, e.g. '/api/billing/webhook/moyasar'
+  ]);
+  app.use((req, res, next) => {
+    if (CSRF_SKIP_PATHS.has(req.path)) return next();
+    if (CSRF_PROTECTED_PREFIXES.some(p => req.path.startsWith(p))) {
+      return requireSameOrigin(req, res, next);
+    }
+    return next();
+  });
+
+  // Register rate-limit: 10 attempts per IP per hour.
+  const registerLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'محاولات تسجيل كثيرة، حاول لاحقاً' },
+  });
+  app.use('/api/auth/register', registerLimiter);
+
+  // AI endpoint rate-limit: 10/min per session user (falls back to IP).
+  const aiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.session?.userId || req.ip,
+    message: { success: false, message: 'استخدم الذكاء الاصطناعي ببطء أكثر' },
+  });
+
+  // Quota gate for AI endpoints. Checks quota before invoking the AI and
+  // decrements only after the route succeeds.
+  async function aiQuotaGate(req, res, next) {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) return res.status(401).json({ success: false, message: 'غير مصرح' });
+      const state = await checkMessageQuota(userId);
+      if (!state.canReply) {
+        return res.status(402).json({ success: false, message: 'انتهت رصيد الرسائل', reason: state.reason });
+      }
+      // Decrement on response finish, but only on 2xx.
+      res.on('finish', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          decrementMessageQuota(userId).catch(err =>
+            console.warn(`[ai-quota] decrement failed for ${userId}: ${err.message}`)
+          );
+        }
+      });
+      return next();
+    } catch (err) {
+      return next(err);
+    }
+  }
   app.use('/fonts', express.static(path.join(process.cwd(), 'dashboard/fonts')));
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
 
@@ -270,7 +390,7 @@ function createApp() {
   }));
   app.get('/api/paused-chats', requireAuth, (req, res) => res.json({ success: true, paused: [] }));
   app.post('/api/paused-chats/resume', requireAuth, (req, res) => res.json({ success: true }));
-  app.post('/api/test-chat', requireAuth, asyncRoute(async (req, res) => {
+  app.post('/api/test-chat', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const { sessionId, reset } = req.body || {};
     const sid = sessionId || 'default';
@@ -309,7 +429,7 @@ function createApp() {
     history.push({ role: 'assistant', content: aiReply });
     return res.json({ success: true, reply: aiReply, source: 'ai', historyLength: history.length, welcomeShown });
   }));
-  app.post('/api/learn-style', requireAuth, asyncRoute(async (req, res) => {
+  app.post('/api/learn-style', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const result = await db.query(
       `SELECT content
@@ -328,14 +448,15 @@ function createApp() {
     }
 
     const { openai, model } = await bot.buildAIClient();
+    const request = buildLearnStyleRequest({
+      samples: sample,
+      storeName: bot.config?.storeName,
+    });
     const aiResult = await openai.chat.completions.create({
       model,
-      max_tokens: 1400,
-      temperature: 0.3,
-      messages: [
-        { role: 'system', content: 'أنت خبير في تحليل أسلوب ردود خدمة العملاء. استخرج تعليمات عملية دقيقة تجعل البوت يكتب بنفس الأسلوب، مع ذكر النبرة، اللهجة، طول الرد، الإيموجي، الترحيب، الخاتمة، والعبارات التي يجب تجنبها. أعد التعليمات فقط.' },
-        { role: 'user', content: `${sample.length} رد سابق:\n\n${sample.map((reply, i) => `[${i + 1}] ${reply}`).join('\n\n')}` },
-      ],
+      max_tokens: request.maxTokens,
+      temperature: request.temperature,
+      messages: request.messages,
     });
     if (aiResult.usage) bot.recordUsage(model, aiResult.usage.prompt_tokens || 0, aiResult.usage.completion_tokens || 0);
     const instructions = aiResult.choices[0]?.message?.content?.trim();
@@ -343,29 +464,43 @@ function createApp() {
     res.json({ success: true, instructions, sampledCount: sample.length });
   }));
 
-  app.post('/api/enhance-text', requireAuth, asyncRoute(async (req, res) => {
+  app.post('/api/enhance-text', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const { text, type, storeName } = req.body || {};
     const sourceText = String(text || '').trim();
     if (sourceText.length < 3) return res.status(400).json({ success: false, message: 'النص قصير' });
 
     const { openai, model } = await bot.buildAIClient();
-    const prompts = {
-      welcome: `حسّن رسالة الترحيب لمتجر "${storeName || bot.config.storeName || 'المتجر'}" لتكون واضحة وطبيعية ومناسبة لواتساب. لا تذكر AI أو بوت. أعد النص فقط.`,
-      description: 'حوّل وصف المتجر إلى وصف واضح ومفيد للذكاء الاصطناعي: ماذا يبيع المتجر، لمن، أهم المزايا، وأي حدود مهمة. لا تجعله تسويقياً مبالغاً فيه. أعد الوصف فقط.',
-      instructions: 'حوّل النص إلى تعليمات تشغيل دقيقة للذكاء الاصطناعي يفهم منها الحقائق والقواعد والحدود وطريقة الرد. لا تزيّن الكلام ولا تضف معلومات غير مذكورة. رتّبها كنقاط عملية واضحة. أعد التعليمات فقط.',
-      reply: 'حسّن الرد ليكون طبيعياً وواضحاً على واتساب، بدون Markdown وبدون ادعاءات جديدة. أعد الرد فقط.',
-      general: 'حسّن النص ليكون واضحاً وسهل الفهم للذكاء الاصطناعي، بدون إضافة معلومات غير موجودة. أعد النص فقط.',
-    };
-    const aiResult = await openai.chat.completions.create({
-      model,
-      max_tokens: 700,
-      temperature: 0.4,
-      messages: [
-        { role: 'system', content: prompts[type] || prompts.general },
-        { role: 'user', content: sourceText },
-      ],
-    });
+
+    let aiResult;
+    if (type === 'instructions') {
+      const request = buildEnhanceInstructionsRequest({
+        currentText: sourceText,
+        storeName: storeName || bot.config.storeName,
+      });
+      aiResult = await openai.chat.completions.create({
+        model,
+        max_tokens: request.maxTokens,
+        temperature: request.temperature,
+        messages: request.messages,
+      });
+    } else {
+      const prompts = {
+        welcome: `حسّن رسالة الترحيب لمتجر "${storeName || bot.config.storeName || 'المتجر'}" لتكون واضحة وطبيعية ومناسبة لواتساب. لا تذكر AI أو بوت. أعد النص فقط.`,
+        description: 'حوّل وصف المتجر إلى وصف واضح ومفيد للذكاء الاصطناعي: ماذا يبيع المتجر، لمن، أهم المزايا، وأي حدود مهمة. لا تجعله تسويقياً مبالغاً فيه. أعد الوصف فقط.',
+        reply: 'حسّن الرد ليكون طبيعياً وواضحاً على واتساب، بدون Markdown وبدون ادعاءات جديدة. أعد الرد فقط.',
+        general: 'حسّن النص ليكون واضحاً وسهل الفهم للذكاء الاصطناعي، بدون إضافة معلومات غير موجودة. أعد النص فقط.',
+      };
+      aiResult = await openai.chat.completions.create({
+        model,
+        max_tokens: 700,
+        temperature: 0.4,
+        messages: [
+          { role: 'system', content: prompts[type] || prompts.general },
+          { role: 'user', content: sourceText },
+        ],
+      });
+    }
     if (aiResult.usage) bot.recordUsage(model, aiResult.usage.prompt_tokens || 0, aiResult.usage.completion_tokens || 0);
     const enhanced = aiResult.choices[0]?.message?.content?.trim()?.replace(/^["'`]|["'`]$/g, '');
     if (!enhanced) return res.json({ success: false, message: 'فشل التحسين' });
@@ -375,27 +510,39 @@ function createApp() {
   app.post('/api/scan-store', requireAuth, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const { url, sallaToken, zidToken, zidManagerToken } = req.body || {};
-    if (!url || !String(url).startsWith('http')) return res.status(400).json({ success: false, message: 'رابط غير صحيح' });
-    if (isPrivateUrl(url)) return res.status(400).json({ success: false, message: 'رابط غير مسموح' });
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ success: false, message: 'رابط غير صحيح' });
+    }
+    // Full SSRF validation: scheme + DNS resolution + private-IP check.
+    try {
+      await assertPublicUrl(url);
+    } catch (err) {
+      const code = err.code || 'INVALID_URL';
+      const msg = code === 'PRIVATE_ADDRESS' ? 'رابط غير مسموح'
+        : code === 'UNSUPPORTED_PROTOCOL' ? 'بروتوكول غير مدعوم'
+        : code === 'DNS_FAILED' || code === 'DNS_EMPTY' ? 'تعذّر حل اسم النطاق'
+        : 'رابط غير صحيح';
+      return res.status(400).json({ success: false, message: msg, code });
+    }
     const result = await storeScanner.scanStore(url, { sallaToken, zidToken, zidManagerToken, logger: bot.logger });
     res.json({ success: true, ...result });
   }));
 
-  app.post('/api/train-analyze', requireAuth, asyncRoute(async (req, res) => {
+  app.post('/api/train-analyze', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const answers = Array.isArray(req.body?.answers) ? req.body.answers : [];
     if (answers.length < 10) return res.status(400).json({ success: false, message: 'يجب الإجابة على 10 أسئلة على الأقل' });
 
-    const qa = answers.map((answer, i) => `س${i + 1}: ${answer.q}\nج${i + 1}: ${answer.a}`).join('\n\n');
     const { openai, model } = await bot.buildAIClient();
+    const request = buildTrainAnalyzeRequest({
+      answers,
+      storeName: bot.config?.storeName,
+    });
     const aiResult = await openai.chat.completions.create({
       model,
-      max_tokens: 1800,
-      temperature: 0.3,
-      messages: [
-        { role: 'system', content: 'أنت خبير في بناء تعليمات بوت واتساب لخدمة العملاء. بناء على إجابات صاحب المتجر، اكتب برومنت عملي واضح للذكاء الاصطناعي يشمل الشخصية، طريقة الترحيب، اللهجة، طول الرد، الإيموجي، التعامل مع الاعتراضات، الممنوعات، ومتى يتم التصعيد. أعد البرومنت فقط.' },
-        { role: 'user', content: `إجابات صاحب المتجر:\n\n${qa}` },
-      ],
+      max_tokens: request.maxTokens,
+      temperature: request.temperature,
+      messages: request.messages,
     });
     if (aiResult.usage) bot.recordUsage(model, aiResult.usage.prompt_tokens || 0, aiResult.usage.completion_tokens || 0);
     const instructions = aiResult.choices[0]?.message?.content?.trim();
@@ -493,8 +640,12 @@ function createApp() {
   }));
 
   app.use((err, req, res, next) => {
-    console.error(err);
-    res.status(500).json({ success: false, message: err.message });
+    // Never leak err.message or stack to the client. Tag with a correlation id
+    // so support can match the client-visible code to a server log line.
+    const code = randomUUID();
+    console.error(`[error ${code}] ${req.method} ${req.originalUrl} — ${err.stack || err.message}`);
+    if (res.headersSent) return next(err);
+    res.status(500).json({ success: false, error: 'internal_error', code });
   });
 
   return app;

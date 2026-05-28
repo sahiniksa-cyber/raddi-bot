@@ -2,6 +2,7 @@
 
 const path = require('path');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const db = require('../db/client');
 const { getActiveMonitor } = require('../services/monitoring/health-monitor');
 const { listRecentIncidents } = require('../services/monitoring/incident-store');
@@ -63,6 +64,18 @@ function createAdminRoutes(deps = {}) {
   const requireAuth = deps.requireAuth || ((req, res, next) => next());
   const dashboardDir = deps.dashboardDir || path.join(process.cwd(), 'dashboard');
   const settings = deps.billingSettings || {};
+  const rateLimitFactory = deps.rateLimitFactory || rateLimit;
+
+  // Admin login: tight rate limit + IP-based lockout window.
+  // 5 attempts per IP per 15-minute window — caps brute force on the
+  // ADMIN_PASSWORD even if it's leaked from a network log.
+  const adminLoginLimiter = rateLimitFactory({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'too_many_attempts', message: 'محاولات كثيرة، حاول لاحقاً' },
+  });
 
   async function requireOwner(req, res, next) {
     try {
@@ -87,8 +100,15 @@ function createAdminRoutes(deps = {}) {
     res.sendFile(path.join(dashboardDir, 'admin-login.html'));
   });
 
-  // Admin login API
-  router.post('/api/admin/login', (req, res) => {
+  // Admin login API — rate limited, and (by default) requires a user session
+  // first. The latter prevents drive-by admin-password guessing from clients
+  // that never logged in as a normal user. Set ADMIN_REQUIRE_USER_SESSION=false
+  // to disable the prerequisite if you need to bootstrap admin access without
+  // a user account (any other value, including unset, enforces the check).
+  router.post('/api/admin/login', adminLoginLimiter, (req, res) => {
+    if (process.env.ADMIN_REQUIRE_USER_SESSION !== 'false' && !req.session?.userId) {
+      return res.status(401).json({ success: false, error: 'login_required_first', message: 'يلزم تسجيل الدخول أولاً' });
+    }
     const { password } = req.body || {};
     const adminPassword = process.env.ADMIN_PASSWORD;
     if (!adminPassword || password !== adminPassword) {

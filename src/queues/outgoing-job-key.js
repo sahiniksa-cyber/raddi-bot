@@ -5,13 +5,25 @@ function buildEscalationJobKey(replyMessageId) {
   return `${base.replace(/:/g, '-')}-escalation`;
 }
 
+// Anchors the outgoing job key on replyMessageId for normal AI replies (escalation
+// gets its own dedicated key via buildEscalationJobKey). Each generated reply has
+// a unique replyMessageId, so a duplicate enqueue cannot create a second BullMQ job.
 function normalizeOutgoingJobKey(jobKey, payload = {}) {
-  const raw = String(jobKey || '').trim();
-  if (!raw) return raw;
-  if (payload.escalation && raw.endsWith(':escalation')) {
-    return buildEscalationJobKey(raw.slice(0, -':escalation'.length));
+  if (payload && payload.escalation) {
+    const raw = String(jobKey || '').trim();
+    if (raw.endsWith(':escalation')) {
+      return buildEscalationJobKey(raw.slice(0, -':escalation'.length));
+    }
+    if (raw.endsWith('-escalation')) return raw;
+    return buildEscalationJobKey(payload.replyMessageId || raw);
   }
-  return raw;
+
+  // Prefer replyMessageId as the authoritative dedup key. Fall back to caller-supplied
+  // jobKey only when no replyMessageId exists (legacy / manual sends).
+  const replyKey = String(payload?.replyMessageId || '').trim();
+  if (replyKey) return replyKey;
+
+  return String(jobKey || '').trim();
 }
 
 module.exports = {
