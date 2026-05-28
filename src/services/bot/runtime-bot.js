@@ -9,8 +9,9 @@ const db = require('../../db/client');
 const Logger = require('../../../lib/logger');
 const AIClient = require('../../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../../lib/constants');
-const { mergeApiKeys } = require('../config/api-keys-resolver');
+const { mergeApiKeys, resolveEffectiveApiKeys } = require('../config/api-keys-resolver');
 const { getAllAdminApiKeys } = require('../admin/admin-api-keys');
+const { getCustomerApiKeysFor } = require('../admin/customer-api-keys');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
 const { resolveWhatsappEngine } = require('./engine-config');
@@ -522,8 +523,19 @@ async function resolveConfigForAI(userId, deps = {}) {
     return { ...DEFAULT_CONFIG, ...(result.rows[0]?.config || {}) };
   });
   const loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
-  const [customer, admin] = await Promise.all([loadBotConfig(userId), loadAdminKeys()]);
-  return mergeApiKeys(customer, admin);
+  const loadCustomerKeys = deps.loadCustomerKeys
+    || ((uid) => getCustomerApiKeysFor(uid).catch(() => ({})));
+  const [customer, admin, customerKeys] = await Promise.all([
+    loadBotConfig(userId),
+    loadAdminKeys(),
+    loadCustomerKeys(userId),
+  ]);
+  return resolveEffectiveApiKeys({
+    userId,
+    customerConfig: customer,
+    adminKeys: admin,
+    customerKeys,
+  });
 }
 
 module.exports = { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI };

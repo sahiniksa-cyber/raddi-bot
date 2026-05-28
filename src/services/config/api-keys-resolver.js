@@ -62,8 +62,49 @@ function stripApiKeysFromConfigForStorage(config) {
   return out;
 }
 
+/**
+ * Resolve the effective API keys for a given user, applying the precedence:
+ *   1. customerKeys[provider]              (from `customer_api_keys` table)
+ *   2. customerConfig[configFieldName]     (legacy, lives in bot_configs.config —
+ *                                           usually empty since keys are stripped
+ *                                           before persistence)
+ *   3. adminKeys[provider]                 (global admin fallback)
+ *
+ * Inputs:
+ *   - userId         : optional; reserved for callers that want to log/trace
+ *                      whose keys were applied. Not used for lookup here —
+ *                      `customerKeys` is expected to be pre-loaded by the
+ *                      caller (typically `runtime-bot.resolveConfigForAI`).
+ *   - customerConfig : the per-user bot config (object or null)
+ *   - adminKeys      : the global admin keys ({ openai, google, anthropic, openrouter })
+ *   - customerKeys   : the per-user keys      ({ openai, google, anthropic, openrouter })
+ *
+ * Returns a new config object with `*ApiKey` fields populated by the highest
+ * priority non-empty value. Same in-memory-only contract as `mergeApiKeys`.
+ */
+function resolveEffectiveApiKeys({ userId: _userId, customerConfig, adminKeys, customerKeys } = {}) {
+  const customer = customerConfig || {};
+  const admin = adminKeys || {};
+  const perUser = customerKeys || {};
+  const merged = { ...customer };
+  for (const p of PROVIDERS) {
+    const customerKey = String(perUser[p.admin] || '').trim();
+    const legacyKey   = String(customer[p.config] || '').trim();
+    const adminKey    = String(admin[p.admin] || '').trim();
+    merged[p.config] = customerKey || legacyKey || adminKey;
+  }
+  Object.defineProperty(merged, '__inMemoryOnly', {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return merged;
+}
+
 module.exports = {
   mergeApiKeys,
+  resolveEffectiveApiKeys,
   stripApiKeysFromConfigForStorage,
   PROVIDERS,
   API_KEY_CONFIG_FIELDS,

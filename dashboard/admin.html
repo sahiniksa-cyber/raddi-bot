@@ -19,6 +19,16 @@
     .active,.free,.connected{background:#e7f8f0;color:var(--green)}.unpaid,.stopped{background:#eef2f7;color:#475569}.suspended,.disconnected{background:#fdecec;color:var(--red)}.waiting_qr,.reconnecting{background:#fff5dc;color:var(--amber)}
     .actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{border:1px solid var(--border);background:#fff;border-radius:7px;padding:7px 9px;cursor:pointer;font-weight:700;font-size:12px}.actions button:hover{border-color:#9fb0aa}
     .actions .good{color:var(--green)}.actions .bad{color:var(--red)}.actions .blue{color:var(--blue)}
+    .actions .key-btn{color:#1e6fd9;background:#eef4ff;border-color:#cdddf7}
+    .actions .key-btn:hover{background:#dfeaff;border-color:#9fbbe8}
+    .key-row{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-bottom:1px solid var(--border)}
+    .key-row:last-child{border-bottom:none}
+    .key-row > label{font-size:13px;font-weight:700;color:var(--text)}
+    .key-row-content{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .key-row-content input{flex:1;min-width:180px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;font-family:inherit;direction:ltr}
+    .key-row-content button{padding:7px 14px;border:1px solid var(--border);background:#fff;border-radius:7px;cursor:pointer;font-weight:700;font-size:12px;color:var(--green)}
+    .key-row-content button:hover{border-color:#9fb0aa}
+    .key-status{font-size:12px;color:var(--muted);min-width:120px}
     textarea{width:180px;height:56px;resize:vertical;border:1px solid var(--border);border-radius:7px;padding:8px;font-family:inherit}
     .amount{width:92px;border:1px solid var(--border);border-radius:7px;padding:8px;direction:ltr}.empty{padding:32px;text-align:center;color:var(--muted)}
     .toast{position:fixed;bottom:18px;left:18px;background:#12251f;color:#fff;border-radius:8px;padding:11px 14px;opacity:0;transform:translateY(8px);transition:.18s}.toast.show{opacity:1;transform:translateY(0)}.toast.err{background:#9d2b2b}
@@ -208,6 +218,7 @@ function render(){
       <td><textarea id="note-${c.userId}">${esc(c.internalNote)}</textarea></td>
       <td><div class="actions">
         <button class="good" onclick="openAddMessagesModal('${c.userId}','${esc(c.name||'بدون اسم').replace(/'/g,"\\'")}')">➕ إضافة رسائل</button>
+        <button class="key-btn" onclick="openCustomerKeysModal('${c.userId}','${esc(c.email||c.name||c.userId).replace(/'/g,"\\'")}')">🔑 مفاتيح</button>
         <button class="good" onclick="act('${c.userId}','grant_free')">تفعيل مجاني</button>
         <button class="blue" onclick="act('${c.userId}','mark_paid',1750)">تسجيل دفع 1750</button>
         <button class="blue" onclick="saveDue('${c.userId}')">حفظ المستحق</button>
@@ -383,6 +394,63 @@ async function deletePreActivation(id){
     toast('تم الحذف');loadPreActivations();
   }catch(e){toast(e.message,true)}
 }
+let currentCustomerKeyUserId=null;
+const CK_PROVIDERS=[
+  {key:'openai',label:'Openai',title:'OpenAI (ChatGPT)',placeholder:'sk-...'},
+  {key:'google',label:'Google',title:'Google AI (Gemini)',placeholder:'AIza...'},
+  {key:'anthropic',label:'Anthropic',title:'Anthropic (Claude)',placeholder:'sk-ant-...'},
+  {key:'openrouter',label:'Openrouter',title:'OpenRouter',placeholder:'sk-or-...'}
+];
+async function openCustomerKeysModal(userId,label){
+  currentCustomerKeyUserId=userId;
+  document.getElementById('ckCustomerLabel').textContent=label;
+  document.getElementById('customerKeysModal').style.display='flex';
+  CK_PROVIDERS.forEach(p=>{
+    const inp=document.getElementById('ck'+p.label);
+    if(inp)inp.value='';
+    const st=document.getElementById('ck'+p.label+'Status');
+    if(st)st.textContent='جاري التحميل...';
+  });
+  await loadCustomerKeys(userId);
+}
+function closeCustomerKeysModal(){
+  document.getElementById('customerKeysModal').style.display='none';
+  currentCustomerKeyUserId=null;
+}
+async function loadCustomerKeys(userId){
+  try{
+    const r=await fetch(`/api/admin/customers/${encodeURIComponent(userId)}/api-keys`,{credentials:'same-origin'});
+    const d=await r.json();
+    if(!d.success)throw new Error(d.message||'تعذّر التحميل');
+    CK_PROVIDERS.forEach(p=>{
+      const k=(d.keys&&d.keys[p.key])||{};
+      const st=document.getElementById('ck'+p.label+'Status');
+      if(!st)return;
+      if(k.hasKey)st.textContent='✅ '+(k.masked||'محفوظ');
+      else st.textContent='— (يستخدم العام)';
+    });
+  }catch(e){toast('خطأ: '+e.message,true)}
+}
+async function saveCustomerKey(provider){
+  if(!currentCustomerKeyUserId)return;
+  const meta=CK_PROVIDERS.find(p=>p.key===provider);
+  if(!meta)return;
+  const input=document.getElementById('ck'+meta.label);
+  const apiKey=(input?.value||'').trim();
+  try{
+    const r=await fetch(`/api/admin/customers/${encodeURIComponent(currentCustomerKeyUserId)}/api-keys`,{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify({provider,apiKey})
+    });
+    const d=await r.json();
+    if(!d.success)throw new Error(d.message||'فشل الحفظ');
+    toast(apiKey?'✅ تم حفظ المفتاح':'✅ تم حذف المفتاح');
+    if(input)input.value='';
+    await loadCustomerKeys(currentCustomerKeyUserId);
+  }catch(e){toast('خطأ: '+e.message,true)}
+}
 loadCustomers();
 loadCoupons();
 loadPreActivations();
@@ -466,6 +534,56 @@ setInterval(loadHealth,30000);
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button onclick="closeAddMessagesModal()" style="padding:9px 16px;border:1px solid #dfe7e3;background:#fff;border-radius:7px;cursor:pointer">إلغاء</button>
       <button onclick="submitAddMessages()" style="padding:9px 18px;background:#0f9f6e;color:#fff;border:none;border-radius:7px;cursor:pointer;font-weight:700">تفعيل</button>
+    </div>
+  </div>
+</div>
+
+<div id="customerKeysModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)closeCustomerKeysModal()">
+  <div style="background:#fff;padding:0;border-radius:12px;width:540px;max-width:92vw;max-height:90vh;overflow:auto;direction:rtl;font-family:Tahoma,Arial,sans-serif">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #dfe7e3">
+      <h3 style="margin:0;font-size:16px">🔑 مفاتيح API الخاصة بـ <span id="ckCustomerLabel" style="color:#0f9f6e"></span></h3>
+      <button onclick="closeCustomerKeysModal()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#64748b;line-height:1;padding:0 4px">×</button>
+    </div>
+    <div style="padding:16px 20px">
+      <p style="font-size:12.5px;color:#64748b;margin:0 0 14px;line-height:1.6">
+        المفاتيح المُدخلة هنا تطغى على المفاتيح العامة لهذا العميل فقط.
+        اترك الحقل فاضي ثم احفظ لحذف المفتاح الخاص.
+      </p>
+      <div class="key-row">
+        <label>OpenAI (ChatGPT)</label>
+        <div class="key-row-content">
+          <input type="password" id="ckOpenai" placeholder="sk-..." autocomplete="off">
+          <div class="key-status" id="ckOpenaiStatus">—</div>
+          <button onclick="saveCustomerKey('openai')">حفظ</button>
+        </div>
+      </div>
+      <div class="key-row">
+        <label>Google AI (Gemini)</label>
+        <div class="key-row-content">
+          <input type="password" id="ckGoogle" placeholder="AIza..." autocomplete="off">
+          <div class="key-status" id="ckGoogleStatus">—</div>
+          <button onclick="saveCustomerKey('google')">حفظ</button>
+        </div>
+      </div>
+      <div class="key-row">
+        <label>Anthropic (Claude)</label>
+        <div class="key-row-content">
+          <input type="password" id="ckAnthropic" placeholder="sk-ant-..." autocomplete="off">
+          <div class="key-status" id="ckAnthropicStatus">—</div>
+          <button onclick="saveCustomerKey('anthropic')">حفظ</button>
+        </div>
+      </div>
+      <div class="key-row">
+        <label>OpenRouter</label>
+        <div class="key-row-content">
+          <input type="password" id="ckOpenrouter" placeholder="sk-or-..." autocomplete="off">
+          <div class="key-status" id="ckOpenrouterStatus">—</div>
+          <button onclick="saveCustomerKey('openrouter')">حفظ</button>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;padding:12px 20px;border-top:1px solid #dfe7e3;background:#fbfdfc">
+      <button onclick="closeCustomerKeysModal()" style="padding:9px 18px;border:1px solid #dfe7e3;background:#fff;border-radius:7px;cursor:pointer;font-weight:700">إغلاق</button>
     </div>
   </div>
 </div>
