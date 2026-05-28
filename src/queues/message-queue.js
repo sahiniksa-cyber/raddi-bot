@@ -77,6 +77,9 @@ function getQueueEvents() {
 async function recordJob(queueName, jobKey, payload, metadata = {}) {
   if (!db.isConfigured()) return null;
 
+  // Double-send guard: never reset a job that already reached a terminal "delivered"
+  // state. Without the WHERE clause, an enqueueOutgoingWhatsapp retry could reopen a
+  // completed/sent_to_provider row and cause the customer to receive the same reply twice.
   const result = await db.query(
     `INSERT INTO jobs (queue_name, job_key, user_id, conversation_id, message_id, status, payload, max_attempts)
      VALUES ($1, $2, $3, $4, $5, 'queued', $6::jsonb, $7)
@@ -87,6 +90,7 @@ async function recordJob(queueName, jobKey, payload, metadata = {}) {
        last_error = NULL,
        available_at = NOW(),
        finished_at = NULL
+     WHERE jobs.status NOT IN ('completed', 'sent_to_provider')
      RETURNING id`,
     [
       queueName,

@@ -361,6 +361,38 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS pre_activations_created_at_idx
     ON pre_activations (created_at DESC)`,
+
+  // ── Added 2026-05-28: escalation mute window + admin key encryption fields
+  //    + billing webhook verification fields. Needed by Agents 2 and 4.
+  `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS escalated_until TIMESTAMPTZ`,
+
+  `ALTER TABLE admin_api_keys ADD COLUMN IF NOT EXISTS api_key_encrypted TEXT`,
+  `ALTER TABLE admin_api_keys ADD COLUMN IF NOT EXISTS api_key_iv TEXT`,
+  `ALTER TABLE admin_api_keys ADD COLUMN IF NOT EXISTS api_key_tag TEXT`,
+  `ALTER TABLE admin_api_keys ADD COLUMN IF NOT EXISTS api_key_format TEXT DEFAULT 'plaintext'`,
+
+  `ALTER TABLE billing_payments ADD COLUMN IF NOT EXISTS webhook_verified_at TIMESTAMPTZ`,
+  `ALTER TABLE billing_payments ADD COLUMN IF NOT EXISTS webhook_signature TEXT`,
+
+  // ── Added 2026-05-28: customer_profiles table for per-conversation memory
+  //    (P2 from inspection report). Populated by profile-extractor worker;
+  //    consumed by AI worker / ai-client to enrich the system prompt.
+  `CREATE TABLE IF NOT EXISTS customer_profiles (
+    conversation_id UUID PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT,
+    email TEXT,
+    phone TEXT,
+    last_order_ref TEXT,
+    preferences JSONB DEFAULT '{}',
+    open_question TEXT,
+    notes TEXT,
+    message_count_at_last_extract INTEGER DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_customer_profiles_user
+    ON customer_profiles(user_id)`,
 ];
 
 async function migrate() {

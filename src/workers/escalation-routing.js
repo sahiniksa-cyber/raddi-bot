@@ -66,12 +66,26 @@ function resolveEscalationContact(config = {}, contactName, inboundText = '') {
     ? contacts.find(contact => normalizeArabic(contact.name).includes(wanted) || wanted.includes(normalizeArabic(contact.name)))
     : null;
   const byRule = contacts.find(contact => shouldEscalateByContactRule(contact, inboundText));
-  const contact = byName || byRule || contacts[0] || null;
+  // NOTE: we deliberately do NOT fall back to contacts[0] — sending escalations
+  // to a random contact when no match is found previously spammed the wrong
+  // person. If neither byName nor byRule matched, the only acceptable fallback
+  // is an owner phone explicitly mentioned in botInstructions.
+  const contact = byName || byRule || null;
   if (contact?.phone) return contact;
 
   const fallbackPhone = extractOwnerPhoneFromInstructions(config);
   if (fallbackPhone) {
     return { name: contactName || 'المالك', role: 'المالك', phone: fallbackPhone, when: 'تعليمات البوت' };
+  }
+
+  if (!contact) {
+    try {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `${new Date().toISOString()} [escalation] no contact matched (wanted=${contactName || 'n/a'}); canceling escalation`,
+      );
+    } catch (_) {}
+    return null;
   }
   return contact;
 }

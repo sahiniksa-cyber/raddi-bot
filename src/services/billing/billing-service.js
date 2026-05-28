@@ -257,32 +257,75 @@ async function confirmProviderPayment(userId, payment, note = '') {
   const providerPaymentId = String(payment.providerPaymentId || payment.id || '').trim();
   if (!providerPaymentId) throw new Error('Missing provider payment id');
 
-  const existing = await db.query(
-    'SELECT user_id FROM billing_payments WHERE provider = $1 AND provider_payment_id = $2 LIMIT 1',
-    ['moyasar', providerPaymentId],
-  );
-  if (paymentAlreadyUsedByAnotherUser(existing.rows[0], userId)) {
-    throw new Error('Payment was already used by another account');
-  }
+  // Wrap the whole activation in a transaction with a row lock on the
+  // existing billing_payments row (if any) so two concurrent confirmations
+  // for the same provider payment id cannot double-activate.
+  const account = await db.transaction(async (client) => {
+    const existing = await client.query(
+      `SELECT user_id, status
+         FROM billing_payments
+        WHERE provider = $1 AND provider_payment_id = $2
+        LIMIT 1
+        FOR UPDATE`,
+      ['moyasar', providerPaymentId],
+    );
+    const existingRow = existing.rows[0];
+    if (paymentAlreadyUsedByAnotherUser(existingRow, userId)) {
+      throw new Error('Payment was already used by another account');
+    }
 
-  const account = await setAccess(userId, 'active', 'paid', note || 'moyasar');
-  await db.query(
-    `INSERT INTO billing_payments (
-       user_id, provider, provider_payment_id, amount_halalas, currency, status, method, activation_type, raw_payload
-     )
-     VALUES ($1, 'moyasar', $2, $3, $4, $5, $6, 'paid', $7::jsonb)
-     ON CONFLICT DO NOTHING`,
-    [
-      userId,
-      providerPaymentId,
-      payment.amount,
-      payment.currency,
-      payment.status,
-      payment.method,
-      JSON.stringify(payment.raw || payment),
-    ],
-  );
-  await db.query('UPDATE billing_accounts SET last_payment_at = NOW() WHERE user_id = $1', [userId]);
+    // Idempotent: same user, already recorded as paid → just return current account.
+    if (existingRow && /^(paid|succeeded)$/i.test(String(existingRow.status || ''))) {
+      const acc = await client.query(
+        'SELECT * FROM billing_accounts WHERE user_id = $1 LIMIT 1',
+        [userId],
+      );
+      return acc.rows[0] || null;
+    }
+
+    const accessStatus = 'active';
+    const activatedAt = new Date();
+    const access = await client.query(
+      `INSERT INTO billing_accounts (
+         user_id, platform_access_status, activation_source, access_activated_at, internal_note
+       )
+       VALUES ($1, $2, 'paid', $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET
+         platform_access_status = EXCLUDED.platform_access_status,
+         activation_source      = EXCLUDED.activation_source,
+         access_activated_at    = COALESCE(EXCLUDED.access_activated_at, billing_accounts.access_activated_at),
+         access_suspended_at    = NULL,
+         internal_note          = CASE WHEN EXCLUDED.internal_note = '' THEN billing_accounts.internal_note ELSE EXCLUDED.internal_note END
+       RETURNING *`,
+      [userId, accessStatus, activatedAt, note || 'moyasar'],
+    );
+
+    await client.query(
+      `INSERT INTO billing_payments (
+         user_id, provider, provider_payment_id, amount_halalas, currency, status, method, activation_type, raw_payload
+       )
+       VALUES ($1, 'moyasar', $2, $3, $4, $5, $6, 'paid', $7::jsonb)
+       ON CONFLICT DO NOTHING`,
+      [
+        userId,
+        providerPaymentId,
+        payment.amount,
+        payment.currency,
+        payment.status,
+        payment.method,
+        JSON.stringify(payment.raw || payment),
+      ],
+    );
+    await client.query(
+      'UPDATE billing_accounts SET last_payment_at = NOW() WHERE user_id = $1',
+      [userId],
+    );
+    return access.rows[0];
+  });
+
+  // Recording the billing event + writing the spreadsheet ledger are
+  // side-effects that are safe to perform after the transaction commits.
+  await recordBillingEvent(userId, 'access_active', { source: 'paid', note: note || 'moyasar' });
   await appendLedgerSafe(userId, {
     amountHalalas: payment.amount,
     currency: payment.currency,
@@ -293,6 +336,119 @@ async function confirmProviderPayment(userId, payment, note = '') {
     note: note || 'moyasar',
   });
   return account;
+}
+
+/**
+ * Handle a verified Moyasar webhook event. The HMAC signature MUST be
+ * verified by the route before calling this. Idempotent: replaying the same
+ * event will not produce duplicate activations.
+ */
+async function handleMoyasarWebhookEvent(event, signature) {
+  const data = (event && (event.data || event.payment || event)) || {};
+  const providerPaymentId = String(data.id || data.payment_id || '').trim();
+  const userId = String(
+    data.metadata?.user_id || data.metadata?.userId || data.user_id || '',
+  ).trim();
+  const status = String(data.status || '').toLowerCase();
+
+  if (!providerPaymentId) throw new Error('Missing provider payment id in webhook event');
+  if (!userId) throw new Error('Missing user_id in webhook metadata');
+
+  // We only act on terminal paid states. Other statuses (initiated, failed)
+  // can be ignored by the activation pipeline; the route still returns 200
+  // so Moyasar does not retry forever.
+  const isPaid = status === 'paid' || status === 'succeeded';
+  if (!isPaid) {
+    await recordBillingEvent(userId, 'moyasar_webhook_ignored', {
+      providerPaymentId,
+      status,
+    });
+    return { processed: false, reason: `status_${status}` };
+  }
+
+  const result = await db.transaction(async (client) => {
+    const existing = await client.query(
+      `SELECT user_id, status
+         FROM billing_payments
+        WHERE provider = $1 AND provider_payment_id = $2
+        LIMIT 1
+        FOR UPDATE`,
+      ['moyasar', providerPaymentId],
+    );
+    const existingRow = existing.rows[0];
+
+    if (existingRow && String(existingRow.user_id || '') !== userId) {
+      throw new Error('Payment was already used by another account');
+    }
+    if (existingRow && /^(paid|succeeded)$/i.test(String(existingRow.status || ''))) {
+      return { activated: false, alreadyProcessed: true };
+    }
+
+    await client.query(
+      `INSERT INTO billing_accounts (
+         user_id, platform_access_status, activation_source, access_activated_at, access_suspended_at, internal_note
+       )
+       VALUES ($1, 'active', 'paid', NOW(), NULL, 'moyasar webhook')
+       ON CONFLICT (user_id) DO UPDATE SET
+         platform_access_status = 'active',
+         activation_source      = 'paid',
+         access_activated_at    = COALESCE(billing_accounts.access_activated_at, NOW()),
+         access_suspended_at    = NULL`,
+      [userId],
+    );
+
+    await client.query(
+      `INSERT INTO billing_payments (
+         user_id, provider, provider_payment_id, amount_halalas, currency, status, method,
+         activation_type, raw_payload, webhook_verified_at, webhook_signature
+       )
+       VALUES ($1, 'moyasar', $2, $3, $4, $5, $6, 'paid', $7::jsonb, NOW(), $8)
+       ON CONFLICT (provider, provider_payment_id) DO UPDATE SET
+         status               = EXCLUDED.status,
+         amount_halalas       = COALESCE(billing_payments.amount_halalas, EXCLUDED.amount_halalas),
+         currency             = COALESCE(billing_payments.currency, EXCLUDED.currency),
+         method               = COALESCE(billing_payments.method, EXCLUDED.method),
+         webhook_verified_at  = NOW(),
+         webhook_signature    = EXCLUDED.webhook_signature`,
+      [
+        userId,
+        providerPaymentId,
+        Number(data.amount || 0),
+        String(data.currency || 'SAR').toUpperCase(),
+        status,
+        String(data.source?.type || data.method || 'moyasar'),
+        JSON.stringify(data),
+        String(signature || ''),
+      ],
+    );
+
+    await client.query(
+      'UPDATE billing_accounts SET last_payment_at = NOW() WHERE user_id = $1',
+      [userId],
+    );
+
+    return { activated: true, alreadyProcessed: false };
+  });
+
+  if (result.activated) {
+    await recordBillingEvent(userId, 'access_active', {
+      source: 'paid',
+      note: 'moyasar webhook',
+      providerPaymentId,
+    });
+    await appendLedgerSafe(userId, {
+      amountHalalas: Number(data.amount || 0),
+      currency: String(data.currency || 'SAR').toUpperCase(),
+      method: String(data.source?.type || data.method || 'moyasar'),
+      providerPaymentId,
+      status,
+      activationType: 'paid',
+      note: 'moyasar webhook',
+    });
+  } else {
+    await recordBillingEvent(userId, 'moyasar_webhook_replayed', { providerPaymentId });
+  }
+  return { processed: true, ...result, providerPaymentId, userId };
 }
 
 async function suspendAccess(userId, note = '') {
@@ -384,6 +540,7 @@ module.exports = {
   getUserBillingState,
   grantFreeAccess,
   halalasToSar,
+  handleMoyasarWebhookEvent,
   isActiveAccess,
   isAdminUser,
   isValidActivationCode,

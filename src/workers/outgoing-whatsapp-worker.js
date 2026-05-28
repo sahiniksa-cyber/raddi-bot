@@ -99,15 +99,12 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   if (!sender) throw new Error('Missing sender in outgoing payload');
   if (!reply) throw new Error('Missing reply in outgoing payload');
 
-  // Guard: @lid JIDs have no phone number — Baileys cannot send to them
+  // Guard: @lid JIDs have no phone number — Baileys cannot reliably send to them.
+  // Attempt a best-effort send anyway (some sessions allow it) and alert the owner
+  // if it fails so the customer doesn't fall through the cracks silently.
   if (sender.endsWith('@lid')) {
-    await markReplyMessage(replyMessageId, 'skipped_lid', {
-      sentBy: WORKER_NAME,
-      skippedAt: new Date().toISOString(),
-      reason: 'sender_is_lid_only',
-    });
-    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] skipped @lid sender ${sender}`);
-    return { skipped: true, reason: 'sender_is_lid_only' };
+    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid sender detected: jid=${sender} replyMessageId=${replyMessageId} userId=${userId}`);
+    return handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot });
   }
 
   if (await skipStaleOutgoingJob(job, { replyMessageId })) {
@@ -142,12 +139,28 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
   });
 
+  // Bail out before sending if the underlying socket is not open. Baileys may report
+  // appState=connected briefly even though the websocket has gone idle; sending in
+  // that window silently drops the message. Throwing here re-queues the job via BullMQ.
+  if (!isSocketOpen(bot)) {
+    throw new Error('socket_not_open');
+  }
+
+  // Best-effort typing indicator — never block the send if it fails.
+  try { await bot.sock?.sendPresenceUpdate?.('composing', sender); } catch (_) {}
+
   await sendWhatsappReply(bot, { sender, reply, providerMessageId });
 
+  // Send-only path: quota is decremented only when sendWhatsappReply resolves
+  // without throwing. If the send throws (including socket_not_open above), this
+  // line is skipped and BullMQ re-queues the job.
   const dec = await decrementMessageQuota(userId);
   if (!dec.success) {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] sent ${replyMessageId} but quota already empty for ${userId}`);
   }
+
+  // Best-effort "stopped typing" — fire and forget.
+  try { await bot.sock?.sendPresenceUpdate?.('paused', sender); } catch (_) {}
 
   await markReplyMessage(replyMessageId, 'sent', {
     sentBy: WORKER_NAME,
@@ -162,7 +175,99 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   });
 
   bot.log(`outgoing reply sent to ${sender}`);
+
+  // Minimum inter-send pacing. Keeps us under WhatsApp's per-conversation rate
+  // limits and gives presence updates time to flush. No Redis lock — single
+  // concurrency worker already serializes.
+  const pacingMs = parseInt(process.env.OUTGOING_MIN_INTERVAL_MS || '800', 10);
+  if (pacingMs > 0) await new Promise(r => setTimeout(r, pacingMs));
+
   return { sent: true, replyMessageId };
+}
+
+function isSocketOpen(bot) {
+  // Baileys: bot.sock.ws is a WebSocket with readyState (1=OPEN).
+  // whatsapp-web.js: no .sock — accept as open since its own readiness check ran already.
+  const sock = bot?.sock;
+  if (!sock) return true;
+  const ws = sock.ws;
+  if (!ws) return true;
+  if (typeof ws.readyState !== 'number') return true;
+  return ws.readyState === 1;
+}
+
+async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot }) {
+  // Try a best-effort send first. Some sessions can deliver to @lid even though
+  // it's unreliable in general — better to attempt than to silently drop.
+  let sendError = null;
+  try {
+    const loadedBot = await getUserBot(userId);
+    if (shouldCancelOutgoingForStoppedBot(loadedBot, payload)) {
+      throw new Error('bot_stopped_by_owner');
+    }
+    const bot = await waitForConnectedBot(loadedBot, {
+      reason: `outgoing-lid:${job.id}`,
+      timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
+    });
+    if (!isSocketOpen(bot)) throw new Error('socket_not_open');
+    if (typeof bot?.sock?.sendMessage === 'function') {
+      await bot.sock.sendMessage(sender, { text: String(reply || '') });
+    } else if (bot?.client?.sendMessage) {
+      await bot.client.sendMessage(sender, reply);
+    } else {
+      throw new Error('no_send_channel_for_lid');
+    }
+    await markReplyMessage(replyMessageId, 'sent', {
+      sentBy: WORKER_NAME,
+      sentAt: new Date().toISOString(),
+      lid: true,
+    });
+    await updateJobStatus(job.id, {
+      status: 'completed',
+      finished_at: new Date(),
+      attempts: job.attemptsMade + 1,
+      last_error: null,
+    });
+    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send succeeded jid=${sender}`);
+    return { sent: true, replyMessageId, lid: true };
+  } catch (err) {
+    sendError = err;
+    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send failed jid=${sender}: ${err.message}`);
+  }
+
+  await markReplyMessage(replyMessageId, 'skipped_lid', {
+    sentBy: WORKER_NAME,
+    skippedAt: new Date().toISOString(),
+    reason: 'sender_is_lid_only',
+    error: sendError?.message || null,
+  });
+
+  await notifyOwnerOfLidFailure({ userId, sender, getUserBot }).catch((notifyErr) => {
+    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] owner notify for @lid failed: ${notifyErr.message}`);
+  });
+
+  return { skipped: true, reason: 'sender_is_lid_only', lid: true };
+}
+
+async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
+  const ownerPhone = String(process.env.OWNER_ALERT_PHONE || '').replace(/[^\d]/g, '');
+  if (!ownerPhone) return false;
+  const ownerJid = `${ownerPhone}@s.whatsapp.net`;
+  const text = `تعذّر الرد على عميل برقم مخفي (lid: ${sender})`;
+
+  // Use the same bot instance — it's the owner's WhatsApp account, so the alert
+  // arrives on the owner's phone alongside normal customer chats.
+  const loadedBot = await getUserBot(userId).catch(() => null);
+  if (!loadedBot || loadedBot?.appState?.status !== 'connected') return false;
+  if (loadedBot?.sock?.sendMessage) {
+    await loadedBot.sock.sendMessage(ownerJid, { text });
+    return true;
+  }
+  if (loadedBot?.client?.sendMessage) {
+    await loadedBot.client.sendMessage(ownerJid, text);
+    return true;
+  }
+  return false;
 }
 
 function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
@@ -345,6 +450,9 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 
 module.exports = {
   createOutgoingWhatsappWorker,
+  handleLidOutgoing,
+  isSocketOpen,
+  notifyOwnerOfLidFailure,
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,

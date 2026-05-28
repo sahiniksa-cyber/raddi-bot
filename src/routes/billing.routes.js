@@ -1,10 +1,12 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('crypto');
 const {
   activateWithCode,
   confirmProviderPayment,
   getUserBillingState,
+  handleMoyasarWebhookEvent,
   isAdminUser,
   updateAutoRenew,
 } = require('../services/billing/billing-service');
@@ -17,10 +19,68 @@ const {
 const db = require('../db/client');
 const { computeEffectiveRemaining } = require('../services/billing/message-quota');
 
+/**
+ * Verify Moyasar webhook signature in constant time. Returns true on match.
+ * Accepts both `x-moyasar-signature` and the generic `signature` header.
+ */
+function verifyMoyasarSignature(req, secret) {
+  const sigHeader = req.headers['x-moyasar-signature'] || req.headers['signature'];
+  if (!sigHeader || !secret) return false;
+  const expected = crypto.createHmac('sha256', secret).update(req.body).digest('hex');
+  const a = Buffer.from(String(sigHeader));
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 function createBillingRoutes(deps = {}) {
   const router = express.Router();
   const requireAuth = deps.requireAuth || ((req, res, next) => next());
   const settings = deps.billingSettings || {};
+
+  // ---------------------------------------------------------------------------
+  // POST /billing/moyasar/webhook
+  //
+  // IMPORTANT: This endpoint MUST be mounted BEFORE any CSRF / same-origin
+  // middleware — Moyasar's servers cannot send our session cookie or our
+  // CSRF token. Authentication is via HMAC-SHA256 of the raw request body
+  // using MOYASAR_WEBHOOK_SECRET. The route uses express.raw() so we can
+  // recompute that HMAC byte-for-byte before any JSON parse.
+  //
+  // If your server.js adds an origin-check middleware later, exempt
+  // `/billing/moyasar/webhook` explicitly.
+  // ---------------------------------------------------------------------------
+  router.post(
+    '/billing/moyasar/webhook',
+    express.raw({ type: 'application/json' }),
+    async (req, res, next) => {
+      try {
+        const secret = process.env.MOYASAR_WEBHOOK_SECRET;
+        if (!secret) {
+          return res.status(503).json({ error: 'webhook_disabled' });
+        }
+        const sigHeader = req.headers['x-moyasar-signature'] || req.headers['signature'];
+        if (!sigHeader) {
+          return res.status(401).json({ error: 'no_signature' });
+        }
+        if (!verifyMoyasarSignature(req, secret)) {
+          return res.status(401).json({ error: 'bad_signature' });
+        }
+
+        let event;
+        try {
+          event = JSON.parse(req.body.toString('utf8'));
+        } catch (_) {
+          return res.status(400).json({ error: 'bad_json' });
+        }
+
+        const result = await handleMoyasarWebhookEvent(event, String(sigHeader));
+        return res.json({ ok: true, ...result });
+      } catch (err) {
+        return next(err);
+      }
+    },
+  );
 
   router.get('/api/billing/state', requireAuth, async (req, res, next) => {
     try {
@@ -74,8 +134,12 @@ function createBillingRoutes(deps = {}) {
       }
 
       const payment = normalizeMoyasarPayment(rawPayment);
-      if (payment.userId && payment.userId !== req.session.userId) {
-        return res.redirect('/billing?payment=mismatch');
+      // Hard reject any callback whose Moyasar metadata is missing a user
+      // id, or whose user id does not match the authenticated session.
+      // Without this an attacker who knows another user's payment id could
+      // hit /billing/callback?id=... and activate someone else's account.
+      if (!payment.userId || payment.userId !== req.session.userId) {
+        return res.status(403).send('forbidden: payment user mismatch');
       }
 
       await confirmProviderPayment(req.session.userId, payment, 'moyasar checkout');
@@ -126,4 +190,4 @@ function createBillingRoutes(deps = {}) {
   return router;
 }
 
-module.exports = { createBillingRoutes };
+module.exports = { createBillingRoutes, verifyMoyasarSignature };

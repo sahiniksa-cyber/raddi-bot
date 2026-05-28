@@ -13,6 +13,8 @@ const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
+const { findDuplicateRecentReply } = require('./reply-deduplication');
+const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
 const { findAutoReply } = require('../services/bot/platform-features');
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
@@ -111,6 +113,54 @@ async function resolveConversation({ userId, conversationId, sender }) {
     [userId, sender],
   );
   return result.rows[0] || null;
+}
+
+/**
+ * Returns true when the conversation has an active escalation mute window
+ * (`escalated_until > NOW()`). When muted, the AI worker must skip generation
+ * and outbound send entirely so the human operator can take over.
+ */
+async function isConversationEscalationMuted({ database = db, conversationId }) {
+  if (!conversationId || !database?.isConfigured?.()) return false;
+  try {
+    const result = await database.query(
+      `SELECT escalated_until
+         FROM conversations
+        WHERE id = $1
+          AND escalated_until IS NOT NULL
+          AND escalated_until > NOW()
+        LIMIT 1`,
+      [conversationId],
+    );
+    return result.rows.length > 0;
+  } catch (_err) {
+    // The escalated_until column is added by a migration; if it hasn't run yet
+    // the query throws. Fail-open so we don't break message processing.
+    return false;
+  }
+}
+
+/**
+ * Counts escalations recorded for this conversation in the last 24 hours and
+ * returns the timestamp of the most recent one. Used to enforce a per-
+ * conversation escalation cap and a minimum gap between escalations.
+ */
+async function getConversationEscalationStats({ database = db, conversationId }) {
+  if (!conversationId || !database?.isConfigured?.()) {
+    return { count24h: 0, lastSentAt: null };
+  }
+  const result = await database.query(
+    `SELECT COUNT(*)::int AS n, MAX(sent_at) AS last_sent_at
+       FROM escalation_log
+      WHERE conversation_id = $1
+        AND sent_at > NOW() - INTERVAL '24 hours'`,
+    [conversationId],
+  );
+  const row = result.rows[0] || {};
+  return {
+    count24h: Number(row.n) || 0,
+    lastSentAt: row.last_sent_at ? new Date(row.last_sent_at) : null,
+  };
 }
 
 async function loadInboundMessage({ userId, messageId, text }) {
@@ -359,6 +409,22 @@ async function processAiReply(job) {
     });
     if (!conversation) throw new Error('Unable to resolve conversation');
 
+    // Escalation mute window: when a human has been pulled into the
+    // conversation, we silence the bot for 30 minutes so the operator can
+    // reply without the AI talking over them. We do not consume quota and we
+    // do not send any outbound message.
+    if (await isConversationEscalationMuted({ database: db, conversationId: conversation.id })) {
+      logger.info('escalation', 'muted by escalation — skipping AI reply', {
+        conversationId: conversation.id,
+      });
+      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+        status: 'skipped_escalation_muted',
+        finished_at: new Date(),
+        attempts: job.attemptsMade + 1,
+      });
+      return { skipped: true, reason: 'escalation_muted' };
+    }
+
     const fallbackText = await loadInboundMessage({
       userId,
       messageId: payload.messageId,
@@ -443,13 +509,22 @@ async function processAiReply(job) {
       inboundText: text,
     });
 
+    // Customer profile (best-effort). Never blocks the reply: any failure
+    // here is swallowed and we proceed without a profile.
+    let customerProfile = null;
+    try {
+      customerProfile = await getCustomerProfile({ conversationId: conversation.id, database: db });
+    } catch (profileErr) {
+      logger.warn('profile', `getProfile failed: ${profileErr.message}`);
+    }
+
     const ai = new AIClient(config, logger, {
       record: async (model, inputTokens, outputTokens) => {
         await recordAiUsage({ userId, model, inputTokens, outputTokens }).catch(() => {});
       },
     });
 
-    const reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0 }) || '').trim();
+    const reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile }) || '').trim();
     if (!reply) throw new Error('AI returned empty reply');
     const escalation = prepareEscalation({
       reply,
@@ -458,8 +533,52 @@ async function processAiReply(job) {
       customerPhoneNumber: conversation.phone_number,
       inboundText: text,
     });
-    const customerReply = escalation.customerReply.trim();
+    let customerReply = escalation.customerReply.trim();
     if (!customerReply) throw new Error('AI returned empty customer reply after escalation marker cleanup');
+
+    // Reply de-duplication: if the candidate reply is near-identical to one of
+    // the last few assistant replies, regenerate once with higher penalties
+    // and an extra system instruction. If the retry fails we still send the
+    // original to avoid leaving the customer hanging.
+    try {
+      const dup = await findDuplicateRecentReply({
+        db,
+        conversationId: conversation.id,
+        candidate: customerReply,
+        lookback: 3,
+        threshold: 0.85,
+      });
+      if (dup) {
+        logger.warn('dedup', 'duplicate assistant reply detected — regenerating', {
+          similarity: Number(dup.similarity).toFixed(3),
+        });
+        const retryHistory = [
+          ...history,
+          { role: 'system', content: 'تجنّب صياغة آخر رد بالضبط، أعد بكلمات مختلفة.' },
+        ];
+        const retryRaw = await ai.getReply(retryHistory, {
+          isFirstMsg: false,
+          maxRetries: 1,
+          presencePenalty: 0.9,
+          frequencyPenalty: 0.6,
+          customerProfile,
+        }).catch(() => '');
+        const retry = String(retryRaw || '').trim();
+        if (retry) {
+          const retryEscalation = prepareEscalation({
+            reply: retry,
+            config,
+            customerSender: conversation.sender,
+            customerPhoneNumber: conversation.phone_number,
+            inboundText: text,
+          });
+          const retryCustomer = (retryEscalation.customerReply || '').trim();
+          if (retryCustomer) customerReply = retryCustomer;
+        }
+      }
+    } catch (dedupErr) {
+      logger.warn('dedup', `dedup check failed: ${dedupErr.message}`);
+    }
 
     const replyMessageId = await storeAssistantMessage({
       userId,
@@ -494,10 +613,28 @@ async function processAiReply(job) {
         [userId, conversation.id, contactTarget],
       );
 
+      // Per-conversation cap: at most 3 escalations / 24h, and a 10-minute
+      // gap between any two escalations on the same conversation. This guards
+      // against AI loops dragging the owner into noise.
+      const escStats = await getConversationEscalationStats({
+        database: db,
+        conversationId: conversation.id,
+      });
+      const tenMinAgo = Date.now() - 10 * 60 * 1000;
+      const lastSentMs = escStats.lastSentAt ? escStats.lastSentAt.getTime() : 0;
+      const overCap = escStats.count24h >= 3;
+      const tooSoon = escStats.count24h >= 1 && lastSentMs > tenMinAgo;
+
       if (cooldown.rowCount > 0) {
         console.warn(
           `${new Date().toISOString()} [${WORKER_NAME}] skipping escalation — cooldown active for user=${userId} conversation=${conversation.id} target=${contactTarget}`,
         );
+      } else if (overCap || tooSoon) {
+        logger.warn('escalation', 'escalation suppressed by per-conversation cap', {
+          conversationId: conversation.id,
+          count24h: escStats.count24h,
+          reason: overCap ? 'cap_24h_reached' : 'min_gap_not_elapsed',
+        });
       } else {
         await enqueueOutgoingWhatsapp({
           userId,
@@ -518,12 +655,38 @@ async function processAiReply(job) {
           `INSERT INTO escalation_log (user_id, conversation_id, contact_target) VALUES ($1, $2, $3)`,
           [userId, conversation.id, contactTarget],
         );
+
+        // Mute the bot for 30 minutes so the human operator can take over
+        // without the AI talking on top. Failures here are non-fatal — we
+        // already enqueued the escalation, the mute is a nicety.
+        try {
+          await db.query(
+            `UPDATE conversations
+                SET escalated_until = NOW() + INTERVAL '30 minutes'
+              WHERE id = $1`,
+            [conversation.id],
+          );
+        } catch (muteErr) {
+          logger.warn('escalation', `failed to set escalated_until: ${muteErr.message}`);
+        }
       }
     }
 
     await markInboundMessagesAnswered({
       messageIds: enrichedMessages.map(message => message.id),
     });
+
+    // Fire-and-forget profile extraction. Never awaited, never throws — the
+    // helper schedules a setImmediate and swallows every error internally.
+    try {
+      extractCustomerProfileAsync({
+        conversationId: conversation.id,
+        userId,
+        customerText: text,
+      });
+    } catch (_profileErr) {
+      // defensive: extractAsync itself shouldn't throw, but we guard anyway.
+    }
 
     await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
       status: 'completed',
@@ -534,6 +697,70 @@ async function processAiReply(job) {
     return { replyMessageId, queuedForSend: true };
   } catch (err) {
     await markInboundMessageFailed({ messageId: payload.messageId, error: err }).catch(() => {});
+
+    // Final-attempt fallback: when BullMQ has exhausted its retries we send a
+    // brief reassurance message so the customer isn't left in silence. We
+    // mark the job completed (return instead of throw) so BullMQ does not
+    // retry — and the deterministic jobKey makes the enqueue idempotent.
+    const attempts = Number(job?.attemptsMade) || 0;
+    const isFinalAttempt = attempts >= 2;
+    if (isFinalAttempt) {
+      try {
+        const config = await resolveConfigForAI(payload.userId).catch(() => ({}));
+        const fallbackText =
+          (config && config.fallbackMessage) ||
+          'لحظات من فضلك، نراجع طلبك ونرجعلك بأقرب وقت 🌷';
+        const sender = payload.sender || null;
+        const fallbackKey = `fallback:${payload.messageId || job?.id || crypto.randomUUID()}`;
+
+        await enqueueOutgoingWhatsapp({
+          userId: payload.userId,
+          conversationId: payload.conversationId,
+          messageId: payload.messageId,
+          providerMessageId: payload.providerMessageId,
+          sender,
+          reply: fallbackText,
+          source: 'ai_failure_fallback',
+        }, {
+          jobKey: fallbackKey,
+        });
+
+        logger.warn('fallback', 'AI exhausted retries — sent ai_failure_fallback', {
+          attempts,
+          error: err?.message,
+        });
+
+        // Best-effort owner notification. The notify service exposes only an
+        // SMTP mailer today; if SMTP isn't configured we silently no-op.
+        try {
+          const { createMailer } = require('../services/notify/mailer');
+          const mailer = createMailer();
+          const ownerEmail = process.env.OWNER_ALERT_EMAIL || process.env.ADMIN_ALERT_EMAIL;
+          if (mailer && ownerEmail) {
+            await mailer.sendMail({
+              to: ownerEmail,
+              subject: 'AI worker exhausted retries — fallback sent',
+              text: `userId=${payload.userId}\nconversationId=${payload.conversationId}\nmessageId=${payload.messageId}\nerror=${err?.message || err}`,
+            }).catch(() => {});
+          }
+        } catch (_notifyErr) {
+          // notify is best-effort
+        }
+
+        await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+          status: 'completed_with_fallback',
+          finished_at: new Date(),
+          attempts: attempts + 1,
+          last_error: err?.message || String(err),
+        }).catch(() => {});
+
+        return { fallbackSent: true, source: 'ai_failure_fallback' };
+      } catch (fallbackErr) {
+        logger.error('fallback', `fallback send failed: ${fallbackErr.message}`);
+        // fall through to throw so BullMQ records the failure
+      }
+    }
+
     throw err;
   }
 }
@@ -599,6 +826,8 @@ module.exports = {
   buildCombinedInboundText,
   createWorker,
   enrichInboundMessagesWithMedia,
+  getConversationEscalationStats,
+  isConversationEscalationMuted,
   isTransientDatabaseError,
   loadPendingInboundMessages,
   markInboundMessageFailed,
