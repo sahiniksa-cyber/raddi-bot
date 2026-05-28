@@ -393,6 +393,25 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_customer_profiles_user
     ON customer_profiles(user_id)`,
+
+  // ── Per-customer API keys that override the admin defaults for a user.
+  //    Encrypted at rest (AES-256-GCM) when SECRETS_KEY is set; falls back
+  //    to inline plaintext in dev (still in api_key_encrypted column —
+  //    no separate plaintext column to keep the surface area minimal).
+  `CREATE TABLE IF NOT EXISTS customer_api_keys (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    api_key_encrypted TEXT,
+    api_key_iv TEXT,
+    api_key_tag TEXT,
+    api_key_format TEXT DEFAULT 'aes-256-gcm',
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (user_id, provider)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_customer_api_keys_user
+    ON customer_api_keys(user_id)`,
 ];
 
 async function migrate() {

@@ -6,9 +6,13 @@ const assert = require('node:assert/strict');
 const { createAdminRoutes } = require('../src/routes/admin.routes');
 
 test('admin login route has a tight rate limiter (<=5 per 15min)', () => {
-  let limiterOpts = null;
+  // `createAdminRoutes` may instantiate multiple rate limiters (admin login,
+  // per-customer API-key writes, ...). Capture every call so we can assert
+  // about the admin-login limiter specifically. The admin login limiter is
+  // the one with windowMs >= 5 minutes AND max <= 5 attempts.
+  const limiters = [];
   const fakeRateLimit = (opts) => {
-    limiterOpts = opts;
+    limiters.push(opts);
     return (req, res, next) => next();
   };
 
@@ -19,9 +23,13 @@ test('admin login route has a tight rate limiter (<=5 per 15min)', () => {
     dashboardDir: '/tmp',
   });
 
-  assert.ok(limiterOpts, 'rate limit factory must be invoked');
-  assert.ok(limiterOpts.windowMs >= 5 * 60 * 1000, 'window should be >=5 minutes');
-  assert.ok(limiterOpts.max <= 5, `admin login max attempts must be <=5 (got ${limiterOpts.max})`);
+  assert.ok(limiters.length >= 1, 'rate limit factory must be invoked at least once');
+  const loginLimiter = limiters.find(
+    o => (o.windowMs || 0) >= 5 * 60 * 1000 && (o.max || Infinity) <= 5,
+  );
+  assert.ok(loginLimiter, 'expected an admin-login limiter (>=5min window, <=5 max)');
+  assert.ok(loginLimiter.windowMs >= 5 * 60 * 1000, 'window should be >=5 minutes');
+  assert.ok(loginLimiter.max <= 5, `admin login max attempts must be <=5 (got ${loginLimiter.max})`);
 });
 
 test('admin login requires existing user session by default', async () => {

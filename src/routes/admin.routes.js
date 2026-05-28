@@ -20,6 +20,10 @@ const {
 const { addMessagesToQuota } = require('../services/billing/message-quota');
 const { setAdminApiKey, getAdminApiKeysMasked } = require('../services/admin/admin-api-keys');
 const {
+  setCustomerApiKey,
+  getCustomerApiKeysMaskedFor,
+} = require('../services/admin/customer-api-keys');
+const {
   createPreActivation,
   listPreActivations,
   deletePreActivation,
@@ -57,6 +61,52 @@ function createAdminApiKeysHandlers(deps = {}) {
   }
 
   return { getApiKeys, putApiKey };
+}
+
+function createCustomerApiKeysHandlers(deps = {}) {
+  const getMasked = deps.getCustomerApiKeysMaskedFor || getCustomerApiKeysMaskedFor;
+  const setKey = deps.setCustomerApiKey || setCustomerApiKey;
+
+  async function getKeys(req, res) {
+    try {
+      const userId = String(req.params?.userId || '').trim();
+      if (!userId) return res.status(400).json({ success: false, message: 'userId مطلوب' });
+      const keys = await getMasked(userId);
+      res.status(200).json({ success: true, keys });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  async function putKey(req, res) {
+    try {
+      const userId = String(req.params?.userId || '').trim();
+      if (!userId) return res.status(400).json({ success: false, message: 'userId مطلوب' });
+      const { provider, apiKey } = req.body || {};
+      const result = await setKey({
+        userId,
+        provider,
+        apiKey,
+        adminUserId: req.session?.userId,
+      });
+      // Always return the masked value (never plaintext) so the UI can render
+      // the new state without exposing the secret.
+      const all = await getMasked(userId);
+      const slot = all[result.provider] || { masked: null, hasKey: false };
+      res.status(200).json({
+        success: true,
+        provider: result.provider,
+        cleared: Boolean(result.cleared),
+        masked: slot.masked,
+        hasKey: slot.hasKey,
+      });
+    } catch (err) {
+      const isClient = /provider|userId/i.test(err.message);
+      res.status(isClient ? 400 : 500).json({ success: false, message: err.message });
+    }
+  }
+
+  return { getKeys, putKey };
 }
 
 function createAdminRoutes(deps = {}) {
@@ -246,6 +296,28 @@ function createAdminRoutes(deps = {}) {
   router.get('/api/admin/api-keys', requireOwner, apiKeyHandlers.getApiKeys);
   router.put('/api/admin/api-keys', requireOwner, apiKeyHandlers.putApiKey);
 
+  // Per-customer overrides — these take precedence over the global admin keys
+  // for the targeted user (see resolveEffectiveApiKeys).
+  const customerApiKeyHandlers = createCustomerApiKeysHandlers();
+  const customerApiKeyPutLimiter = rateLimitFactory({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'too_many_attempts', message: 'محاولات كثيرة، حاول لاحقاً' },
+  });
+  router.get(
+    '/api/admin/customers/:userId/api-keys',
+    requireOwner,
+    customerApiKeyHandlers.getKeys,
+  );
+  router.put(
+    '/api/admin/customers/:userId/api-keys',
+    requireOwner,
+    customerApiKeyPutLimiter,
+    customerApiKeyHandlers.putKey,
+  );
+
   // Pre-activations: admin pre-registers an email + duration so that when the
   // customer signs up with that email their account is auto-activated.
   router.post('/api/admin/pre-activations', requireOwner, async (req, res) => {
@@ -288,4 +360,5 @@ module.exports = {
   canOpenAdminConsole,
   createAdminRoutes,
   createAdminApiKeysHandlers,
+  createCustomerApiKeysHandlers,
 };
