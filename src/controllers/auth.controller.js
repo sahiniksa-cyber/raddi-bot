@@ -13,6 +13,22 @@ function saveSession(req) {
   });
 }
 
+/**
+ * Decide the role for a newly registered user.
+ *
+ * Auto-promoting the first user to `admin` is a security risk: a hostile
+ * signup before the real owner registers could seize the platform. So the
+ * first-user bootstrap is now opt-in via ALLOW_FIRST_USER_ADMIN=true.
+ *
+ * @param {number} userCount  existing user count before this registration
+ * @param {object} env        environment (defaults to process.env)
+ * @returns {'admin'|'user'}
+ */
+function decideRegisterRole(userCount, env = process.env) {
+  if (userCount === 0 && env.ALLOW_FIRST_USER_ADMIN === 'true') return 'admin';
+  return 'user';
+}
+
 function publicUser(row) {
   return {
     id: row.id,
@@ -65,7 +81,15 @@ function createAuthController() {
         if (existing.rows[0]) return res.json({ success: false, message: 'هذا الإيميل مسجل مسبقاً' });
 
         const count = await db.query('SELECT COUNT(*)::int AS count FROM users');
-        const role = count.rows[0].count === 0 ? 'admin' : 'user';
+        const userCount = count.rows[0].count;
+        const role = decideRegisterRole(userCount);
+        if (userCount === 0 && role !== 'admin') {
+          console.warn(
+            '[auth] First user registered WITHOUT admin promotion. ' +
+            'To grant admin, set ALLOW_FIRST_USER_ADMIN=true before the first signup, ' +
+            "or promote this user via the database (UPDATE users SET role='admin' WHERE email=...).",
+          );
+        }
         const hash = await bcrypt.hash(password, 12);
         const id = uuidv4();
         const result = await db.query(
@@ -135,4 +159,4 @@ function createAuthController() {
   };
 }
 
-module.exports = { createAuthController };
+module.exports = { createAuthController, decideRegisterRole };

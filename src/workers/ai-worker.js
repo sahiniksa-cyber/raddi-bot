@@ -7,7 +7,7 @@ const { Worker } = require('bullmq');
 
 const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
-const { QUEUE_NAMES, enqueueOutgoingWhatsapp } = require('../queues/message-queue');
+const { QUEUE_NAMES, enqueueOutgoingWhatsapp, enqueueAiReply } = require('../queues/message-queue');
 const { buildEscalationJobKey } = require('../queues/outgoing-job-key');
 const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
@@ -30,6 +30,7 @@ const RATE_LIMIT_MAX = parseInt(process.env.AI_WORKER_RATE_LIMIT_MAX || '15', 10
 const RATE_LIMIT_DURATION_MS = parseInt(process.env.AI_WORKER_RATE_LIMIT_DURATION_MS || '60000', 10);
 const DB_READY_TIMEOUT_MS = parseInt(process.env.AI_WORKER_DB_READY_TIMEOUT_MS || '120000', 10);
 const DB_READY_INTERVAL_MS = parseInt(process.env.AI_WORKER_DB_READY_INTERVAL_MS || '2000', 10);
+const AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '9000', 10);
 
 function createLogger(jobId) {
   const prefix = `[${WORKER_NAME}:${jobId || 'manual'}]`;
@@ -228,6 +229,47 @@ async function loadPendingInboundMessages({
   return [];
 }
 
+/**
+ * Self-healing follow-up enqueue (FIX 1). The AI job key is a per-conversation
+ * singleton (`conversation-<id>`), so a message that arrives while the job is
+ * `active` is silently dropped by BullMQ (the re-add with the same jobId is a
+ * no-op). After a job COMPLETES we re-check for inbound messages still pending
+ * (created after the last assistant reply, status queued_for_ai), and if any
+ * exist we enqueue a fresh debounced AI job so they are not stranded until the
+ * 60s ai-recovery loop.
+ *
+ * Uses the same detection query as `loadPendingInboundMessages` (scoped by
+ * user_id AND conversation_id). After a normal job all loaded messages are
+ * marked `answered_by_ai`, so this returns 0 and nothing is enqueued — there
+ * is no re-enqueue loop.
+ */
+async function enqueueFollowupIfPending({
+  database = db,
+  userId,
+  conversationId,
+  enqueue = enqueueAiReply,
+  debounceMs = AI_REPLY_DEBOUNCE_MS,
+} = {}) {
+  if (!userId || !conversationId || !database?.isConfigured?.()) {
+    return { enqueued: false, pending: 0 };
+  }
+
+  const pending = await loadPendingInboundMessages({
+    database,
+    userId,
+    conversationId,
+  });
+
+  if (!pending.length) return { enqueued: false, pending: 0 };
+
+  await enqueue(
+    { userId, conversationId, source: 'followup' },
+    { jobKey: `conversation-${conversationId}`, delay: debounceMs },
+  );
+
+  return { enqueued: true, pending: pending.length };
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -382,6 +424,63 @@ async function markInboundMessageFailed({ database = db, messageId, error }) {
   );
 }
 
+/**
+ * Send a canned keyword auto-reply (instant branch). Extracted so the
+ * answered-marking invariant (FIX 2) is unit-testable without Redis/Postgres.
+ * Deps are injectable; defaults bind to the module's real implementations.
+ */
+async function sendInstantAutoReply({
+  job,
+  payload = {},
+  conversation,
+  userId,
+  instantReply,
+  enrichedMessages = [],
+  store = storeAssistantMessage,
+  enqueueOutgoing = enqueueOutgoingWhatsapp,
+  markAnswered = markInboundMessagesAnswered,
+  setJobStatus = updateJobStatus,
+}) {
+  const replyMessageId = await store({
+    userId,
+    conversationId: conversation.id,
+    sender: conversation.sender,
+    reply: instantReply,
+    jobId: job.id,
+  });
+
+  await enqueueOutgoing({
+    userId,
+    conversationId: conversation.id,
+    messageId: payload.messageId,
+    providerMessageId: payload.providerMessageId,
+    replyMessageId,
+    sender: conversation.sender,
+    reply: instantReply,
+    replyDelayMs: 0,
+    replyDelayPreset: 'instant-keyword',
+    source: 'auto_reply_keyword',
+  }, {
+    jobKey: String(replyMessageId),
+    delay: 0,
+  });
+
+  // FIX 2: mark the inbound messages answered so ai-recovery does not
+  // reprocess them (which previously threw on empty text and ended in a
+  // confusing filler reply).
+  await markAnswered({
+    messageIds: enrichedMessages.map(message => message.id),
+  });
+
+  await setJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+    status: 'completed',
+    finished_at: new Date(),
+    attempts: job.attemptsMade + 1,
+  });
+
+  return { replyMessageId, queuedForSend: true, source: 'auto_reply_keyword' };
+}
+
 async function processAiReply(job) {
   const payload = job.data || {};
   const logger = createLogger(job.id);
@@ -438,7 +537,7 @@ async function processAiReply(job) {
       fallbackText,
     });
     const mediaAnalyzer = new OpenAIMediaAnalyzer({
-      apiKey: config.openaiApiKey || process.env.OPENAI_API_KEY || '',
+      apiKey: config.openaiApiKey || '',
       logger,
     });
     const enrichedMessages = await enrichInboundMessagesWithMedia({
@@ -467,39 +566,20 @@ async function processAiReply(job) {
       return { skipped: true, reason: quota.reason };
     }
 
-    const instantReply = findAutoReply(config, text);
+    // Only apply an instant keyword auto-reply when the batch is a single
+    // message. When the customer sent multiple rapid messages, skip the canned
+    // reply and let the full AI answer all of them (otherwise a keyword in one
+    // message would hijack the whole batch and the other questions are lost).
+    const instantReply = enrichedMessages.length <= 1 ? findAutoReply(config, text) : '';
     if (instantReply) {
-      const replyMessageId = await storeAssistantMessage({
+      return await sendInstantAutoReply({
+        job,
+        payload,
+        conversation,
         userId,
-        conversationId: conversation.id,
-        sender: conversation.sender,
-        reply: instantReply,
-        jobId: job.id,
+        instantReply,
+        enrichedMessages,
       });
-
-      await enqueueOutgoingWhatsapp({
-        userId,
-        conversationId: conversation.id,
-        messageId: payload.messageId,
-        providerMessageId: payload.providerMessageId,
-        replyMessageId,
-        sender: conversation.sender,
-        reply: instantReply,
-        replyDelayMs: 0,
-        replyDelayPreset: 'instant-keyword',
-        source: 'auto_reply_keyword',
-      }, {
-        jobKey: String(replyMessageId),
-        delay: 0,
-      });
-
-      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
-        status: 'completed',
-        finished_at: new Date(),
-        attempts: job.attemptsMade + 1,
-      });
-
-      return { replyMessageId, queuedForSend: true, source: 'auto_reply_keyword' };
     }
 
     const history = await buildHistoryForReply({
@@ -507,13 +587,14 @@ async function processAiReply(job) {
       conversationId: conversation.id,
       config,
       inboundText: text,
+      userId,
     });
 
     // Customer profile (best-effort). Never blocks the reply: any failure
     // here is swallowed and we proceed without a profile.
     let customerProfile = null;
     try {
-      customerProfile = await getCustomerProfile({ conversationId: conversation.id, database: db });
+      customerProfile = await getCustomerProfile({ conversationId: conversation.id, database: db, userId });
     } catch (profileErr) {
       logger.warn('profile', `getProfile failed: ${profileErr.message}`);
     }
@@ -547,6 +628,7 @@ async function processAiReply(job) {
         candidate: customerReply,
         lookback: 3,
         threshold: 0.85,
+        userId,
       });
       if (dup) {
         logger.warn('dedup', 'duplicate assistant reply detected — regenerating', {
@@ -788,8 +870,35 @@ async function main() {
 
   const worker = createWorker();
 
-  worker.on('completed', (job) => {
+  worker.on('completed', async (job, returnvalue) => {
     console.log(`${new Date().toISOString()} [${WORKER_NAME}] completed ${job.id}`);
+    // Self-healing follow-up (FIX 1): a message that arrived while this job was
+    // `active` would otherwise be stranded (singleton jobId no-op). The job is
+    // in `completed` state here, so a fresh enqueue's ensureReusableQueueJobId
+    // will remove it and the add will succeed. Never crash the worker.
+    //
+    // Skip the follow-up when the job SKIPPED work (escalation mute / no quota):
+    // those paths intentionally leave the inbound rows `queued_for_ai` without
+    // answering them, so re-enqueueing here would spin a tight loop for the
+    // whole mute window. The slower ai-recovery loop (60s) still reprocesses
+    // them once the skip condition clears.
+    if (returnvalue && returnvalue.skipped) return;
+    try {
+      const data = job?.data || {};
+      const result = await enqueueFollowupIfPending({
+        userId: data.userId,
+        conversationId: data.conversationId,
+      });
+      if (result.enqueued) {
+        console.log(
+          `${new Date().toISOString()} [${WORKER_NAME}] re-enqueued follow-up for conversation=${data.conversationId} (${result.pending} pending)`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `${new Date().toISOString()} [${WORKER_NAME}] follow-up enqueue failed for ${job?.id}: ${err.message}`,
+      );
+    }
   });
 
   worker.on('failed', async (job, err) => {
@@ -825,7 +934,9 @@ if (require.main === module) {
 module.exports = {
   buildCombinedInboundText,
   createWorker,
+  enqueueFollowupIfPending,
   enrichInboundMessagesWithMedia,
+  sendInstantAutoReply,
   getConversationEscalationStats,
   isConversationEscalationMuted,
   isTransientDatabaseError,

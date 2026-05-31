@@ -32,6 +32,7 @@ const { createAdminRoutes } = require('./routes/admin.routes');
 const { createBillingRoutes } = require('./routes/billing.routes');
 const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
+const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
@@ -69,6 +70,15 @@ function ensureDatabaseConfigured() {
 
 function sessionSecret() {
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  // No SESSION_SECRET: fall back to a per-disk random secret. This is fine for
+  // single-replica/local dev, but on multi-replica deploys each replica reads a
+  // different file, invalidating sessions across replicas (and across restarts
+  // if the disk is ephemeral). Set SESSION_SECRET in production.
+  console.warn(
+    '[server] SESSION_SECRET is not set — using a random on-disk fallback secret. ' +
+    'Sessions will NOT survive across replicas or across restarts on ephemeral disks. ' +
+    'Set SESSION_SECRET in production.',
+  );
   const file = path.join(DATA_DIR, '.session-secret');
   try { return fs.readFileSync(file, 'utf8').trim(); } catch (_) {}
   const secret = require('crypto').randomBytes(48).toString('hex');
@@ -583,6 +593,24 @@ function createApp() {
       err => { console.warn(`[health-check] ai pipeline stats failed: ${err.message}`); return { stuckCount: 0, lastReplyAt: null }; },
     );
 
+    // Surface API-key/auth problems prominently: when the AI worker can't
+    // reach the provider it marks the inbound message `ai_failed` and stores a
+    // clear error in raw_payload.error, then sends a generic filler. The owner
+    // needs to see the *cause*, not just the filler.
+    const recentAiFailures = db.query(
+      `SELECT raw_payload->>'error' AS error
+       FROM messages
+       WHERE user_id = $1
+         AND status = 'ai_failed'
+         AND created_at > NOW() - interval '24 hours'
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [userId],
+    ).then(
+      r => r.rows.map(row => row.error).filter(Boolean),
+      err => { console.warn(`[health-check] recent ai failures query failed: ${err.message}`); return []; },
+    );
+
     const queueCounts = Promise.all([
       aiReplies.getWaitingCount(),
       aiReplies.getActiveCount(),
@@ -595,7 +623,7 @@ function createApp() {
       err => { console.warn(`[health-check] queue counts failed: ${err.message}`); return { error: err.message }; },
     );
 
-    const [redisResult, aiStats, queues] = await Promise.all([redisPing, aiPipelineStats, queueCounts]);
+    const [redisResult, aiStats, queues, aiFailureErrors] = await Promise.all([redisPing, aiPipelineStats, queueCounts, recentAiFailures]);
 
     const checks = [
       { name: 'قاعدة البيانات', ok: true, msg: 'PostgreSQL' },
@@ -640,7 +668,16 @@ function createApp() {
     const hasKey = !!(bot.config.googleApiKey?.trim() || bot.config.openrouterApiKey?.trim() || bot.config.openaiApiKey?.trim() || bot.config.anthropicApiKey?.trim());
     checks.push({ name: 'مفتاح API', ok: hasKey, msg: hasKey ? 'مضبوط' : 'لا يوجد مفتاح — أضف مفتاح في الإعدادات' });
 
-    res.json({ success: true, checks });
+    // Dedicated, prominent flag when recent ai_failed messages point to a
+    // missing/invalid API key — so the cause isn't buried behind the filler.
+    const apiKeyProblem = detectApiKeyError(aiFailureErrors);
+    if (apiKeyProblem) {
+      const apiKeyMessage = 'مفتاح API ناقص أو غير صحيح — راجع إعدادات المفتاح';
+      checks.push({ name: 'مفتاح API', ok: false, msg: apiKeyMessage });
+      return res.json({ success: true, checks, apiKeyProblem: true, apiKeyMessage });
+    }
+
+    res.json({ success: true, checks, apiKeyProblem: false });
   }));
 
   app.use((err, req, res, next) => {

@@ -1,0 +1,143 @@
+'use strict';
+
+// Safeguards for the 2026-05-31 connection fixes:
+// FIX 1 — handleConnectionUpdate tears down the dead socket (removeAllListeners/end/ws.close)
+//         and bumps _socketGeneration on loggedOut and connectionReplaced, so the old
+//         socket's listeners don't leak and in-flight events are treated as stale.
+// FIX 2 — OpenAIMediaAnalyzer no longer falls back to process.env.OPENAI_API_KEY; an
+//         empty key returns a safe not-ok result without any network call.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { DisconnectReason } = require('@whiskeysockets/baileys');
+const { BaileysConnectionManager } = require('../src/services/whatsapp/baileys-connection-manager');
+const { OpenAIMediaAnalyzer } = require('../src/services/ai/openai-media-analysis');
+
+function createManager(overrides = {}) {
+  return new BaileysConnectionManager({
+    userId: 'user-1',
+    dataDir: __dirname,
+    database: {},
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      log: () => {},
+    },
+    ...overrides,
+  });
+}
+
+function createFakeSock(calls) {
+  return {
+    ev: { removeAllListeners: () => calls.push('removeAllListeners') },
+    end: () => calls.push('end'),
+    ws: { close: () => calls.push('ws.close') },
+    user: { id: '' },
+  };
+}
+
+function makeCloseUpdate(statusCode) {
+  return {
+    connection: 'close',
+    lastDisconnect: {
+      error: { message: 'closed', output: { statusCode } },
+    },
+  };
+}
+
+// ---------- FIX 1 ----------
+
+test('FIX 1: loggedOut close tears down the socket and bumps generation', async () => {
+  const manager = createManager();
+  const calls = [];
+  manager._running = true;
+  manager._socketGeneration = 5;
+  manager.sock = createFakeSock(calls);
+  manager.client = {};
+  // Avoid touching the DB for auth clearing.
+  manager.clearAuthCache = async () => {};
+
+  await manager.handleConnectionUpdate(makeCloseUpdate(DisconnectReason.loggedOut), 0, 5);
+
+  assert.deepEqual(calls, ['removeAllListeners', 'end', 'ws.close'], 'socket must be torn down in order');
+  assert.equal(manager.sock, null, 'sock reference must be cleared');
+  assert.equal(manager.client, null, 'client reference must be cleared');
+  assert.equal(manager._socketGeneration, 6, 'generation must increment');
+  assert.equal(manager._running, false);
+  assert.equal(manager.status, 'stopped');
+});
+
+test('FIX 1: connectionReplaced (440) close tears down the socket and bumps generation', async () => {
+  const manager = createManager();
+  const calls = [];
+  let conflictEmitted = false;
+  manager._running = true;
+  manager._socketGeneration = 2;
+  manager.sock = createFakeSock(calls);
+  manager.client = {};
+  manager.on('connection_conflict', () => { conflictEmitted = true; });
+
+  await manager.handleConnectionUpdate(makeCloseUpdate(DisconnectReason.connectionReplaced), 0, 2);
+
+  assert.deepEqual(calls, ['removeAllListeners', 'end', 'ws.close'], 'socket must be torn down in order');
+  assert.equal(manager.sock, null, 'sock reference must be cleared');
+  assert.equal(manager.client, null, 'client reference must be cleared');
+  assert.equal(manager._socketGeneration, 3, 'generation must increment');
+  assert.equal(manager._running, false);
+  assert.equal(manager.status, 'stopped');
+  assert.ok(conflictEmitted, 'connection_conflict event must still be emitted');
+});
+
+// ---------- FIX 2 ----------
+
+test('FIX 2: empty apiKey returns a safe not-ok result without a network call', async () => {
+  const saved = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    const analyzer = new OpenAIMediaAnalyzer({ apiKey: '' });
+    assert.equal(analyzer.apiKey, '', 'env fallback must not populate the key');
+
+    // A valid-looking image payload so we get past payload normalization and reach getClient().
+    const onePixelPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const result = await analyzer.analyze({
+      kind: 'image',
+      mimeType: 'image/png',
+      data: onePixelPng.toString('base64'),
+    });
+
+    assert.equal(result.ok, false, 'must return not-ok with no key');
+    assert.equal(result.reason, 'missing_openai_key', 'must skip rather than call the API');
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = saved;
+  }
+});
+
+test('FIX 2: process.env.OPENAI_API_KEY is NOT used as a fallback', () => {
+  const saved = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'sk-owner-secret-should-not-leak';
+  try {
+    const analyzer = new OpenAIMediaAnalyzer({ apiKey: '' });
+    assert.equal(analyzer.apiKey, '', 'owner env key must never become the analyzer key');
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = saved;
+  }
+});
+
+test('FIX 2: an explicit apiKey is trimmed and used as-is', () => {
+  const saved = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'sk-owner-secret-should-not-leak';
+  try {
+    const analyzer = new OpenAIMediaAnalyzer({ apiKey: '  sk-customer-key-1234567890  ' });
+    assert.equal(analyzer.apiKey, 'sk-customer-key-1234567890', 'explicit key must be trimmed and used');
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = saved;
+  }
+});

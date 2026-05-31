@@ -1312,7 +1312,13 @@ body{background-attachment:scroll}
     <div style="font-size:54px;margin-bottom:12px">🎓</div>
     <h2>دربني — أنا أعلّم البوت أسلوبك</h2>
     <p>سأسألك أسئلة عميقة عن طريقة تعاملك مع العملاء.<br>من إجاباتك فقط، سأبني للبوت برومنت كامل يحاكي أسلوبك بالضبط — بدون أي إعدادات يدوية.</p>
-    <button class="train-start-btn" onclick="startTraining()">▶ ابدأ التدريب</button>
+    <button class="train-start-btn" id="trainStartBtn" onclick="startTraining()">▶ ابدأ التدريب</button>
+    <!-- Previous answers review (shown when saved trainAnswers exist) -->
+    <div id="trainPrevPanel" style="display:none;margin-top:22px;text-align:right">
+      <div style="font-size:15px;font-weight:900;color:var(--text);margin-bottom:10px">📋 إجاباتك السابقة</div>
+      <div style="font-size:12.5px;color:var(--text-soft);margin-bottom:14px;line-height:1.7">هذي الإجابات اللي عبّيتها آخر مرة. تقدر تبدأ جلسة جديدة وتعدّل عليها.</div>
+      <div id="trainPrevList" class="train-chat" style="display:flex;flex-direction:column;gap:10px;max-height:none;text-align:right"></div>
+    </div>
   </div>
 
   <!-- Session (during training) -->
@@ -1846,6 +1852,10 @@ function fillForm(c){
   renderKW(c.autoReplyKeywords||{});
   renderProd(c.products||[]);
   renderEscContacts(c.escalationContacts||[]);
+
+  // Training: remember previously saved answers and show the review panel.
+  savedTrainAnswers=Array.isArray(c.trainAnswers)?c.trainAnswers:[];
+  renderTrainPrev(savedTrainAnswers);
 }
 
 async function clearAllConversations(){
@@ -2531,7 +2541,7 @@ const TRAIN_QS=[
   {phase:3, q:'آخر شي — لو تقدر تقول للبوت جملة وحدة يمشي عليها في كل محادثة، وش تكون؟', hint:'القاعدة الذهبية — الشي اللي لو ماشي عليه كل شي يمشي صح'},
 ];
 
-let trainStep=0, trainAnswers=[];
+let trainStep=0, trainAnswers=[], savedTrainAnswers=[];
 
 function startTraining(){
   trainStep=0; trainAnswers=[];
@@ -2570,7 +2580,13 @@ function showTrainQuestion(){
   el.innerHTML=esc(q.q)+(q.hint?`<div class="train-hint">💡 ${esc(q.hint)}</div>`:'');
   chat.appendChild(el);
   chat.scrollTop=chat.scrollHeight;
-  const inp=document.getElementById('trainInput');inp.value='';inp.focus();
+  const inp=document.getElementById('trainInput');
+  // Pre-fill: if this same question was answered before, offer it as editable text.
+  const prev=savedTrainAnswers.find(p=>p&&p.q===q.q);
+  if(prev&&prev.a){inp.value=prev.a;}
+  else{inp.value='';}
+  inp.placeholder='اكتب إجابتك هنا...';
+  inp.focus();
 }
 
 function submitTrainAnswer(){
@@ -2602,8 +2618,51 @@ async function finishTraining(){
     document.getElementById('trainSession').style.display='none';
     document.getElementById('trainResult').style.display='block';
     document.getElementById('trainResultText').value=d.instructions;
+    // Persist the collected answers so they reload on the next visit.
+    // Awaited so `config` holds trainAnswers before any later saveConf (apply).
+    await persistTrainAnswers();
     toast('✅ تم! راجع البرومنت وطبّقه');
   }catch(_){toast('❌ تعذر التحليل',true);document.getElementById('trainSendBtn').disabled=false;}
+}
+
+// Save the current trainAnswers into the persisted per-user config.
+// Reuses the existing /api/config merge endpoint and preserves all other fields
+// by spreading the in-memory `config` object (same pattern as saveConf).
+async function persistTrainAnswers(){
+  if(!Array.isArray(trainAnswers)||!trainAnswers.length)return;
+  const nc={...config,trainAnswers:trainAnswers.slice()};
+  try{
+    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(nc)});
+    if(r.status===401){window.location.href='/login';return;}
+    const d=await r.json();
+    if(d.success){config=nc;renderTrainPrev(nc.trainAnswers);}
+  }catch(_){/* non-fatal: answers still applied this session */}
+}
+
+// Render the "previous answers" review panel on the training hero.
+function renderTrainPrev(answers){
+  const panel=document.getElementById('trainPrevPanel');
+  const list=document.getElementById('trainPrevList');
+  const startBtn=document.getElementById('trainStartBtn');
+  if(!panel||!list)return;
+  if(!Array.isArray(answers)||!answers.length){
+    panel.style.display='none';
+    list.innerHTML='';
+    if(startBtn)startBtn.textContent='▶ ابدأ التدريب';
+    return;
+  }
+  list.innerHTML='';
+  answers.forEach(item=>{
+    const q=document.createElement('div');q.className='train-q';
+    q.style.alignSelf='flex-start';q.style.maxWidth='100%';
+    q.innerHTML=esc(item&&item.q||'');
+    const a=document.createElement('div');a.className='train-a';
+    a.style.maxWidth='100%';
+    a.textContent=item&&item.a||'';
+    list.appendChild(q);list.appendChild(a);
+  });
+  panel.style.display='block';
+  if(startBtn)startBtn.textContent='🔄 ابدأ جلسة جديدة';
 }
 
 function applyTrainResult(){

@@ -7,14 +7,23 @@ function normalizeMemoryLimit(config = {}) {
   return Math.max(2, parseInt(config.memoryMessages, 10) || 50);
 }
 
-async function loadHistory(database, conversationId, limit) {
+async function loadHistory(database, conversationId, limit, userId) {
+  // Defense-in-depth: when the caller threads a userId, scope the query by it
+  // too. Backward compatible — without a userId the params stay [conv, limit].
+  const params = [conversationId, limit];
+  let userFilter = '';
+  if (userId) {
+    params.push(userId);
+    userFilter = `\n       AND user_id = $${params.length}`;
+  }
+
   const result = await database.query(
     `SELECT role, content, status, direction
      FROM messages
-     WHERE conversation_id = $1
+     WHERE conversation_id = $1${userFilter}
      ORDER BY created_at DESC
      LIMIT $2`,
-    [conversationId, limit],
+    params,
   );
 
   return result.rows
@@ -31,9 +40,9 @@ function filterHistoryForAi(rows = []) {
   }).map(row => ({ role: row.role, content: row.content }));
 }
 
-async function buildHistoryForReply({ database, conversationId, config, inboundText }) {
+async function buildHistoryForReply({ database, conversationId, config, inboundText, userId }) {
   const memSize = normalizeMemoryLimit(config);
-  const rawHistory = await loadHistory(database, conversationId, memSize);
+  const rawHistory = await loadHistory(database, conversationId, memSize, userId);
   const history = filterHistoryForAi(rawHistory);
   const text = String(inboundText || '').trim();
   const last = history[history.length - 1];

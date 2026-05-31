@@ -438,6 +438,13 @@ class BaileysConnectionManager extends EventEmitter {
         await this.clearAuthCache('Baileys logged out');
         this.setStatus('stopped', 'logged_out');
         this._running = false;
+        this._socketGeneration++;
+        const sock = this.sock;
+        this.sock = null;
+        this.client = null;
+        try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
+        try { sock?.end?.(new Error('logged_out')); } catch (_) {}
+        try { sock?.ws?.close?.(); } catch (_) {}
         this.emit('disconnected', technicalMessage);
         return;
       }
@@ -446,6 +453,13 @@ class BaileysConnectionManager extends EventEmitter {
         this.authFailureCount++;
         this.setStatus('stopped', 'connection_conflict');
         this._running = false;
+        this._socketGeneration++;
+        const sock = this.sock;
+        this.sock = null;
+        this.client = null;
+        try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
+        try { sock?.end?.(new Error('connection_replaced')); } catch (_) {}
+        try { sock?.ws?.close?.(); } catch (_) {}
         this.emit('disconnected', this.lastError);
         this.emit('connection_conflict', { reason: technicalMessage, message: this.lastError });
         return;
