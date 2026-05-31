@@ -149,13 +149,14 @@ class BaileysConnectionManager extends EventEmitter {
     this._retryTimer = null;
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
+    this._qrStuckTimer = null;
     this._version = null;
     this._socketGeneration = 0;
     this.startupTime = Date.now();
+    this._hasEverConnected = false;
     this._stableTimer = null;
     this._effectiveRetryCount = 0;
     this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
-    this._acceptWindowInitialized = true;
   }
 
   computeAcceptMessagesAfterMs() {
@@ -209,14 +210,6 @@ class BaileysConnectionManager extends EventEmitter {
     this.ready = false;
     this.lastError = null;
     this.qr = null;
-    this.startupTime = Date.now();
-    // acceptMessagesAfterMs is set once at construction time. Resetting it on every
-    // reconnect would invalidate the grace window we already paid for and could drop
-    // messages that arrived during the brief disconnect.
-    if (retryCount === 0 && !this._acceptWindowInitialized) {
-      this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
-      this._acceptWindowInitialized = true;
-    }
     this.setStatus('waiting_qr', 'start');
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
@@ -267,10 +260,12 @@ class BaileysConnectionManager extends EventEmitter {
   async stop() {
     clearTimeout(this._retryTimer);
     clearTimeout(this._qrWatchdogTimer);
+    clearTimeout(this._qrStuckTimer);
     clearTimeout(this._stableTimer);
     this.stopHeartbeat();
     this._retryTimer = null;
     this._qrWatchdogTimer = null;
+    this._qrStuckTimer = null;
     this._stableTimer = null;
     this._running = false;
     this._socketGeneration++;
@@ -281,6 +276,7 @@ class BaileysConnectionManager extends EventEmitter {
     const sock = this.sock;
     this.sock = null;
     this.client = null;
+    try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
     try { sock?.end?.(new Error('stopped')); } catch (_) {}
     try { sock?.ws?.close?.(); } catch (_) {}
   }
@@ -296,10 +292,34 @@ class BaileysConnectionManager extends EventEmitter {
     if (typeof this._qrWatchdogTimer.unref === 'function') this._qrWatchdogTimer.unref();
   }
 
+  startQrStuckWatchdog(retryCount, socketGeneration) {
+    clearTimeout(this._qrStuckTimer);
+    const timeout = parseInt(process.env.WA_QR_STUCK_TIMEOUT_MS || '300000', 10);
+    this._qrStuckTimer = setTimeout(() => {
+      this._qrStuckTimer = null;
+      if (!this._running || this.ready) return;
+      if (socketGeneration !== this._socketGeneration) return;
+      this.log('warn', 'qr', `Baileys QR un-scanned for ${Math.round(timeout / 1000)}s; restarting`);
+      this.scheduleReconnect(retryCount, 'qr stuck unscanned', socketGeneration);
+    }, timeout);
+    if (typeof this._qrStuckTimer.unref === 'function') this._qrStuckTimer.unref();
+  }
+
   startHeartbeat() {
     this.stopHeartbeat();
     this._heartbeatTimer = setInterval(() => {
       if (!this._running || !this.ready) return;
+      // Passive observer — sendPresenceUpdate would mark the account online and
+      // undo markOnlineOnConnect:false. readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED.
+      const readyState = this.sock?.ws?.readyState;
+      if (readyState !== 1) {
+        this.heartbeatFailures++;
+        this.log('warn', 'heartbeat', `socket readyState=${readyState} failures=${this.heartbeatFailures}`);
+        if (this.heartbeatFailures >= TIMERS.HEARTBEAT_FAIL_THRESHOLD) {
+          this.scheduleReconnect(0, `heartbeat socket dead readyState=${readyState}`);
+        }
+        return;
+      }
       this.heartbeatFailures = 0;
       this.emitState('heartbeat_ok');
     }, TIMERS.HEARTBEAT_INTERVAL_MS);
@@ -336,6 +356,7 @@ class BaileysConnectionManager extends EventEmitter {
     const sock = this.sock;
     this.sock = null;
     this.client = null;
+    try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
     try { sock?.end?.(new Error('reconnect')); } catch (_) {}
     try { sock?.ws?.close?.(); } catch (_) {}
     this._retryTimer = setTimeout(() => {
@@ -367,6 +388,7 @@ class BaileysConnectionManager extends EventEmitter {
       this.log('info', 'qr', `Baileys QR ready version=${this.qrVersion}`);
       this.setStatus('qr_ready', 'qr');
       this.emit('qr', { qr: this.qr, qrVersion: this.qrVersion });
+      this.startQrStuckWatchdog(retryCount, socketGeneration);
     }
 
     if (update.connection === 'connecting') {
@@ -377,7 +399,10 @@ class BaileysConnectionManager extends EventEmitter {
     if (update.connection === 'open') {
       clearTimeout(this._retryTimer);
       this._retryTimer = null;
+      clearTimeout(this._qrStuckTimer);
+      this._qrStuckTimer = null;
       this.ready = true;
+      this._hasEverConnected = true;
       this.lastProbeState = 'CONNECTED';
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
       this.qr = null;
@@ -466,6 +491,10 @@ class BaileysConnectionManager extends EventEmitter {
   }
 
   shouldDropStartupBulkBatch(candidates, distinctSenders) {
+    // Only protect the first-ever connection of this process — bursts after a
+    // reconnect are legitimate customer messages, not WhatsApp server backfill.
+    // provider_message_id uniqueness already prevents duplicate ingest.
+    if (this._hasEverConnected) return false;
     const windowMs = parseInt(process.env.WA_STARTUP_BULK_WINDOW_MS || '30000', 10);
     if (Date.now() - this.startupTime > windowMs) return false;
     const minMessages = parseInt(process.env.WA_STARTUP_BULK_MIN_MESSAGES || '6', 10);
