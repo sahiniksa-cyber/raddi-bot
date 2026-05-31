@@ -63,14 +63,22 @@ function extractFromText(text) {
  * exists or when the table is missing (so the worker keeps running on
  * pre-migration databases).
  */
-async function getProfile({ conversationId, database = db } = {}) {
+async function getProfile({ conversationId, database = db, userId } = {}) {
   if (!conversationId) return null;
   if (!database?.isConfigured?.()) return null;
   try {
+    // Defense-in-depth: scope by userId when the caller threads it. Backward
+    // compatible — without a userId the params stay [conversationId].
+    const params = [conversationId];
+    let userFilter = '';
+    if (userId) {
+      params.push(userId);
+      userFilter = ` AND user_id = $${params.length}`;
+    }
     const r = await database.query(
       `SELECT name, email, phone, last_order_ref, preferences, open_question, notes
-         FROM customer_profiles WHERE conversation_id = $1`,
-      [conversationId],
+         FROM customer_profiles WHERE conversation_id = $1${userFilter}`,
+      params,
     );
     return r.rows[0] || null;
   } catch (_err) {

@@ -122,7 +122,7 @@ async function enqueueAiReply(payload, options = {}) {
   const queueOptions = buildAiReplyQueueOptions(payload, options);
   const jobKey = queueOptions.jobKey;
   await recordJob(QUEUE_NAMES.aiReplies, jobKey, payload, payload);
-  await ensureReusableQueueJobId(aiReplies, queueOptions.jobId);
+  await ensureReusableQueueJobId(aiReplies, queueOptions.jobId, queueOptions.delay);
   return aiReplies.add('generate-ai-reply', payload, {
     jobId: queueOptions.jobId || undefined,
     priority: queueOptions.priority,
@@ -147,7 +147,7 @@ function buildAiReplyQueueOptions(payload = {}, options = {}) {
   };
 }
 
-async function ensureReusableQueueJobId(queue, jobId) {
+async function ensureReusableQueueJobId(queue, jobId, desiredDelayMs) {
   if (!queue || !jobId) return { removed: false, state: null };
   const existing = await queue.getJob(jobId).catch(() => null);
   if (!existing) return { removed: false, state: null };
@@ -156,6 +156,21 @@ async function ensureReusableQueueJobId(queue, jobId) {
   if (state === 'completed' || state === 'failed') {
     await existing.remove();
     return { removed: true, state };
+  }
+
+  // Debounce reset: when a delayed job already exists for this key and a new
+  // message arrives, BullMQ ignores the `delay` passed to a re-add for the
+  // same jobId, so the debounce window would stay anchored to the FIRST
+  // message. Restart the timer from the latest message by changing the delay.
+  if (state === 'delayed' && Number(desiredDelayMs) > 0 && typeof existing.changeDelay === 'function') {
+    try {
+      await existing.changeDelay(Number(desiredDelayMs));
+      return { removed: false, state, delayChanged: true };
+    } catch (err) {
+      // The job may have moved states concurrently (e.g. became active).
+      // Fall through gracefully without resetting the timer.
+      return { removed: false, state, error: err.message };
+    }
   }
 
   if (state === 'active') {

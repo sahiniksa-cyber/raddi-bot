@@ -80,7 +80,10 @@ class OpenAIMediaAnalyzer {
     logger = console,
     maxBytes = DEFAULT_MAX_MEDIA_BYTES,
   } = {}) {
-    this.apiKey = apiKey || process.env.OPENAI_API_KEY || '';
+    // No process.env.OPENAI_API_KEY fallback: the caller resolves the per-customer/admin
+    // key explicitly. An env-var fallback would silently bill the platform owner for
+    // analyzing customers' media when no key is configured for that customer.
+    this.apiKey = String(apiKey || '').trim();
     this.client = client;
     this.imageModel = imageModel;
     this.audioModel = audioModel;
