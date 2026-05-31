@@ -87,6 +87,7 @@ class RuntimeBot {
     this._leaseRenewTimer = null;
     this._sessionBackupTimer = null;
     this.lastPersistedSession = null;
+    this._persistQueue = Promise.resolve();
     this.instanceId = process.env.RAILWAY_REPLICA_ID ||
       `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString('hex')}`;
     this.totalChatsHandled = 0;
@@ -157,6 +158,14 @@ class RuntimeBot {
     });
     this.connection.on('connection_conflict', () => {
       if (this.sessionDesiredState !== 'running') return;
+      // Stop renewing the lease for a connection that's actually stopped, and
+      // release it so a competing instance can take over immediately instead of
+      // waiting the full lease TTL.
+      clearInterval(this._leaseRenewTimer);
+      this._leaseRenewTimer = null;
+      this.releaseConnectionLease().catch((err) => {
+        this.logger.warn('connection', `440: failed to release lease: ${err.message}`);
+      });
       const retryMs = this.leaseTtlMs() + 5000;
       clearTimeout(this._autoRecoverTimer);
       this._autoRecoverTimer = setTimeout(() => {
@@ -250,7 +259,15 @@ class RuntimeBot {
     }
   }
 
-  async persistSessionState({ desiredState = this.sessionDesiredState, state = this.connection.state() } = {}) {
+  persistSessionState({ desiredState = this.sessionDesiredState, state = this.connection.state() } = {}) {
+    const next = this._persistQueue
+      .catch(() => {})
+      .then(() => this._persistSessionStateNow({ desiredState, state }));
+    this._persistQueue = next;
+    return next;
+  }
+
+  async _persistSessionStateNow({ desiredState = this.sessionDesiredState, state = this.connection.state() } = {}) {
     this.sessionDesiredState = desiredState;
     const status = state.status || this.connection.status || 'stopped';
     const nowFields = {

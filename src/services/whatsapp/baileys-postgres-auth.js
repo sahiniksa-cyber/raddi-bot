@@ -27,10 +27,17 @@ class BaileysPostgresAuthState {
     this.cache = { creds: null, keys: {} };
     this.loaded = false;
     this.writeQueue = Promise.resolve();
+    this._loadingPromise = null;
   }
 
   async load() {
     if (this.loaded) return;
+    if (this._loadingPromise) return this._loadingPromise;
+    this._loadingPromise = this._doLoad().finally(() => { this._loadingPromise = null; });
+    return this._loadingPromise;
+  }
+
+  async _doLoad() {
     const result = await this.db.query(
       `SELECT auth_state FROM whatsapp_sessions WHERE user_id = $1`,
       [this.userId],
@@ -42,7 +49,6 @@ class BaileysPostgresAuthState {
       keys: baileys.keys ? deserializeFromDb(baileys.keys) : {},
     };
     this.loaded = true;
-    await this.persist();
   }
 
   async persist() {
@@ -103,9 +109,16 @@ class BaileysPostgresAuthState {
   }
 
   async clear() {
+    const prev = { creds: this.cache.creds, keys: this.cache.keys, loaded: this.loaded };
     this.cache = { creds: initAuthCreds(), keys: {} };
     this.loaded = true;
-    await this.persist();
+    try {
+      await this.persist();
+    } catch (err) {
+      this.cache = { creds: prev.creds, keys: prev.keys };
+      this.loaded = prev.loaded;
+      throw err;
+    }
   }
 }
 
