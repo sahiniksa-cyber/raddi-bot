@@ -186,12 +186,16 @@ async function loadPendingInboundMessages({
   fallbackText,
   limit = 20,
   maxAgeMs = parseInt(process.env.AI_PENDING_MAX_AGE_MS || '1800000', 10),
-  minProviderMessageTimeMs = Date.now() - Math.max(1, Number(maxAgeMs) || 1),
 }) {
   if (!conversationId || !userId) {
     return fallbackText ? [{ id: fallbackMessageId, content: fallbackText, raw_payload: {} }] : [];
   }
 
+  // Age is bounded by the row's own `created_at` (DB insert time) — robust and
+  // always present. We deliberately do NOT filter on raw_payload.timestamp
+  // (the provider-supplied epoch): when it is missing or non-numeric the old
+  // CASE evaluated to 0 and silently EXCLUDED the row, which made the worker
+  // throw "AI job has empty inbound text" even though real messages existed.
   const result = await database.query(
     `WITH last_assistant AS (
        SELECT MAX(created_at) AS created_at
@@ -209,11 +213,6 @@ async function loadPendingInboundMessages({
        AND status IN ('queued_for_ai', 'ai_failed')
        AND created_at > COALESCE((SELECT created_at FROM last_assistant), '-infinity'::timestamptz)
        AND m.created_at >= NOW() - ($4 * interval '1 millisecond')
-       AND CASE
-         WHEN COALESCE(m.raw_payload->>'timestamp', '') ~ '^[0-9]+(\\.[0-9]+)?$'
-           THEN (m.raw_payload->>'timestamp')::double precision * 1000
-         ELSE 0
-       END >= $5
      ORDER BY created_at ASC
      LIMIT $3`,
     [
@@ -221,7 +220,6 @@ async function loadPendingInboundMessages({
       userId,
       limit,
       Math.max(1, Number(maxAgeMs) || 1),
-      Math.max(1, Number(minProviderMessageTimeMs) || 1),
     ],
   );
 
@@ -540,15 +538,44 @@ async function processAiReply(job) {
       apiKey: config.openaiApiKey || '',
       logger,
     });
-    const enrichedMessages = await enrichInboundMessagesWithMedia({
+    let enrichedMessages = await enrichInboundMessagesWithMedia({
       messages: pendingMessages,
       analyzer: mediaAnalyzer,
       recordUsage: async (model, inputTokens, outputTokens) => {
         await recordAiUsage({ userId, model, inputTokens, outputTokens }).catch(() => {});
       },
     });
-    const text = buildCombinedInboundText(enrichedMessages);
-    if (!text.trim()) throw new Error('AI job has empty inbound text');
+    let text = buildCombinedInboundText(enrichedMessages);
+
+    if (!text.trim()) {
+      // No loadable pending rows produced any text. Two cases:
+      //  1) We still have the triggering message's text (fresh job) → answer it
+      //     so a message is NEVER silently lost just because the batch query
+      //     came back empty.
+      //  2) Nothing at all (e.g. a recovery job for messages that already aged
+      //     out) → expire quietly instead of throwing. The old throw caused
+      //     BullMQ to retry 3× and then send a confusing "لحظات من فضلك" filler
+      //     to a stale conversation, and left the rows stuck forever.
+      const ft = String(fallbackText || '').trim();
+      if (ft) {
+        enrichedMessages = [{ id: payload.messageId, content: ft, raw_payload: {} }];
+        text = ft;
+      } else {
+        if (payload.messageId) {
+          await markInboundMessageFailed({
+            messageId: payload.messageId,
+            error: new Error('no pending inbound text (expired/stale job)'),
+          }).catch(() => {});
+        }
+        await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+          status: 'skipped_empty_inbound',
+          finished_at: new Date(),
+          attempts: job.attemptsMade + 1,
+        }).catch(() => {});
+        logger.warn('ai', 'no pending inbound text — skipping (no retry, no filler)');
+        return { skipped: true, reason: 'empty_inbound' };
+      }
+    }
 
     const quota = await checkMessageQuota(userId);
     if (!quota.canReply) {

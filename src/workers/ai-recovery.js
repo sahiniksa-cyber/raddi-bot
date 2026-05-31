@@ -37,6 +37,37 @@ async function reviveExistingAiJob({ aiQueue, database, jobKey }) {
   return false;
 }
 
+/**
+ * Mark inbound messages that have been stuck `queued_for_ai` for longer than
+ * the recovery/pending window as `ai_failed`. Such messages can no longer be
+ * loaded by the worker (its `loadPendingInboundMessages` is bounded by the same
+ * age) nor picked up by recovery below — so they would otherwise sit in the
+ * stuck-count forever and make the worker throw "empty inbound text" on every
+ * recovery cycle. Expiring them clears the stuck count and stops the loop.
+ * They are NOT answered (replying to 30-min-old messages is wrong) — they are
+ * simply retired.
+ */
+async function expireStaleQueuedMessages({
+  database = db,
+  maxAgeMs = parseInt(process.env.AI_PENDING_MAX_AGE_MS || '1800000', 10),
+} = {}) {
+  if (!database.isConfigured?.()) return { expired: 0 };
+  const safeMaxAgeMs = Math.max(1, Number(maxAgeMs) || 1);
+  const result = await database.query(
+    `UPDATE messages
+        SET status = 'ai_failed',
+            raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $1::jsonb
+      WHERE direction = 'inbound'
+        AND status = 'queued_for_ai'
+        AND created_at < NOW() - ($2 * interval '1 millisecond')`,
+    [
+      JSON.stringify({ aiExpiredAt: new Date().toISOString(), reason: 'expired_unprocessed' }),
+      safeMaxAgeMs,
+    ],
+  );
+  return { expired: result.rowCount || 0 };
+}
+
 async function recoverQueuedAiReplyJobs({
   database = db,
   enqueue = enqueueAiReply,
@@ -47,6 +78,13 @@ async function recoverQueuedAiReplyJobs({
 } = {}) {
   if (!database.isConfigured?.()) return { recovered: 0 };
   const safeMaxAgeMs = Math.max(1, Number(maxAgeMs) || 1);
+
+  // Retire messages too old to ever be processed so they stop inflating the
+  // stuck count and triggering the empty-inbound-text loop.
+  const { expired } = await expireStaleQueuedMessages({ database }).catch(() => ({ expired: 0 }));
+  if (expired > 0) {
+    logger.warn?.('queue', `expired ${expired} stale queued_for_ai messages (older than pending window)`);
+  }
 
   const result = await database.query(
     `SELECT DISTINCT ON (m.conversation_id)
@@ -99,4 +137,4 @@ async function recoverQueuedAiReplyJobs({
   return { recovered };
 }
 
-module.exports = { recoverQueuedAiReplyJobs, reviveExistingAiJob };
+module.exports = { recoverQueuedAiReplyJobs, reviveExistingAiJob, expireStaleQueuedMessages };

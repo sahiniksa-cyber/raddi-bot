@@ -69,8 +69,9 @@ test('loadPendingInboundMessages loads queued inbound messages since last assist
       calls.push({ sql, params });
       assert.match(sql, /last_assistant/);
       assert.match(sql, /m\.created_at >= NOW\(\) - \(\$4 \* interval '1 millisecond'\)/);
-      assert.match(sql, /COALESCE\(m\.raw_payload->>'timestamp', ''\) ~ '\^\[0-9\]\+/);
-      assert.match(sql, /END >= \$5/);
+      // The fragile provider-timestamp CASE filter was removed (it silently
+      // dropped rows whose raw_payload.timestamp was missing/non-numeric).
+      assert.doesNotMatch(sql, /raw_payload->>'timestamp'/);
       return {
         rows: [
           { id: 'msg-1', content: 'السلام عليكم', provider_message_id: 'wa-1', raw_payload: {} },
@@ -88,9 +89,8 @@ test('loadPendingInboundMessages loads queued inbound messages since last assist
     fallbackText: 'كم السعر؟',
   });
 
-  assert.equal(calls[0].params.length, 5);
-  assert.deepEqual(calls[0].params.slice(0, 4), ['conv-1', 'user-1', 20, 1800000]);
-  assert.equal(Number.isFinite(calls[0].params[4]), true);
+  assert.equal(calls[0].params.length, 4);
+  assert.deepEqual(calls[0].params, ['conv-1', 'user-1', 20, 1800000]);
   assert.deepEqual(messages.map(m => m.id), ['msg-1', 'msg-2']);
 });
 
