@@ -60,12 +60,20 @@ function createBotController({ getUserBot, database = null }) {
 
     async start(req, res) {
       const bot = getUserBot(req.session.userId);
-      const started = await bot.startBot();
-      const state = bot.appState;
-      if (state.status === 'error') {
-        return res.status(500).json({ success: false, started, status: state.status, message: state.error || 'bot start failed' });
-      }
-      res.json({ success: true, started, status: state.status, message: started ? describeStartState(state) : describeStartState(state) });
+      // Do NOT await the full connection handshake here. connection.start()
+      // performs network work (fetchLatestBaileysVersion + socket handshake)
+      // that can take ~20s, which would hang the button and the page. Kick it
+      // off in the background and respond immediately; the dashboard polls
+      // /api/status and /api/qr to reflect the real state as it progresses.
+      Promise.resolve()
+        .then(() => bot.startBot())
+        .catch((err) => { try { bot.log?.(`start failed: ${err.message}`); } catch (_) {} });
+      res.json({
+        success: true,
+        started: true,
+        status: bot.appState.status,
+        message: 'بدأ التشغيل — انتظر ظهور الباركود أو الاتصال خلال لحظات.',
+      });
     },
 
     async stop(req, res) {
