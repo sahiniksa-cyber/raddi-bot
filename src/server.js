@@ -34,7 +34,7 @@ const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
-const { RuntimeBot, cleanupRuntimeStorage } = require('./services/bot/runtime-bot');
+const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
@@ -665,8 +665,19 @@ function createApp() {
       }
     }
 
-    const hasKey = !!(bot.config.googleApiKey?.trim() || bot.config.openrouterApiKey?.trim() || bot.config.openaiApiKey?.trim() || bot.config.anthropicApiKey?.trim());
-    checks.push({ name: 'مفتاح API', ok: hasKey, msg: hasKey ? 'مضبوط' : 'لا يوجد مفتاح — أضف مفتاح في الإعدادات' });
+    // Report the EFFECTIVE key the AI worker actually uses — i.e. the resolved
+    // config that merges the global admin key + per-customer key, not the raw
+    // bot.config (which never contains admin keys). Otherwise an owner who set
+    // a single global admin key for everyone would always see a false
+    // "لا يوجد مفتاح" here even though the AI is using it.
+    let effectiveConfig = bot.config;
+    try {
+      effectiveConfig = await resolveConfigForAI(userId);
+    } catch (keyErr) {
+      console.warn(`[health-check] resolveConfigForAI failed: ${keyErr.message}`);
+    }
+    const hasKey = !!(effectiveConfig.googleApiKey?.trim() || effectiveConfig.openrouterApiKey?.trim() || effectiveConfig.openaiApiKey?.trim() || effectiveConfig.anthropicApiKey?.trim());
+    checks.push({ name: 'مفتاح API', ok: hasKey, msg: hasKey ? 'مضبوط' : 'لا يوجد مفتاح — أضف مفتاح عام في الأدمن أو مفتاح خاص للعميل' });
 
     // Dedicated, prominent flag when recent ai_failed messages point to a
     // missing/invalid API key — so the cause isn't buried behind the filler.
