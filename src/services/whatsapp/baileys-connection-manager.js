@@ -229,6 +229,14 @@ class BaileysConnectionManager extends EventEmitter {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         emitOwnEvents: false,
+        // Connection stability: send a WebSocket keep-alive ping on an interval
+        // so the socket doesn't die silently behind Railway's proxy (the main
+        // cause of "اتصل ثم فجأة وقف"). Give the initial handshake a generous
+        // timeout and a small retry delay so transient blips self-heal instead
+        // of dropping the link.
+        keepAliveIntervalMs: parseInt(process.env.WA_KEEPALIVE_INTERVAL_MS || '20000', 10),
+        connectTimeoutMs: parseInt(process.env.WA_CONNECT_TIMEOUT_MS || '60000', 10),
+        retryRequestDelayMs: parseInt(process.env.WA_RETRY_REQUEST_DELAY_MS || '350', 10),
       });
 
       this.sock = sock;
