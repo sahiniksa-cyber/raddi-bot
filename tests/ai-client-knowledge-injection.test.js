@@ -30,3 +30,19 @@ test('flag KNOWLEDGE_INJECTION_ENABLED=false disables injection', () => {
   assert.doesNotMatch(p, /سياسات_المتجر_الجاهزة/);
   delete process.env.KNOWLEDGE_INJECTION_ENABLED;
 });
+
+test('getReply applies deterministic escalation tag via validator', async () => {
+  const ai = client({
+    storeName: 'متجر',
+    escalationContacts: [{ name: 'المالك', phone: '0500000000' }],
+  });
+  // بدّل buildClient لإرجاع رد ثابت بدون شبكة
+  ai.buildClient = () => ({
+    model: 'test-model',
+    openai: { chat: { completions: { create: async () => ({
+      choices: [{ message: { content: 'تمام بسجل طلبك.' } }], usage: {},
+    }) } } },
+  });
+  const out = await ai.getReply([{ role: 'user', content: 'أبي أكلم المدير' }], { isFirstMsg: true });
+  assert.match(out, /\[تحويل:/);
+});
