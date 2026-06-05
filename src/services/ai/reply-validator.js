@@ -35,4 +35,15 @@ function enforceEscalationTag(reply, config = {}, customerText = '') {
   return `${text.trim()} [تحويل:${name}|${summary}]`;
 }
 
-module.exports = { enforceLength, detectEscalationIntent, enforceEscalationTag };
+const COPOUT = /(أأكد لك|اأكد لك|أتأكد لك|اتأكد لك|بسأل المختص|اسأل المختص|بسأل المسؤول|أرجع لك بأقرب|تسمح لي|من المختص)/;
+
+function isCopOut(reply) {
+  return COPOUT.test(String(reply || ''));
+}
+
+// تهرّب رغم وجود سياسة مطابقة بدرجة عالية = يحتاج إصلاح (إعادة توليد بحقن الجواب)
+function needsRepairForCopOut(reply, matched = []) {
+  return isCopOut(reply) && Array.isArray(matched) && matched.some(m => m.score >= 3);
+}
+
+module.exports = { enforceLength, detectEscalationIntent, enforceEscalationTag, isCopOut, needsRepairForCopOut };

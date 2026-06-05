@@ -42,3 +42,17 @@ test('enforceEscalationTag does nothing when no intent', () => {
   const r = 'القهوة متوفرة عندنا.';
   assert.equal(enforceEscalationTag(r, ESC_CONFIG, 'وش عندكم قهوة؟'), r);
 });
+
+const { isCopOut, needsRepairForCopOut } = require('../src/services/ai/reply-validator');
+
+test('isCopOut detects deflection phrases', () => {
+  assert.equal(isCopOut('ودّي أأكد لك المعلومة من المختص، تسمح لي؟'), true);
+  assert.equal(isCopOut('الشحن خلال 2-4 أيام عبر سمسا'), false);
+});
+test('needsRepairForCopOut true when deflecting despite a matched policy', () => {
+  const matched = [{ keyword: 'الشحن', reply: 'الشحن عبر سمسا خلال 2-4 أيام', score: 3 }];
+  assert.equal(needsRepairForCopOut('أأكد لك من المختص، تسمح لي؟', matched), true);
+});
+test('needsRepairForCopOut false when no matched policy (legit deflection)', () => {
+  assert.equal(needsRepairForCopOut('أأكد لك من المختص، تسمح لي؟', []), false);
+});
