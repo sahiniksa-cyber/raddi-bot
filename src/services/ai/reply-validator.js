@@ -16,4 +16,23 @@ function enforceLength(reply, maxLen) {
   return text.slice(0, limit).trim();
 }
 
-module.exports = { enforceLength };
+const WANT = /(يبي|يبغى|أبي|ابي|ودي|أبغى|ابغى|أحتاج|احتاج|ممكن أكلم|اكلم|اتواصل)/;
+const HUMAN = /(موظف|مختص|مسؤول|مسئول|إنسان|انسان|بشر|المدير|المالك|صاحب المحل|احد)/;
+
+function detectEscalationIntent(customerText) {
+  const t = String(customerText || '');
+  return WANT.test(t) && HUMAN.test(t);
+}
+
+function enforceEscalationTag(reply, config = {}, customerText = '') {
+  const text = String(reply || '');
+  if (/\[تحويل:/.test(text)) return text;            // النموذج وضعها
+  if (!detectEscalationIntent(customerText)) return text;
+  const contacts = config.escalationContacts || [];
+  if (!contacts.length) return text;                 // لا جهة تصعيد مضبوطة
+  const name = contacts[0].name || 'المالك';
+  const summary = String(customerText || '').slice(0, 40).replace(/[|\]]/g, ' ').trim();
+  return `${text.trim()} [تحويل:${name}|${summary}]`;
+}
+
+module.exports = { enforceLength, detectEscalationIntent, enforceEscalationTag };
