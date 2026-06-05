@@ -1,9 +1,11 @@
 'use strict';
 
+const { tokenize } = require('./knowledge-retrieval');
+
 // قصّ الرد على حدّ الطول، مفضّلاً نهاية جملة كاملة قبل الحدّ.
 function enforceLength(reply, maxLen) {
   const text = String(reply || '').trim();
-  const limit = Math.max(10, parseInt(maxLen, 10) || 300);
+  const limit = Math.max(40, parseInt(maxLen, 10) || 300);
   if (text.length <= limit) return text;
 
   const slice = text.slice(0, limit + 1);
@@ -16,12 +18,35 @@ function enforceLength(reply, maxLen) {
   return text.slice(0, limit).trim();
 }
 
-const WANT = /(يبي|يبغى|أبي|ابي|ودي|أبغى|ابغى|أحتاج|احتاج|ممكن أكلم|اكلم|اتواصل)/;
-const HUMAN = /(موظف|مختص|مسؤول|مسئول|إنسان|انسان|بشر|المدير|المالك|صاحب المحل|احد)/;
+// توكنات كلمات الطلب (بعد التطبيع بـnormalizeArabic)
+const WANT_TOKENS = new Set([
+  'يبي', 'يبغي',           // يبي / يبغى (مطبّع)
+  'ابي',                    // أبي / ابي
+  'ودي',                    // ودي
+  'ابغي',                   // أبغى / ابغى (مطبّع)
+  'احتاج',                  // أحتاج / احتاج
+  'اكلم',                   // اكلم / ممكن أكلم
+  'اتواصل',                 // أتواصل / اتواصل
+  'ممكن',                   // ممكن (بالاقتران مع توكن بشري)
+]);
+
+// توكنات كلمات البشر (بعد التطبيع) — بما فيها صيغ "ال" لأن tokenize لا تحذفها
+const HUMAN_TOKENS = new Set([
+  'موظف', 'مختص',
+  'مسؤول', 'مسئول',         // بدون "ال"
+  'المسؤول', 'المسئول',     // مع "ال"
+  'انسان',                  // إنسان / انسان (مطبّع)
+  'بشر',
+  'المدير', 'المالك',
+  'صاحب', 'المحل',          // صاحب المحل (توكنان)
+  'احد',                    // "أحد" — بدون "ال" ودون أن يكون جزء من كلمة أخرى
+]);
 
 function detectEscalationIntent(customerText) {
-  const t = String(customerText || '');
-  return WANT.test(t) && HUMAN.test(t);
+  const tokens = tokenize(String(customerText || ''));
+  const hasWant = tokens.some(t => WANT_TOKENS.has(t));
+  const hasHuman = tokens.some(t => HUMAN_TOKENS.has(t));
+  return hasWant && hasHuman;
 }
 
 function enforceEscalationTag(reply, config = {}, customerText = '') {
@@ -35,7 +60,10 @@ function enforceEscalationTag(reply, config = {}, customerText = '') {
   return `${text.trim()} [تحويل:${name}|${summary}]`;
 }
 
-const COPOUT = /(أأكد لك|اأكد لك|أتأكد لك|اتأكد لك|بسأل المختص|اسأل المختص|بسأل المسؤول|أرجع لك بأقرب|تسمح لي|من المختص)/;
+// عبارات التهرّب الصريحة — مقيّدة بحدود توكن لتجنّب المطابقة الكاذبة
+// "من المختص" مقيّدة: لا تتبعها حروف عربية (لتجنّب "من المختصر")
+// "تسمح لي" حُذفت منفردة (واسعة جداً) — تبقى تُغطّى ضمن سياق التهرّب مع "من المختص"
+const COPOUT = /(أأكد لك|اأكد لك|أتأكد لك|اتأكد لك|بسأل المختص|اسأل المختص|بسأل المسؤول|أرجع لك بأقرب|من المختص(?:[^ء-ي]|$))/;
 
 function isCopOut(reply) {
   return COPOUT.test(String(reply || ''));

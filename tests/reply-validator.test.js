@@ -8,15 +8,16 @@ test('enforceLength keeps short replies untouched', () => {
 });
 
 test('enforceLength truncates at sentence boundary when over limit', () => {
-  const long = 'الجملة الأولى مفيدة. الجملة الثانية زائدة جداً وتتجاوز الحد المسموح به كثيراً جداً.';
-  const out = enforceLength(long, 30);
-  assert.ok(out.length <= 32, `len=${out.length}`);
+  const long = 'الجملة الأولى مفيدة جداً ومختصرة. الجملة الثانية زائدة جداً وتتجاوز الحد المسموح به كثيراً جداً.';
+  const out = enforceLength(long, 60);
+  assert.ok(out.length <= 62, `len=${out.length}`);
   assert.ok(out.startsWith('الجملة الأولى'));
+  assert.ok(!out.includes('الثانية'), `should not include second sentence, got: ${out}`);
 });
 
 test('enforceLength hard-cuts when no sentence boundary', () => {
-  const out = enforceLength('كلمةطويلةجدا'.repeat(20), 30);
-  assert.ok(out.length <= 31);
+  const out = enforceLength('كلمةطويلةجدا'.repeat(20), 60);
+  assert.ok(out.length <= 61);
 });
 
 const { enforceEscalationTag, detectEscalationIntent } = require('../src/services/ai/reply-validator');
@@ -55,6 +56,38 @@ test('needsRepairForCopOut true when deflecting despite a matched policy', () =>
 });
 test('needsRepairForCopOut false when no matched policy (legit deflection)', () => {
   assert.equal(needsRepairForCopOut('أأكد لك من المختص، تسمح لي؟', []), false);
+});
+
+// ── Regression: token-level escalation matching (false positives) ──────────
+test('detectEscalationIntent false for واحد substring (regression)', () => {
+  assert.equal(detectEscalationIntent('أبي واحد بني'), false);
+});
+test('detectEscalationIntent false for الاحد substring (regression)', () => {
+  assert.equal(detectEscalationIntent('ابي اطلب لين الاحد'), false);
+});
+test('detectEscalationIntent still true for أبي أكلم المدير (regression)', () => {
+  assert.equal(detectEscalationIntent('أبي أكلم المدير'), true);
+});
+test('detectEscalationIntent still true for ودي أتواصل مع موظف (regression)', () => {
+  assert.equal(detectEscalationIntent('ودي أتواصل مع موظف'), true);
+});
+test('enforceEscalationTag no spurious tag for أبي واحد بني (regression)', () => {
+  const out = enforceEscalationTag('المنتج متوفر باللون البني.', ESC_CONFIG, 'أبي واحد بني');
+  assert.ok(!out.includes('[تحويل:'), `should not contain escalation tag, got: ${out}`);
+});
+
+// ── Regression: cop-out false positives ──────────────────────────────────
+test('isCopOut false for المختصر substring (regression)', () => {
+  assert.equal(isCopOut('هذا من المختصر سعره 50 ريال'), false);
+});
+test('isCopOut false for polite تسمح لي without deflection context (regression)', () => {
+  assert.equal(isCopOut('تسمح لي أوضح لك التفاصيل؟'), false);
+});
+test('isCopOut still true for combined deflection (regression)', () => {
+  assert.equal(isCopOut('ودّي أأكد لك المعلومة من المختص، تسمح لي؟'), true);
+});
+test('isCopOut still true for بسأل المختص وأرجع لك (regression)', () => {
+  assert.equal(isCopOut('بسأل المختص وأرجع لك'), true);
 });
 
 const { validateAndRepair } = require('../src/services/ai/reply-validator');
