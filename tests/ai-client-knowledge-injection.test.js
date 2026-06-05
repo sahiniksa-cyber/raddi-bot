@@ -46,3 +46,9 @@ test('getReply applies deterministic escalation tag via validator', async () => 
   const out = await ai.getReply([{ role: 'user', content: 'أبي أكلم المدير' }], { isFirstMsg: true });
   assert.match(out, /\[تحويل:/);
 });
+
+test('policy block carries explicit no-invention warning for product specs (ث1 guard)', () => {
+  const ai = client({ storeName: 'متجر', autoReplyKeywords: { 'الشحن': 'سمسا 2-4 أيام' } });
+  const p = ai.buildSystemPrompt([{ role: 'user', content: 'متى يوصلني؟' }], {});
+  assert.match(p, /مواصفات المنتجات وتوافقها[\s\S]*عدم الاختراع/);
+});
