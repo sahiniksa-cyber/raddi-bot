@@ -124,3 +124,40 @@ test('validateAndRepair returns original when regenerate also bad (no infinite l
   assert.equal(calls, 1);                  // مرة واحدة فقط
   assert.ok(typeof out === 'string' && out.length > 0);
 });
+
+// ── I1: escalation tag must survive length enforcement ───────────────────────
+test('validateAndRepair: escalation tag survives length enforcement (I1)', async () => {
+  const longReply = 'أهلاً وسهلاً فيك، يسعدني أساعدك في طلبك اليوم. ' + 'هذا رد طويل يقترب من الحد الأقصى المسموح به للطول حتى نتأكد أن القصّ يحدث فعلاً وبعدها نتحقق من بقاء علامة التحويل سليمة في نهاية الرد رغم القص. '.repeat(2);
+  const out = await validateAndRepair({
+    reply: longReply,
+    config: { maxResponseLength: 300, escalationContacts: [{ name: 'المالك' }] },
+    customerText: 'أبي أكلم المدير',
+    matched: [],
+    regenerate: async () => { throw new Error('no'); },
+  });
+  assert.match(out, /\[تحويل:/, 'يجب أن تبقى علامة التصعيد بعد فرض الطول');
+});
+
+test('validateAndRepair: short reply with escalation tag is not affected (I1 regression)', async () => {
+  const out = await validateAndRepair({
+    reply: 'تمام، سأحوّلك للمالك.',
+    config: { maxResponseLength: 300, escalationContacts: [{ name: 'المالك' }] },
+    customerText: 'أبي أكلم المدير',
+    matched: [],
+    regenerate: async () => { throw new Error('no'); },
+  });
+  assert.match(out, /\[تحويل:/, 'علامة التصعيد موجودة في الرد القصير');
+});
+
+test('validateAndRepair: long reply without escalation intent is trimmed normally (I1 regression)', async () => {
+  const longReply = 'الجملة الأولى قصيرة. ' + 'هذه جملة طويلة جداً تتجاوز الحد المسموح به للطول وتحتوي على تفاصيل كثيرة جداً لا داعي لها في الرد النهائي. '.repeat(3);
+  const out = await validateAndRepair({
+    reply: longReply,
+    config: { maxResponseLength: 100, escalationContacts: [{ name: 'المالك' }] },
+    customerText: 'وش عندكم قهوة؟',
+    matched: [],
+    regenerate: async () => { throw new Error('no'); },
+  });
+  assert.ok(out.length <= 105, `الرد يجب أن يكون أقصر من الحد، got length=${out.length}`);
+  assert.ok(!out.includes('[تحويل:'), 'لا يجب أن تكون علامة تصعيد لأن النية غير موجودة');
+});

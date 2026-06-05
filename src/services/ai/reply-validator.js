@@ -88,8 +88,13 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
   }
 
   // 2) إصلاحات حتمية (لا تحتاج نموذجاً)
-  current = enforceEscalationTag(current, config, customerText);
-  current = enforceLength(current, maxLen);
+  // حدّد العلامة النهائية (من النموذج إن وُجدت، أو حتمياً عند النية)
+  const tagged = enforceEscalationTag(current, config, customerText);
+  const tagMatch = tagged.match(/\s*\[تحويل:[^\]]*\]\s*$/);
+  const tag = tagMatch ? tagMatch[0].trim() : '';
+  const body = tagMatch ? tagged.slice(0, tagMatch.index).trim() : tagged;
+  const trimmedBody = enforceLength(body, maxLen);   // القصّ على المتن فقط
+  current = tag ? `${trimmedBody} ${tag}` : trimmedBody;
   return current;
 }
 
