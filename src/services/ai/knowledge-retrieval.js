@@ -5,7 +5,7 @@ const { normalizeArabic } = require('../../../lib/post-process-reply');
 // كلمات وقف عربية شائعة لا تفيد في المطابقة
 const STOPWORDS = new Set([
   'في','من','على','عن','الى','إلى','مع','هل','كم','ما','ماذا','وش','ايش','هذا','هذه',
-  'ال','او','أو','و','يا','اي','أي','كل','عندكم','عندك','فيه','في','به','لو','لي','لك',
+  'ال','او','أو','و','يا','اي','أي','كل','عندكم','عندك','فيه','به','لو','لي','لك',
 ]);
 
 // مجموعات مرادفات متناظرة (بعد التطبيع)
@@ -39,8 +39,11 @@ function tokenize(text) {
 function expandWithSynonyms(tokens) {
   const out = new Set(tokens);
   for (const tok of tokens) {
-    const groups = TOKEN_TO_GROUP.get(tok);
+    // طبّق stripAl على التوكن نفسه حتى تنجح المطابقة مع مفاتيح TOKEN_TO_GROUP (بدون "ال")
+    const bare = stripAl(tok);
+    const groups = TOKEN_TO_GROUP.get(bare);
     if (!groups) continue;
+    out.add(bare); // أضف الصيغة بدون "ال" حتى تُقارَن مع المرادفات
     for (const gi of groups) {
       for (const syn of SYN_GROUPS[gi]) out.add(syn);
     }
