@@ -46,4 +46,26 @@ function needsRepairForCopOut(reply, matched = []) {
   return isCopOut(reply) && Array.isArray(matched) && matched.some(m => m.score >= 3);
 }
 
-module.exports = { enforceLength, detectEscalationIntent, enforceEscalationTag, isCopOut, needsRepairForCopOut };
+// المنسّق: إصلاحات حتمية أولاً، ثم إعادة توليد واحدة عند تهرّب رغم سياسة مطابقة.
+async function validateAndRepair({ reply, config = {}, customerText = '', matched = [], regenerate } = {}) {
+  let current = String(reply || '').trim();
+  const maxLen = config.maxResponseLength;
+
+  // 1) إعادة توليد واحدة عند التهرّب رغم سياسة مطابقة
+  if (needsRepairForCopOut(current, matched) && typeof regenerate === 'function') {
+    try {
+      const repaired = String(await regenerate() || '').trim();
+      if (repaired && !isCopOut(repaired)) current = repaired;  // اقبل الأفضل فقط
+    } catch { /* أبقِ الأصل */ }
+  }
+
+  // 2) إصلاحات حتمية (لا تحتاج نموذجاً)
+  current = enforceEscalationTag(current, config, customerText);
+  current = enforceLength(current, maxLen);
+  return current;
+}
+
+module.exports = {
+  enforceLength, detectEscalationIntent, enforceEscalationTag,
+  isCopOut, needsRepairForCopOut, validateAndRepair,
+};

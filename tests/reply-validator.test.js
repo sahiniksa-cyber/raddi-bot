@@ -56,3 +56,38 @@ test('needsRepairForCopOut true when deflecting despite a matched policy', () =>
 test('needsRepairForCopOut false when no matched policy (legit deflection)', () => {
   assert.equal(needsRepairForCopOut('أأكد لك من المختص، تسمح لي؟', []), false);
 });
+
+const { validateAndRepair } = require('../src/services/ai/reply-validator');
+
+test('validateAndRepair applies deterministic fixes without regenerate', async () => {
+  const out = await validateAndRepair({
+    reply: 'تمام بسجل طلبك.',
+    config: ESC_CONFIG, customerText: 'أبي أكلم المدير', matched: [],
+    regenerate: async () => { throw new Error('should not be called'); },
+  });
+  assert.match(out, /\[تحويل:/);          // أُضيفت العلامة حتمياً
+});
+
+test('validateAndRepair regenerates once on cop-out then keeps better reply', async () => {
+  const matched = [{ keyword: 'الشحن', reply: 'الشحن عبر سمسا خلال 2-4 أيام', score: 3 }];
+  let calls = 0;
+  const out = await validateAndRepair({
+    reply: 'أأكد لك من المختص، تسمح لي؟',
+    config: {}, customerText: 'متى يوصلني؟', matched,
+    regenerate: async () => { calls++; return 'الشحن عبر سمسا خلال 2-4 أيام عمل'; },
+  });
+  assert.equal(calls, 1);
+  assert.match(out, /سمسا/);
+});
+
+test('validateAndRepair returns original when regenerate also bad (no infinite loop)', async () => {
+  const matched = [{ keyword: 'الشحن', reply: 'x', score: 3 }];
+  let calls = 0;
+  const out = await validateAndRepair({
+    reply: 'أأكد لك من المختص، تسمح لي؟',
+    config: {}, customerText: 'متى يوصلني؟', matched,
+    regenerate: async () => { calls++; return 'أأكد لك من المختص مرة ثانية، تسمح لي؟'; },
+  });
+  assert.equal(calls, 1);                  // مرة واحدة فقط
+  assert.ok(typeof out === 'string' && out.length > 0);
+});
