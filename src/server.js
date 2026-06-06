@@ -39,6 +39,7 @@ const { createBillingAccessGate, createBillingApiGate } = require('./middleware/
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { findAutoReply } = require('./services/bot/platform-features');
+const { listPausedChats, resumePausedChat } = require('./services/bot/paused-chats');
 const {
   buildTrainAnalyzeRequest,
   buildEnhanceInstructionsRequest,
@@ -402,8 +403,15 @@ function createApp() {
     bot._costsResetAt = new Date().toISOString();
     res.json({ success: true });
   }));
-  app.get('/api/paused-chats', requireAuth, (req, res) => res.json({ success: true, paused: [] }));
-  app.post('/api/paused-chats/resume', requireAuth, (req, res) => res.json({ success: true }));
+  app.get('/api/paused-chats', requireAuth, asyncRoute(async (req, res) => {
+    const paused = await listPausedChats(db, req.session.userId);
+    res.json({ success: true, paused });
+  }));
+  app.post('/api/paused-chats/resume', requireAuth, asyncRoute(async (req, res) => {
+    const sender = (req.body && typeof req.body.sender === 'string' && req.body.sender.trim()) ? req.body.sender.trim() : null;
+    const resumed = await resumePausedChat(db, req.session.userId, sender);
+    res.json({ success: true, resumed });
+  }));
   app.post('/api/test-chat', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const { sessionId, reset } = req.body || {};
