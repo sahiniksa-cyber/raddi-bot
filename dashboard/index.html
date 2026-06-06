@@ -976,8 +976,8 @@ body{background-attachment:scroll}
     </div>
   </div>
 
-  <!-- ── AI PANEL (all models + key in one box) ── -->
-  <div class="panel">
+  <!-- ── AI PANEL (all models + key in one box) — admin-only ── -->
+  <div class="panel" id="aiPanel" style="display:none">
     <div class="phdr">🧠 الذكاء الاصطناعي</div>
     <div class="pbdy">
 
@@ -2748,6 +2748,7 @@ async function loadUserInfo(){
       const el=document.getElementById('userNameBadge');if(el)el.textContent=d.name||'';
       const n=document.getElementById('accName');if(n)n.value=d.name||'';
       const e=document.getElementById('accEmail');if(e)e.value=d.email||'';
+      if(d.role==='admin'){const ap=document.getElementById('aiPanel');if(ap)ap.style.display='';}
     } else location.href='/login';
   }catch(_){}
 }
