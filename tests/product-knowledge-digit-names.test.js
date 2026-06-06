@@ -32,3 +32,14 @@ test('product with only name+price (no description) is kept', () => {
   assert.equal(products[0].name, 'اشتراك 4 أشهر');
   assert.equal(products[0].price, '120 ريال');
 });
+
+const { buildRelevantProductContext, findRelevantProducts } = require('../src/services/products/product-knowledge');
+
+test('customer asking about "4 اشهر" finds the digit-named product', () => {
+  const config = { products: [], botInstructions: `## المنتجات\nاشتراك 4 أشهر\n120 ريال\nاشتراك سنة\n350 ريال` };
+  const found = findRelevantProducts(config, 'عندكم اشتراك 4 اشهر؟');
+  assert.ok(found.some(p => p.name === 'اشتراك 4 أشهر'), `got ${JSON.stringify(found.map(p=>p.name))}`);
+  const ctx = buildRelevantProductContext({ config, customerText: 'عندكم اشتراك 4 اشهر؟' });
+  assert.match(ctx, /4 أشهر/);
+  assert.match(ctx, /120/);
+});
