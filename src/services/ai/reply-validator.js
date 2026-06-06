@@ -102,6 +102,9 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
   }
 
   // 2) إصلاحات حتمية (لا تحتاج نموذجاً)
+  // فلتر أسلوب حتمي (يمسح عبارات عرض الخدمة الآلية)
+  current = stripStyleViolations(current);
+
   // حدّد العلامة النهائية (من النموذج إن وُجدت، أو حتمياً عند النية)
   const tagged = enforceEscalationTag(current, config, customerText);
   const tagMatch = tagged.match(/\s*\[تحويل:[^\]]*\]\s*$/);

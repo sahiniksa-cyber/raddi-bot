@@ -178,3 +178,13 @@ test('stripStyleViolations leaves a clean greeting when offer-help removed', () 
   assert.ok(out.startsWith('وعليكم السلام'));
   assert.ok(out.length > 0);
 });
+
+test('validateAndRepair strips offer-help phrase deterministically', async () => {
+  const out = await validateAndRepair({
+    reply: 'وعليكم السلام! كيف أقدر أخدمك اليوم؟',
+    config: {}, customerText: 'السلام عليكم', matched: [],
+    regenerate: async () => { throw new Error('no'); },
+  });
+  assert.equal(/أخدمك|أساعدك/.test(out), false);
+  assert.ok(out.includes('السلام'));
+});
