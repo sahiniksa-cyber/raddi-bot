@@ -685,6 +685,7 @@ async function processAiReply(job) {
           presencePenalty: 0.9,
           frequencyPenalty: 0.6,
           customerProfile,
+          instantAnswered: combinePrefix,
         }).catch(() => '');
         const retry = String(retryRaw || '').trim();
         if (retry) {
@@ -695,8 +696,14 @@ async function processAiReply(job) {
             customerPhoneNumber: conversation.phone_number,
             inboundText: text,
           });
-          const retryCustomer = (retryEscalation.customerReply || '').trim();
-          if (retryCustomer) customerReply = retryCustomer;
+          let retryCustomer = (retryEscalation.customerReply || '').trim();
+          if (retryCustomer) {
+            if (combinePrefix) {
+              const aiPart = retryCustomer && retryCustomer !== combinePrefix ? `\n${retryCustomer}` : '';
+              retryCustomer = `${combinePrefix}${aiPart}`.trim();
+            }
+            customerReply = retryCustomer;
+          }
         }
       }
     } catch (dedupErr) {
