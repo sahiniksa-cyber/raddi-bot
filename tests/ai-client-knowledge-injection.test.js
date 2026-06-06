@@ -52,3 +52,10 @@ test('policy block carries explicit no-invention warning for product specs (ث1 
   const p = ai.buildSystemPrompt([{ role: 'user', content: 'متى يوصلني؟' }], {});
   assert.match(p, /مواصفات المنتجات وتوافقها[\s\S]*عدم الاختراع/);
 });
+
+test('buildSystemPrompt adds no-repeat instruction when instantAnswered provided', () => {
+  const ai = client({ storeName: 'متجر' });
+  const p = ai.buildSystemPrompt([{ role: 'user', content: 'بكم ادوبي؟' }], { instantAnswered: 'وعليكم السلام، حياك الله' });
+  assert.match(p, /مُجاب عليه|أُجيب|سبق الرد/);
+  assert.match(p, /وعليكم السلام، حياك الله/);
+});

@@ -16,7 +16,7 @@ const { prepareEscalation } = require('./escalation-routing');
 const { findDuplicateRecentReply } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
-const { findAutoReply } = require('../services/bot/platform-features');
+const { findAutoReply, collectInstantReplies } = require('../services/bot/platform-features');
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { checkMessageQuota } = require('../services/billing/message-quota');
 const {
@@ -593,21 +593,21 @@ async function processAiReply(job) {
       return { skipped: true, reason: quota.reason };
     }
 
-    // Only apply an instant keyword auto-reply when the batch is a single
-    // message. When the customer sent multiple rapid messages, skip the canned
-    // reply and let the full AI answer all of them (otherwise a keyword in one
-    // message would hijack the whole batch and the other questions are lost).
-    const instantReply = enrichedMessages.length <= 1 ? findAutoReply(config, text) : '';
-    if (instantReply) {
+    // Instant replies: when the message is ONLY a trigger (no extra question)
+    // and it's a single message, send the canned reply directly (fast path).
+    // When there's an extra question, prepend the canned reply verbatim and let
+    // the AI answer the rest (combine mode).
+    const { matched: instantMatched, hasExtraQuestion } = collectInstantReplies(config, text);
+    const cannedPrefix = instantMatched.map(m => m.reply).join('\n');
+
+    if (instantMatched.length && !hasExtraQuestion && enrichedMessages.length <= 1) {
       return await sendInstantAutoReply({
-        job,
-        payload,
-        conversation,
-        userId,
-        instantReply,
+        job, payload, conversation, userId,
+        instantReply: cannedPrefix,
         enrichedMessages,
       });
     }
+    const combinePrefix = instantMatched.length ? cannedPrefix : '';
 
     const history = await buildHistoryForReply({
       database: db,
@@ -632,7 +632,16 @@ async function processAiReply(job) {
       },
     });
 
-    const reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile }) || '').trim();
+    let reply;
+    try {
+      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix }) || '').trim();
+    } catch (aiErr) {
+      if (combinePrefix) {
+        logger.warn('ai-worker', `AI failed but sending canned prefix as fallback: ${aiErr.message}`);
+        return await sendInstantAutoReply({ job, payload, conversation, userId, instantReply: combinePrefix, enrichedMessages });
+      }
+      throw aiErr;
+    }
     if (!reply) throw new Error('AI returned empty reply');
     const escalation = prepareEscalation({
       reply,
@@ -643,6 +652,11 @@ async function processAiReply(job) {
     });
     let customerReply = escalation.customerReply.trim();
     if (!customerReply) throw new Error('AI returned empty customer reply after escalation marker cleanup');
+
+    if (combinePrefix) {
+      const aiPart = customerReply && customerReply !== combinePrefix ? `\n${customerReply}` : '';
+      customerReply = `${combinePrefix}${aiPart}`.trim();
+    }
 
     // Reply de-duplication: if the candidate reply is near-identical to one of
     // the last few assistant replies, regenerate once with higher penalties
@@ -671,6 +685,7 @@ async function processAiReply(job) {
           presencePenalty: 0.9,
           frequencyPenalty: 0.6,
           customerProfile,
+          instantAnswered: combinePrefix,
         }).catch(() => '');
         const retry = String(retryRaw || '').trim();
         if (retry) {
@@ -681,8 +696,14 @@ async function processAiReply(job) {
             customerPhoneNumber: conversation.phone_number,
             inboundText: text,
           });
-          const retryCustomer = (retryEscalation.customerReply || '').trim();
-          if (retryCustomer) customerReply = retryCustomer;
+          let retryCustomer = (retryEscalation.customerReply || '').trim();
+          if (retryCustomer) {
+            if (combinePrefix) {
+              const aiPart = retryCustomer && retryCustomer !== combinePrefix ? `\n${retryCustomer}` : '';
+              retryCustomer = `${combinePrefix}${aiPart}`.trim();
+            }
+            customerReply = retryCustomer;
+          }
         }
       }
     } catch (dedupErr) {
