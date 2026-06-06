@@ -43,3 +43,22 @@ test('customer asking about "4 اشهر" finds the digit-named product', () => {
   assert.match(ctx, /4 أشهر/);
   assert.match(ctx, /120/);
 });
+
+// ── الاختبارات الجديدة (TDD: يجب أن تفشل قبل الإصلاح) ──
+
+test('arabic-numeral price line is captured as price, not a phantom product', () => {
+  const products = parsePromptProducts(`## المنتجات\nاشتراك ٦ أشهر\n٩٠ ريال`);
+  assert.equal(products.length, 1);
+  assert.equal(products[0].name, 'اشتراك ٦ أشهر');
+  assert.equal(products[0].price, '٩٠ ريال');
+  assert.ok(!products.some(p => p.name === '٩٠ ريال'));
+});
+
+test('promotional/info lines do NOT become phantom products', () => {
+  const products = parsePromptProducts(`## المنتجات\nخصم 20% هذا الأسبوع\nالتوصيل خلال 3 أيام\nالدفع عند الاستلام متاح\nاشتراك 4 أشهر\n120 ريال`);
+  const names = products.map(p => p.name);
+  assert.ok(names.includes('اشتراك 4 أشهر'), 'المنتج الحقيقي يبقى');
+  assert.ok(!names.includes('خصم 20% هذا الأسبوع'));
+  assert.ok(!names.includes('التوصيل خلال 3 أيام'));
+  assert.ok(!names.includes('الدفع عند الاستلام متاح'));
+});

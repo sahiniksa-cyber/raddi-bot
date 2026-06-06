@@ -29,13 +29,14 @@ function normalizeProductText(value) {
 }
 
 // سطر "سعر صرف": يحوي رقماً ولا يتبقى منه حروف بعد إزالة الأرقام والعملة والفواصل.
-// "120 ريال" → true ، "اشتراك 4 أشهر" → false (تبقى حروف).
+// "120 ريال" → true ، "٩٠ ريال" → true ، "اشتراك 4 أشهر" → false (تبقى حروف).
 function isPriceLikeLine(value) {
   const v = String(value || '');
-  if (!/\d/.test(v)) return false;
+  // دعم الأرقام العربية (٠-٩) والفارسية (۰-۹) إضافةً للـ ASCII
+  if (!/[\d٠-٩۰-۹]/.test(v)) return false;
   const lettersLeft = v
     .replace(/ر\.?\s?س|ريال|درهم|sar|aed|usd|\$|﷼/gi, '')
-    .replace(/[\d.,،\-\/\s]/g, '');
+    .replace(/[\d٠-٩۰-۹.,،\-\/\s]/g, '');
   return lettersLeft.length === 0;
 }
 
@@ -46,7 +47,7 @@ function isProductNameLine(line) {
   if (/[—:]/.test(value)) return false;
   if (isPriceLikeLine(value)) return false;
   if (value.length > 60) return false;
-  if (/^(مثال|العميل|أنت|ممنوع|لا |وقت|بعد|طلب|السعر|المنتج|إنهاء|ما تعرف)/.test(value)) return false;
+  if (/^(مثال|العميل|أنت|ممنوع|لا |وقت|بعد|طلب|السعر|المنتج|إنهاء|ما تعرف|خصم|عرض|التوصيل|الشحن|الدفع|الضمان|نوفر|يوجد|يمكنك|متوفر التوصيل)/.test(value)) return false;
   return true;
 }
 
@@ -84,7 +85,7 @@ function parsePromptProducts(instructions) {
       price: product.price || '',
       source: product.source,
     }))
-    .filter(product => product.name);
+    .filter(product => product.name && (product.price || product.description));
 }
 
 function structuredProducts(products = []) {
