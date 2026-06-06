@@ -75,8 +75,30 @@ function buildPlatformPromptBlock(config = {}, {
   return `\n\n---\n📋 إعدادات المنصة الملزمة (استخدمها كلها مع تعليمات المالك، وليست مجرد معلومات ثانوية):\n- اسم المتجر: ${config.storeName || 'المتجر'}\n- وصف المتجر: ${config.storeDescription || '—'}\n- ساعات العمل: ${config.workingHours || '—'}\n- اسم الموظف/الشخصية: ${employeeName}\n- نبرة الرد: ${tone}\n- لغة الرد: ${language}\n- 🔑 طول الرد (قاعدة صارمة التزم بها حرفياً في كل رد): ${replyLength}\n- معدل الإيموجي: ${emoji}\n- عبارات ترحيب ممكنة: ${greetings}\n- عبارات إنهاء ممكنة: ${closings}\n- كلمات أو عبارات ممنوعة: ${forbidden}\n- المنتجات الموجودة في المنصة:\n${productsBlock || '—'}${productContext ? `\n- المنتجات المطابقة لسؤال العميل:\n${productContext}` : ''}\n- عند التعارض: معلومات المنتجات والأسعار وحقول المنصة وتعليمات المالك هي مصدر الحقيقة. لا تعتمد على الذاكرة العامة ولا تخترع معلومة ناقصة.\n- طبّق هذه الخيارات في كل رد: اللغة، اللهجة، طول الرد، الإيموجي، النبرة، الترحيب، والخاتمة المناسبة.\n- تعليمات المالك ووصف المتجر أعلى أولوية مطلقة: اتبعها حرفياً في الأسلوب والتنسيق والمحتوى، وإذا منع المالك شيئاً (مثل النقاط أو عبارات معيّنة) فلا تستخدمه إطلاقاً.\n- أسلوب الكتابة افتراضياً رسائل واتساب طبيعية بجُمل متصلة: ممنوع التعداد النقطي (•، -، *) أو ترقيم القوائم أو العناوين أو أي تنسيق ماركداون، إلا إذا طلب المالك ذلك صراحةً في تعليماته.`;
 }
 
+function collectInstantReplies(config = {}, text = '') {
+  const lower = String(text || '').toLowerCase().trim();
+  const matched = [];
+  if (!lower) return { matched, hasExtraQuestion: false };
+  let remainder = lower;
+  for (const [keyword, reply] of Object.entries(config.autoReplyKeywords || {})) {
+    const k = String(keyword || '').trim().toLowerCase();
+    const r = String(reply || '').trim();
+    if (!k || !r) continue;
+    if (!lower.includes(k)) continue;
+    matched.push({ keyword: k, reply: r });
+    remainder = remainder.split(k).join(' ');
+  }
+  remainder = remainder.replace(/\s+/g, ' ').trim();
+  const meaningful = remainder
+    ? remainder.split(/\s+/).filter(w => w.replace(/[^؀-ۿa-z0-9]/gi, '').length >= 2)
+    : [];
+  const hasExtraQuestion = matched.length > 0 && meaningful.length >= 2;
+  return { matched, hasExtraQuestion };
+}
+
 module.exports = {
   buildPlatformPromptBlock,
+  collectInstantReplies,
   describeEmoji,
   describeLanguage,
   describeReplyLength,
