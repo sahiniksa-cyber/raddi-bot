@@ -210,3 +210,15 @@ test('enforceStyleRules: defaults preserve everything (no merchant choice = no c
   assert.equal(enforceStyleRules(r, { replyStyle: {} }), r);
   assert.equal(enforceStyleRules(r, {}), r);
 });
+
+test('validateAndRepair enforces merchant style choices', async () => {
+  const out = await validateAndRepair({
+    reply: 'حياك الله! السعر 59 ريال. 🌟',
+    config: { replyStyle: { emojiLevel: 'none', allowExclamation: false, allowSentencePeriods: false } },
+    customerText: 'كم السعر', matched: [],
+    regenerate: async () => { throw new Error('no'); },
+  });
+  assert.equal(/[!🌟]/.test(out), false, 'لا تعجب ولا إيموجي');
+  assert.equal(/ريال\./.test(out), false, 'لا نقطة بعد ريال');
+  assert.ok(out.includes('59 ريال'));
+});
