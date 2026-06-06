@@ -161,3 +161,64 @@ test('validateAndRepair: long reply without escalation intent is trimmed normall
   assert.ok(out.length <= 105, `الرد يجب أن يكون أقصر من الحد، got length=${out.length}`);
   assert.ok(!out.includes('[تحويل:'), 'لا يجب أن تكون علامة تصعيد لأن النية غير موجودة');
 });
+
+const { stripStyleViolations } = require('../src/services/ai/reply-validator');
+
+test('stripStyleViolations removes "كيف أقدر أساعدك" variants', () => {
+  assert.equal(stripStyleViolations('وعليكم السلام! كيف أقدر أساعدك اليوم؟').includes('أساعدك'), false);
+  assert.equal(stripStyleViolations('هلا! كيف أقدر أخدمك اليوم؟').includes('أخدمك'), false);
+  assert.equal(stripStyleViolations('أهلين، كيف يمكنني مساعدتك؟').includes('مساعدتك'), false);
+});
+test('stripStyleViolations keeps normal content intact', () => {
+  const r = 'الشحن يوصل خلال يومين عبر سمسا';
+  assert.equal(stripStyleViolations(r), r);
+});
+test('stripStyleViolations leaves a clean greeting when offer-help removed', () => {
+  const out = stripStyleViolations('وعليكم السلام! كيف أقدر أخدمك اليوم؟');
+  assert.ok(out.startsWith('وعليكم السلام'));
+  assert.ok(out.length > 0);
+});
+
+test('validateAndRepair strips offer-help phrase deterministically', async () => {
+  const out = await validateAndRepair({
+    reply: 'وعليكم السلام! كيف أقدر أخدمك اليوم؟',
+    config: {}, customerText: 'السلام عليكم', matched: [],
+    regenerate: async () => { throw new Error('no'); },
+  });
+  assert.equal(/أخدمك|أساعدك/.test(out), false);
+  assert.ok(out.includes('السلام'));
+});
+
+const { enforceStyleRules } = require('../src/services/ai/reply-validator');
+
+test('enforceStyleRules: strips emoji only when emojiLevel none', () => {
+  assert.equal(enforceStyleRules('أهلين 🌟😊', { replyStyle: { emojiLevel: 'none' } }), 'أهلين');
+  assert.equal(enforceStyleRules('أهلين 🌟', { replyStyle: { emojiLevel: 'medium' } }), 'أهلين 🌟');
+});
+test('enforceStyleRules: strips "!" only when allowExclamation false', () => {
+  assert.equal(enforceStyleRules('حياك الله!', { replyStyle: { allowExclamation: false } }), 'حياك الله');
+  assert.equal(enforceStyleRules('حياك الله!', { replyStyle: {} }), 'حياك الله!');
+});
+test('enforceStyleRules: strips sentence-ending periods when allowSentencePeriods false', () => {
+  const cfg = { replyStyle: { allowSentencePeriods: false } };
+  assert.equal(enforceStyleRules('السعر 59 ريال. التسليم دعوة.', cfg), 'السعر 59 ريال التسليم دعوة');
+  // لا يمسّ النقطة العشرية ولا الروابط
+  assert.equal(enforceStyleRules('النسخة 3.5 على prostoree.com', cfg), 'النسخة 3.5 على prostoree.com');
+});
+test('enforceStyleRules: defaults preserve everything (no merchant choice = no change)', () => {
+  const r = 'مرحبا! السعر 59 ريال. 🌟';
+  assert.equal(enforceStyleRules(r, { replyStyle: {} }), r);
+  assert.equal(enforceStyleRules(r, {}), r);
+});
+
+test('validateAndRepair enforces merchant style choices', async () => {
+  const out = await validateAndRepair({
+    reply: 'حياك الله! السعر 59 ريال. 🌟',
+    config: { replyStyle: { emojiLevel: 'none', allowExclamation: false, allowSentencePeriods: false } },
+    customerText: 'كم السعر', matched: [],
+    regenerate: async () => { throw new Error('no'); },
+  });
+  assert.equal(/[!🌟]/.test(out), false, 'لا تعجب ولا إيموجي');
+  assert.equal(/ريال\./.test(out), false, 'لا نقطة بعد ريال');
+  assert.ok(out.includes('59 ريال'));
+});

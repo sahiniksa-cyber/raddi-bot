@@ -976,8 +976,8 @@ body{background-attachment:scroll}
     </div>
   </div>
 
-  <!-- ── AI PANEL (all models + key in one box) ── -->
-  <div class="panel">
+  <!-- ── AI PANEL (all models + key in one box) — admin-only ── -->
+  <div class="panel" id="aiPanel" style="display:none">
     <div class="phdr">🧠 الذكاء الاصطناعي</div>
     <div class="pbdy">
 
@@ -1093,6 +1093,12 @@ body{background-attachment:scroll}
             <option value="long">مفصّل</option>
           </select>
         </div>
+      </div>
+
+      <div class="form-group">
+        <label><input type="checkbox" id="rsAllowExclamation" checked> السماح بعلامات التعجب (!)</label>
+        <label style="margin-right:16px"><input type="checkbox" id="rsAllowPeriods" checked> السماح بالنقطة في نهاية الجمل</label>
+        <small style="display:block;color:#888">ألغِ الاختيار لمنعها نهائياً في كل ردود البوت.</small>
       </div>
 
       <!-- Reply max length -->
@@ -1835,6 +1841,8 @@ function fillForm(c){
   toggleDialect(lang);
   document.getElementById('rsDialect').value=r.dialect||'السعودية الخفيفة';
   document.getElementById('rsEmoji').value=r.emojiLevel||'medium';
+  document.getElementById('rsAllowExclamation').checked = r.allowExclamation !== false;
+  document.getElementById('rsAllowPeriods').checked = r.allowSentencePeriods !== false;
   document.getElementById('rsLength').value=r.replyLength||'medium';
   renderChips('greetingChips',r.greetingPhrases||['أهلاً وسهلاً 🌹','هلا والله','حياك الله']);
   renderChips('closingChips',r.closingPhrases||['تأمر شي ثاني؟','في خدمتك']);
@@ -2391,6 +2399,8 @@ async function saveConf(){
     useDialect:langStyle==='dialect',
     dialect:document.getElementById('rsDialect').value,
     emojiLevel:document.getElementById('rsEmoji').value,
+    allowExclamation:document.getElementById('rsAllowExclamation').checked,
+    allowSentencePeriods:document.getElementById('rsAllowPeriods').checked,
     replyLength:document.getElementById('rsLength').value,
     useShortReplies:document.getElementById('rsLength').value==='short',
     greetingPhrases:getChips('greetingChips'),
@@ -2738,6 +2748,7 @@ async function loadUserInfo(){
       const el=document.getElementById('userNameBadge');if(el)el.textContent=d.name||'';
       const n=document.getElementById('accName');if(n)n.value=d.name||'';
       const e=document.getElementById('accEmail');if(e)e.value=d.email||'';
+      if(d.role==='admin'){const ap=document.getElementById('aiPanel');if(ap)ap.style.display='';}
     } else location.href='/login';
   }catch(_){}
 }

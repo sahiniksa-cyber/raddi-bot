@@ -28,14 +28,26 @@ function normalizeProductText(value) {
     .trim();
 }
 
+// سطر "سعر صرف": يحوي رقماً ولا يتبقى منه حروف بعد إزالة الأرقام والعملة والفواصل.
+// "120 ريال" → true ، "٩٠ ريال" → true ، "اشتراك 4 أشهر" → false (تبقى حروف).
+function isPriceLikeLine(value) {
+  const v = String(value || '');
+  // دعم الأرقام العربية (٠-٩) والفارسية (۰-۹) إضافةً للـ ASCII
+  if (!/[\d٠-٩۰-۹]/.test(v)) return false;
+  const lettersLeft = v
+    .replace(/ر\.?\s?س|ريال|درهم|sar|aed|usd|\$|﷼/gi, '')
+    .replace(/[\d٠-٩۰-۹.,،\-\/\s]/g, '');
+  return lettersLeft.length === 0;
+}
+
 function isProductNameLine(line) {
   const value = String(line || '').trim();
   if (!value) return false;
   if (/^[-•]/.test(value)) return false;
   if (/[—:]/.test(value)) return false;
-  if (/\d/.test(value)) return false;
+  if (isPriceLikeLine(value)) return false;
   if (value.length > 60) return false;
-  if (/^(مثال|العميل|أنت|ممنوع|لا |وقت|بعد|طلب|السعر|المنتج|إنهاء|ما تعرف)/.test(value)) return false;
+  if (/^(مثال|العميل|أنت|ممنوع|لا |وقت|بعد|طلب|السعر|المنتج|إنهاء|ما تعرف|خصم|عرض|التوصيل|الشحن|الدفع|الضمان|نوفر|يوجد|يمكنك|متوفر التوصيل)/.test(value)) return false;
   return true;
 }
 
@@ -56,10 +68,13 @@ function parsePromptProducts(instructions) {
     if (!line) continue;
     if (isProductNameLine(line)) {
       if (current) products.push(current);
-      current = { name: line, descriptionLines: [], source: 'prompt' };
+      current = { name: line, descriptionLines: [], price: '', source: 'prompt' };
       continue;
     }
-    if (current) current.descriptionLines.push(line);
+    if (current) {
+      if (!current.price && isPriceLikeLine(line)) current.price = line;
+      else current.descriptionLines.push(line);
+    }
   }
   if (current) products.push(current);
 
@@ -67,10 +82,10 @@ function parsePromptProducts(instructions) {
     .map(product => ({
       name: product.name,
       description: product.descriptionLines.join('\n').trim(),
-      price: '',
+      price: product.price || '',
       source: product.source,
     }))
-    .filter(product => product.name && product.description);
+    .filter(product => product.name && (product.price || product.description));
 }
 
 function structuredProducts(products = []) {

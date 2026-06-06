@@ -74,6 +74,20 @@ function needsRepairForCopOut(reply, matched = []) {
   return isCopOut(reply) && Array.isArray(matched) && matched.some(m => m.score >= 3);
 }
 
+// يمسك عبارة "عرض الخدمة" الآلية مهما التفّ النموذج لفظياً
+// (أساعدك/أخدمك/أعاونك/مساعدتك/خدمتك)، حتمياً قبل الإرسال.
+// ملاحظة: تم توسيع البادئة لتشمل (م) لالتقاط الصيغ المصدرية (مساعدتك، معاونتك)
+// مقارنة بالخطة الأصلية، دون إضافة false positives (اختبر بشمول على 8+ حالات).
+const OFFER_HELP = /\s*،?\s*(?:كيف|كيفاش|وش)\s+(?:أقدر|اقدر|يمكنني|ممكن|تحب|تبي)?\s*(?:أ|ا|م)?(?:ساعد|خدم|عاون)\S*\s*(?:اليوم|حضرتك)?\s*[؟?]*/g;
+
+function stripStyleViolations(reply) {
+  let out = String(reply || '').replace(OFFER_HELP, '');
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
+  // نظّف علامة ترقيم متدلية في النهاية (مثل "! ," بعد الحذف)
+  out = out.replace(/[،,]\s*$/, '').replace(/!\s*$/, '!').trim();
+  return out;
+}
+
 // المنسّق: إصلاحات حتمية أولاً، ثم إعادة توليد واحدة عند تهرّب رغم سياسة مطابقة.
 async function validateAndRepair({ reply, config = {}, customerText = '', matched = [], regenerate } = {}) {
   let current = String(reply || '').trim();
@@ -88,6 +102,10 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
   }
 
   // 2) إصلاحات حتمية (لا تحتاج نموذجاً)
+  // فلتر أسلوب حتمي (يمسح عبارات عرض الخدمة الآلية)
+  current = stripStyleViolations(current);
+  current = enforceStyleRules(current, config);
+
   // حدّد العلامة النهائية (من النموذج إن وُجدت، أو حتمياً عند النية)
   const tagged = enforceEscalationTag(current, config, customerText);
   const tagMatch = tagged.match(/\s*\[تحويل:[^\]]*\]\s*$/);
@@ -98,7 +116,26 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
   return current;
 }
 
+// نطاق إيموجي واسع (رموز + متغيرات + أعلام + ZWJ)
+const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u{200D}]/gu;
+
+// يفرض ضوابط أسلوب التاجر المختارة فقط (config-driven، آمن متعدد المستأجرين).
+function enforceStyleRules(reply, config = {}) {
+  const r = (config && config.replyStyle) || {};
+  let out = String(reply || '');
+  if (r.emojiLevel === 'none') out = out.replace(EMOJI_RE, '');
+  if (r.allowExclamation === false) out = out.replace(/[!！]/g, '');
+  if (r.allowSentencePeriods === false) {
+    // احذف النقطة المنهية لجملة (مسبوقة بحرف غير رقمي، يتبعها مسافة/سطر/نهاية)،
+    // دون المساس بالنقطة العشرية (3.5) أو داخل الروابط (.com).
+    out = out.replace(/([^\d\s])\.(?=\s|$)/g, '$1');
+  }
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،؟])/g, '$1').trim();
+  return out;
+}
+
 module.exports = {
   enforceLength, detectEscalationIntent, enforceEscalationTag,
-  isCopOut, needsRepairForCopOut, validateAndRepair,
+  isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
+  enforceStyleRules,
 };
