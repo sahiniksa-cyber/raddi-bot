@@ -161,3 +161,20 @@ test('validateAndRepair: long reply without escalation intent is trimmed normall
   assert.ok(out.length <= 105, `الرد يجب أن يكون أقصر من الحد، got length=${out.length}`);
   assert.ok(!out.includes('[تحويل:'), 'لا يجب أن تكون علامة تصعيد لأن النية غير موجودة');
 });
+
+const { stripStyleViolations } = require('../src/services/ai/reply-validator');
+
+test('stripStyleViolations removes "كيف أقدر أساعدك" variants', () => {
+  assert.equal(stripStyleViolations('وعليكم السلام! كيف أقدر أساعدك اليوم؟').includes('أساعدك'), false);
+  assert.equal(stripStyleViolations('هلا! كيف أقدر أخدمك اليوم؟').includes('أخدمك'), false);
+  assert.equal(stripStyleViolations('أهلين، كيف يمكنني مساعدتك؟').includes('مساعدتك'), false);
+});
+test('stripStyleViolations keeps normal content intact', () => {
+  const r = 'الشحن يوصل خلال يومين عبر سمسا';
+  assert.equal(stripStyleViolations(r), r);
+});
+test('stripStyleViolations leaves a clean greeting when offer-help removed', () => {
+  const out = stripStyleViolations('وعليكم السلام! كيف أقدر أخدمك اليوم؟');
+  assert.ok(out.startsWith('وعليكم السلام'));
+  assert.ok(out.length > 0);
+});

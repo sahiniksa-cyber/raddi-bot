@@ -74,6 +74,20 @@ function needsRepairForCopOut(reply, matched = []) {
   return isCopOut(reply) && Array.isArray(matched) && matched.some(m => m.score >= 3);
 }
 
+// يمسك عبارة "عرض الخدمة" الآلية مهما التفّ النموذج لفظياً
+// (أساعدك/أخدمك/أعاونك/مساعدتك/خدمتك)، حتمياً قبل الإرسال.
+// ملاحظة: تم توسيع البادئة لتشمل (م) لالتقاط الصيغ المصدرية (مساعدتك، معاونتك)
+// مقارنة بالخطة الأصلية، دون إضافة false positives (اختبر بشمول على 8+ حالات).
+const OFFER_HELP = /\s*،?\s*(?:كيف|كيفاش|وش)\s+(?:أقدر|اقدر|يمكنني|ممكن|تحب|تبي)?\s*(?:أ|ا|م)?(?:ساعد|خدم|عاون)\S*\s*(?:اليوم|حضرتك)?\s*[؟?]*/g;
+
+function stripStyleViolations(reply) {
+  let out = String(reply || '').replace(OFFER_HELP, '');
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
+  // نظّف علامة ترقيم متدلية في النهاية (مثل "! ," بعد الحذف)
+  out = out.replace(/[،,]\s*$/, '').replace(/!\s*$/, '!').trim();
+  return out;
+}
+
 // المنسّق: إصلاحات حتمية أولاً، ثم إعادة توليد واحدة عند تهرّب رغم سياسة مطابقة.
 async function validateAndRepair({ reply, config = {}, customerText = '', matched = [], regenerate } = {}) {
   let current = String(reply || '').trim();
@@ -100,5 +114,5 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
 
 module.exports = {
   enforceLength, detectEscalationIntent, enforceEscalationTag,
-  isCopOut, needsRepairForCopOut, validateAndRepair,
+  isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
 };
