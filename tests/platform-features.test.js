@@ -50,3 +50,14 @@ test('collect: multiple triggers captured', () => {
   const r = collectInstantReplies(G, 'السلام عليكم وش اخبار الشحن');
   assert.ok(r.matched.length >= 2);
 });
+
+// I1 — short question detection
+test('collect: greeting + short question with mark → extra question', () => {
+  assert.equal(collectInstantReplies(G, 'السلام عليكم بكم؟').hasExtraQuestion, true);
+});
+test('collect: greeting + single question word → extra question', () => {
+  assert.equal(collectInstantReplies(G, 'السلام عليكم وين فرعكم').hasExtraQuestion, true);
+});
+test('collect: greeting + chitchat (كيفك) → NOT extra question', () => {
+  assert.equal(collectInstantReplies(G, 'السلام عليكم كيفك').hasExtraQuestion, false);
+});

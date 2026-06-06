@@ -92,7 +92,16 @@ function collectInstantReplies(config = {}, text = '') {
   const meaningful = remainder
     ? remainder.split(/\s+/).filter(w => w.replace(/[^؀-ۿa-z0-9]/gi, '').length >= 2)
     : [];
-  const hasExtraQuestion = matched.length > 0 && meaningful.length >= 2;
+  // Question/request token detection: exact token match so "كيف" inside "كيفك" won't fire.
+  const QUESTION_TOKENS = new Set([
+    'كم', 'بكم', 'وش', 'ايش', 'أيش', 'متى', 'كيف', 'هل', 'وين', 'اين', 'أين',
+    'ليش', 'لماذا', 'ابي', 'أبي', 'ابغى', 'أبغى', 'ابغا',
+    'عندكم', 'عندك', 'تبيعون', 'متوفر',
+  ]);
+  const remainderTokens = remainder ? remainder.split(/\s+/).filter(Boolean) : [];
+  const hasQuestionMark = /[؟?]/.test(remainder);
+  const hasQuestionToken = remainderTokens.some(t => QUESTION_TOKENS.has(t.replace(/[^؀-ۿa-z]/gi, '')));
+  const hasExtraQuestion = matched.length > 0 && (hasQuestionMark || hasQuestionToken || meaningful.length >= 2);
   return { matched, hasExtraQuestion };
 }
 
