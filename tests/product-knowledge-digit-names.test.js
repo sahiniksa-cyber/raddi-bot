@@ -25,3 +25,10 @@ test('price line is captured as price, not treated as a product name', () => {
   // "120 ريال" must NOT appear as its own product name
   assert.ok(!products.some(p => p.name === '120 ريال'));
 });
+
+test('product with only name+price (no description) is kept', () => {
+  const products = parsePromptProducts(`## المنتجات\nاشتراك 4 أشهر\n120 ريال`);
+  assert.equal(products.length, 1);
+  assert.equal(products[0].name, 'اشتراك 4 أشهر');
+  assert.equal(products[0].price, '120 ريال');
+});

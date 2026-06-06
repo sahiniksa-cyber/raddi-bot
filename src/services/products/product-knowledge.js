@@ -67,10 +67,13 @@ function parsePromptProducts(instructions) {
     if (!line) continue;
     if (isProductNameLine(line)) {
       if (current) products.push(current);
-      current = { name: line, descriptionLines: [], source: 'prompt' };
+      current = { name: line, descriptionLines: [], price: '', source: 'prompt' };
       continue;
     }
-    if (current) current.descriptionLines.push(line);
+    if (current) {
+      if (!current.price && isPriceLikeLine(line)) current.price = line;
+      else current.descriptionLines.push(line);
+    }
   }
   if (current) products.push(current);
 
@@ -78,10 +81,10 @@ function parsePromptProducts(instructions) {
     .map(product => ({
       name: product.name,
       description: product.descriptionLines.join('\n').trim(),
-      price: '',
+      price: product.price || '',
       source: product.source,
     }))
-    .filter(product => product.name && product.description);
+    .filter(product => product.name);
 }
 
 function structuredProducts(products = []) {
