@@ -119,6 +119,19 @@ function isFromMeMessage(msg) {
   return msg?.fromMe === true;
 }
 
+const DEFAULT_OWNER_PAUSE_MINUTES = 30;
+
+/**
+ * Computes the timestamp until which the bot should stay muted on a conversation
+ * after the owner replied manually. Returns null when pausing is disabled
+ * (minutes <= 0 or not a finite number), so callers can skip the mute entirely.
+ */
+function ownerPauseExpiry(minutes, nowMs) {
+  const m = parseInt(minutes, 10);
+  if (!Number.isFinite(m) || m <= 0) return null;
+  return new Date(nowMs + m * 60 * 1000);
+}
+
 class MessageIngestService {
   constructor({ logger = console, queue = { enqueueAiReply }, database = db } = {}) {
     this.logger = logger;
@@ -205,6 +218,27 @@ class MessageIngestService {
     };
   }
 
+  /**
+   * Reads the merchant's ownerPauseMinutes from bot_configs via a lightweight
+   * direct query. Defaults to 30 when the row/value is missing or null.
+   * Never throws — returns the default on any error.
+   */
+  async resolveOwnerPauseMinutes(userId) {
+    try {
+      const result = await this.db.query(
+        `SELECT (config->>'ownerPauseMinutes') AS owner_pause_minutes
+           FROM bot_configs WHERE user_id = $1`,
+        [userId],
+      );
+      const raw = result?.rows?.[0]?.owner_pause_minutes;
+      if (raw === null || raw === undefined) return DEFAULT_OWNER_PAUSE_MINUTES;
+      const parsed = parseInt(raw, 10);
+      return Number.isFinite(parsed) ? parsed : DEFAULT_OWNER_PAUSE_MINUTES;
+    } catch (_e) {
+      return DEFAULT_OWNER_PAUSE_MINUTES;
+    }
+  }
+
   async ingestOutboundHumanMessage({ userId, msg, source = 'whatsapp-web.js' }) {
     if (!this.db.isConfigured()) {
       throw new Error('DATABASE_URL is required for message ingest');
@@ -243,6 +277,26 @@ class MessageIngestService {
     });
 
     this.logger.info?.('message', `recorded fromMe human reply ${providerMessageId} to ${recipient}`);
+
+    // Owner replied manually → pause the bot on this conversation for a
+    // configurable window (default 30min) by reusing the escalation-mute
+    // mechanism (conversations.escalated_until). The AI worker already skips
+    // muted conversations, so no worker change is needed. Wrapped in try/catch
+    // so a failure here never breaks recording the owner's reply.
+    try {
+      const minutes = await this.resolveOwnerPauseMinutes(userId);
+      const expiry = ownerPauseExpiry(minutes, Date.now());
+      if (expiry && saved?.conversationId) {
+        await this.db.query(
+          `UPDATE conversations SET escalated_until = $2 WHERE id = $1`,
+          [saved.conversationId, expiry],
+        );
+        this.logger.info?.('owner-pause', `paused bot on ${recipient} until ${expiry.toISOString()}`);
+      }
+    } catch (e) {
+      this.logger?.warn?.('owner-pause', `failed to set pause: ${e.message}`);
+    }
+
     return {
       accepted: true,
       statusCode: 200,
@@ -258,6 +312,7 @@ class MessageIngestService {
 
 module.exports = {
   MessageIngestService,
+  ownerPauseExpiry,
   messageIdFromWhatsappMessage,
   mediaFromWhatsappMessage,
   senderFromWhatsappMessage,
