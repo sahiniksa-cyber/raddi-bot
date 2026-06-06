@@ -115,7 +115,26 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
   return current;
 }
 
+// نطاق إيموجي واسع (رموز + متغيرات + أعلام + ZWJ)
+const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u{200D}]/gu;
+
+// يفرض ضوابط أسلوب التاجر المختارة فقط (config-driven، آمن متعدد المستأجرين).
+function enforceStyleRules(reply, config = {}) {
+  const r = (config && config.replyStyle) || {};
+  let out = String(reply || '');
+  if (r.emojiLevel === 'none') out = out.replace(EMOJI_RE, '');
+  if (r.allowExclamation === false) out = out.replace(/[!！]/g, '');
+  if (r.allowSentencePeriods === false) {
+    // احذف النقطة المنهية لجملة (مسبوقة بحرف غير رقمي، يتبعها مسافة/سطر/نهاية)،
+    // دون المساس بالنقطة العشرية (3.5) أو داخل الروابط (.com).
+    out = out.replace(/([^\d\s])\.(?=\s|$)/g, '$1');
+  }
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،؟])/g, '$1').trim();
+  return out;
+}
+
 module.exports = {
   enforceLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
+  enforceStyleRules,
 };
