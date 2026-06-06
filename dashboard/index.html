@@ -1107,6 +1107,15 @@ body{background-attachment:scroll}
         <div><label>لغة الرد (نصياً)</label><input type="text" id="respLang" placeholder="مثال: العربية الفصحى السهلة"></div>
       </div>
 
+      <!-- Owner pause window -->
+      <div class="g2">
+        <div>
+          <label>إيقاف البوت عند ردّك يدوياً (دقيقة)</label>
+          <input type="number" id="ownerPauseMinutes" placeholder="30" min="0">
+          <small style="display:block;color:#888">لما ترد على العميل بنفسك، يسكت البوت عن المحادثة هذه المدة. 0 = لا يتوقف.</small>
+        </div>
+      </div>
+
       <!-- Greetings -->
       <label style="margin-top:6px">عبارات التحية المتنوعة <span style="color:#475569;font-weight:500;font-size:10px">(اختر مما يناسبك أو أضف خاصة بك)</span></label>
       <div class="chips" id="greetingChips">
@@ -1830,6 +1839,7 @@ function fillForm(c){
   document.getElementById('botInstr').value=c.botInstructions||'';
   document.getElementById('respLang').value=c.responseLanguage||'العربية الفصحى السهلة';
   document.getElementById('maxLen').value=c.maxResponseLength||300;
+  document.getElementById('ownerPauseMinutes').value=c.ownerPauseMinutes??30;
   document.getElementById('errorMessage').value=c.errorMessage||'';
   setModel(c.model||'google/gemini-2.0-flash');
   // Reply style
@@ -2426,6 +2436,7 @@ async function saveConf(){
     botInstructions:document.getElementById('botInstr').value.trim(),
     responseLanguage:document.getElementById('respLang').value.trim(),
     maxResponseLength:parseInt(document.getElementById('maxLen').value)||300,
+    ownerPauseMinutes:(()=>{const v=parseInt(document.getElementById('ownerPauseMinutes').value,10);return Number.isFinite(v)&&v>=0?v:30;})(),
     errorMessage:document.getElementById('errorMessage').value.trim(),
     replyStyle,
     replyDelayPreset,
