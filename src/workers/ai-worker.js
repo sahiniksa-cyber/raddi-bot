@@ -16,7 +16,7 @@ const { prepareEscalation } = require('./escalation-routing');
 const { findDuplicateRecentReply } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
-const { findAutoReply, collectInstantReplies } = require('../services/bot/platform-features');
+const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('../services/bot/platform-features');
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { checkMessageQuota } = require('../services/billing/message-quota');
 const {
@@ -654,8 +654,7 @@ async function processAiReply(job) {
     if (!customerReply) throw new Error('AI returned empty customer reply after escalation marker cleanup');
 
     if (combinePrefix) {
-      const aiPart = customerReply && customerReply !== combinePrefix ? `\n${customerReply}` : '';
-      customerReply = `${combinePrefix}${aiPart}`.trim();
+      customerReply = combineCannedAndAi(combinePrefix, customerReply);
     }
 
     // Reply de-duplication: if the candidate reply is near-identical to one of
@@ -699,8 +698,7 @@ async function processAiReply(job) {
           let retryCustomer = (retryEscalation.customerReply || '').trim();
           if (retryCustomer) {
             if (combinePrefix) {
-              const aiPart = retryCustomer && retryCustomer !== combinePrefix ? `\n${retryCustomer}` : '';
-              retryCustomer = `${combinePrefix}${aiPart}`.trim();
+              retryCustomer = combineCannedAndAi(combinePrefix, retryCustomer);
             }
             customerReply = retryCustomer;
           }

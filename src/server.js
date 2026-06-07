@@ -38,7 +38,7 @@ const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./ser
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
-const { findAutoReply, collectInstantReplies } = require('./services/bot/platform-features');
+const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('./services/bot/platform-features');
 const { listPausedChats, resumePausedChat } = require('./services/bot/paused-chats');
 const {
   buildTrainAnalyzeRequest,
@@ -454,8 +454,7 @@ function createApp() {
     const aiRaw = await bot.getAIReply(history, { maxRetries: 0, isFirstMsg: isFirst, latestUserText: incomingMessage, instantAnswered: cannedPrefix });
     let reply = String(aiRaw || '').trim();
     if (cannedPrefix) {
-      const aiPart = reply && reply !== cannedPrefix ? `\n${reply}` : '';
-      reply = `${cannedPrefix}${aiPart}`.trim();
+      reply = combineCannedAndAi(cannedPrefix, reply);
     }
     history.push({ role: 'assistant', content: reply });
     return res.json({ success: true, reply, source: cannedPrefix ? 'keyword+ai' : 'ai', historyLength: history.length, welcomeShown });
