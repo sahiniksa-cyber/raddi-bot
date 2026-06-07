@@ -38,7 +38,7 @@ const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./ser
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
-const { findAutoReply } = require('./services/bot/platform-features');
+const { findAutoReply, collectInstantReplies } = require('./services/bot/platform-features');
 const { listPausedChats, resumePausedChat } = require('./services/bot/paused-chats');
 const {
   buildTrainAnalyzeRequest,
@@ -429,11 +429,15 @@ function createApp() {
     if (isFirst) bot.testConversations.set(sid, []);
     const history = bot.testConversations.get(sid);
 
-    const instantReply = findAutoReply(bot.config, incomingMessage);
-    if (instantReply) {
+    // Mirror the WhatsApp worker: a bare trigger → canned reply only (fast path);
+    // a trigger PLUS a real question → send the canned reply verbatim AND let the
+    // AI answer the rest (combine mode), so the customer's question is never lost.
+    const { matched: instantMatched, hasExtraQuestion } = collectInstantReplies(bot.config, incomingMessage);
+    const cannedPrefix = instantMatched.map(m => m.reply).join('\n');
+    if (cannedPrefix && !hasExtraQuestion) {
       history.push({ role: 'user', content: incomingMessage });
-      history.push({ role: 'assistant', content: instantReply });
-      return res.json({ success: true, reply: instantReply, source: 'keyword', historyLength: history.length });
+      history.push({ role: 'assistant', content: cannedPrefix });
+      return res.json({ success: true, reply: cannedPrefix, source: 'keyword', historyLength: history.length });
     }
 
     const welcomeMode = bot.config.welcomeMode || 'inline';
@@ -447,9 +451,14 @@ function createApp() {
     const memSize = Math.max(2, parseInt(bot.config.memoryMessages, 10) || 50);
     if (history.length > memSize) history.splice(0, history.length - memSize);
 
-    const aiReply = await bot.getAIReply(history, { maxRetries: 0, isFirstMsg: isFirst, latestUserText: incomingMessage });
-    history.push({ role: 'assistant', content: aiReply });
-    return res.json({ success: true, reply: aiReply, source: 'ai', historyLength: history.length, welcomeShown });
+    const aiRaw = await bot.getAIReply(history, { maxRetries: 0, isFirstMsg: isFirst, latestUserText: incomingMessage, instantAnswered: cannedPrefix });
+    let reply = String(aiRaw || '').trim();
+    if (cannedPrefix) {
+      const aiPart = reply && reply !== cannedPrefix ? `\n${reply}` : '';
+      reply = `${cannedPrefix}${aiPart}`.trim();
+    }
+    history.push({ role: 'assistant', content: reply });
+    return res.json({ success: true, reply, source: cannedPrefix ? 'keyword+ai' : 'ai', historyLength: history.length, welcomeShown });
   }));
   app.post('/api/learn-style', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
