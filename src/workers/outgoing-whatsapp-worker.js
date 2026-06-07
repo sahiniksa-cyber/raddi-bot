@@ -358,30 +358,36 @@ async function requeuePersistedOutgoingJobs(limit = 200) {
 
   const { outgoingWhatsapp } = getQueues();
   for (const row of result.rows) {
-    const safeJobKey = normalizeOutgoingJobKey(row.job_key, row.payload);
-    const existing = safeJobKey ? await outgoingWhatsapp.getJob(safeJobKey).catch(() => null) : null;
-    if (existing) {
+    try {
+      const safeJobKey = normalizeOutgoingJobKey(row.job_key, row.payload);
+      const existing = safeJobKey ? await outgoingWhatsapp.getJob(safeJobKey).catch(() => null) : null;
+      if (existing) {
+        if (safeJobKey && safeJobKey !== row.job_key) {
+          await updatePersistedJobKey(row.job_key, safeJobKey).catch(() => {});
+        }
+        const state = await existing.getState().catch(() => null);
+        if (state === 'failed') {
+          await existing.retry('failed').catch(() => {});
+        }
+        continue;
+      }
+      await outgoingWhatsapp.add('send-whatsapp-message', row.payload, {
+        jobId: safeJobKey || undefined,
+        attempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS || '3', 10),
+        backoff: {
+          type: 'exponential',
+          delay: parseInt(process.env.QUEUE_BACKOFF_DELAY_MS || '15000', 10),
+        },
+      }).catch((err) => {
+        if (!/already exists/i.test(err.message)) throw err;
+      });
       if (safeJobKey && safeJobKey !== row.job_key) {
         await updatePersistedJobKey(row.job_key, safeJobKey).catch(() => {});
       }
-      const state = await existing.getState().catch(() => null);
-      if (state === 'failed') {
-        await existing.retry('failed').catch(() => {});
-      }
-      continue;
-    }
-    await outgoingWhatsapp.add('send-whatsapp-message', row.payload, {
-      jobId: safeJobKey || undefined,
-      attempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS || '3', 10),
-      backoff: {
-        type: 'exponential',
-        delay: parseInt(process.env.QUEUE_BACKOFF_DELAY_MS || '15000', 10),
-      },
-    }).catch((err) => {
-      if (!/already exists/i.test(err.message)) throw err;
-    });
-    if (safeJobKey && safeJobKey !== row.job_key) {
-      await updatePersistedJobKey(row.job_key, safeJobKey).catch(() => {});
+    } catch (err) {
+      console.warn(
+        `${new Date().toISOString()} [${WORKER_NAME}] requeue skipped one job (job_key=${row.job_key}): ${err.message}`,
+      );
     }
   }
   console.log(`${new Date().toISOString()} [${WORKER_NAME}] requeued ${result.rows.length} persisted outgoing job(s)`);
