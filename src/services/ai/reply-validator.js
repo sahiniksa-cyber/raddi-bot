@@ -49,14 +49,25 @@ function detectEscalationIntent(customerText) {
   return hasWant && hasHuman;
 }
 
+// عبارات يقولها البوت نفسه وتدل على نية تحويل للفريق/الفني. كثير من برومبتات
+// التجار تأمر البوت يقول "رح أحوّل طلبك للفريق" بالعربي، بدون علامة [تحويل:]
+// — فيظن العميل أنه حُوّل بينما المالك لا يتبلّغ إطلاقاً. نكشف هذي العبارات
+// ونضيف العلامة تلقائياً ليُشغَّل التصعيد الفعلي.
+const BOT_TRANSFER_RE = /أحوّل|أحول|احوّل|احول|نحوّل|نحول|حوّلت طلبك|يتواصلون معك|بيتواصلون معك|يتواصل معك|بيتواصل معك/;
+
+function botSignalsTransfer(reply) {
+  return BOT_TRANSFER_RE.test(String(reply || ''));
+}
+
 function enforceEscalationTag(reply, config = {}, customerText = '') {
   const text = String(reply || '');
   if (/\[تحويل:/.test(text)) return text;            // النموذج وضعها
-  if (!detectEscalationIntent(customerText)) return text;
+  // صعّد إذا طلب العميل صراحةً موظفاً، أو إذا قال البوت نفسه إنه يحوّل للفريق.
+  if (!detectEscalationIntent(customerText) && !botSignalsTransfer(text)) return text;
   const contacts = config.escalationContacts || [];
   if (!contacts.length) return text;                 // لا جهة تصعيد مضبوطة
   const name = contacts[0].name || 'المالك';
-  const summary = String(customerText || '').slice(0, 40).replace(/[|\]]/g, ' ').trim();
+  const summary = (String(customerText || '').slice(0, 40).replace(/[|\]]/g, ' ').trim()) || 'طلب عميل يحتاج متابعة';
   return `${text.trim()} [تحويل:${name}|${summary}]`;
 }
 
@@ -137,5 +148,5 @@ function enforceStyleRules(reply, config = {}) {
 module.exports = {
   enforceLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
-  enforceStyleRules,
+  enforceStyleRules, botSignalsTransfer,
 };
