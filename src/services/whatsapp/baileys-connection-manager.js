@@ -18,6 +18,18 @@ const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
 const { usePostgresBaileysAuthState, BaileysPostgresAuthState } = require('./baileys-postgres-auth');
 
+// WebSocket readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED.
+// The passive heartbeat must treat ONLY explicit CLOSING/CLOSED as dead.
+// `undefined`/`null` means this Baileys build doesn't expose `ws.readyState`
+// — NOT a death signal. The old `readyState !== 1` test treated `undefined`
+// as dead and forced a reconnect every heartbeat, causing a perpetual
+// reconnect + history-resync loop on a perfectly healthy connection. Genuine
+// deaths are caught by Baileys' own keep-alive (keepAliveIntervalMs), which
+// emits a connection.update 'close' that triggers scheduleReconnect.
+function isSocketDeadReadyState(readyState) {
+  return readyState === 2 || readyState === 3;
+}
+
 function textFromBaileysMessage(message = {}) {
   return String(
     message.conversation ||
@@ -320,7 +332,7 @@ class BaileysConnectionManager extends EventEmitter {
       // Passive observer — sendPresenceUpdate would mark the account online and
       // undo markOnlineOnConnect:false. readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED.
       const readyState = this.sock?.ws?.readyState;
-      if (readyState !== 1) {
+      if (isSocketDeadReadyState(readyState)) {
         this.heartbeatFailures++;
         this.log('warn', 'heartbeat', `socket readyState=${readyState} failures=${this.heartbeatFailures}`);
         if (this.heartbeatFailures >= TIMERS.HEARTBEAT_FAIL_THRESHOLD) {
@@ -552,4 +564,4 @@ class BaileysConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { BaileysConnectionManager, normalizeOutboundJid, extractPhoneNumber, toWhatsappWebMessage };
+module.exports = { BaileysConnectionManager, normalizeOutboundJid, extractPhoneNumber, toWhatsappWebMessage, isSocketDeadReadyState };
