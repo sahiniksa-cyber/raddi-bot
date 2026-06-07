@@ -105,9 +105,29 @@ function collectInstantReplies(config = {}, text = '') {
   return { matched, hasExtraQuestion };
 }
 
+// Opening greeting/salutation in an AI reply. Used to avoid duplicating the
+// greeting when a canned greeting instant-reply is already prepended in combine
+// mode (the AI tends to also greet, producing "وعليكم السلام ... وعليكم السلام").
+const GREETING_OPENER = /^[\s،,!.⁩⁦]*(?:(?:و\s*)?عليكم\s*السلام|(?:ال)?سلام\s*عليكم(?:\s*ورحمة\s*الله(?:\s*وبركاته)?)?|أهلين|اهلين|أهلاً|اهلا|مرحبتين|مرحبا|مرحباً|هلا\s*والله|هلا\s*بك|هلا|حيّاك\s*الله|حياك\s*الله|حياك|يا\s*هلا|صباح\s*الخير|مساء\s*الخير)[\s،,!.؟…]*/i;
+
+// Combine a verbatim canned instant-reply (e.g. a greeting) with the AI's
+// answer WITHOUT duplicating the greeting: strip any leading greeting from the
+// AI part, then prepend the canned text. Pure + deterministic.
+function combineCannedAndAi(cannedPrefix, aiReply) {
+  const canned = String(cannedPrefix || '').trim();
+  let ai = String(aiReply || '').trim();
+  if (!canned) return ai;
+  // Strip ALL stacked leading greetings (the AI sometimes greets more than once).
+  let prev;
+  do { prev = ai; ai = ai.replace(GREETING_OPENER, '').trim(); } while (ai && ai !== prev);
+  if (!ai || ai === canned) return canned;
+  return `${canned}\n${ai}`;
+}
+
 module.exports = {
   buildPlatformPromptBlock,
   collectInstantReplies,
+  combineCannedAndAi,
   describeEmoji,
   describeLanguage,
   describeReplyLength,
