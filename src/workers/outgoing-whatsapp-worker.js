@@ -342,17 +342,41 @@ async function waitForConnectedBot(bot, { reason, timeoutMs }) {
 
 async function requeuePersistedOutgoingJobs(limit = 200) {
   if (!db.isConfigured()) return;
+  const maxAgeMs = parseInt(process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || '600000', 10);
+
+  // Expire outgoing jobs older than the staleness window so a (re)start never
+  // resurrects and sends day-old replies to customers. The requeue used to pick
+  // up ANY pending job regardless of age, then re-add it with a fresh BullMQ
+  // timestamp — bypassing the per-send staleness guard and spamming old chats.
+  if (maxAgeMs > 0) {
+    await db.query(
+      `UPDATE jobs
+          SET status = 'expired', updated_at = NOW(),
+              last_error = COALESCE(last_error, '') || ' [expired: stale on requeue]'
+        WHERE queue_name = $1
+          AND created_at <= NOW() - make_interval(secs => $2)
+          AND (status IN ('queued', 'processing')
+               OR (status = 'failed' AND COALESCE(last_error, '') ILIKE '%not connected%'))`,
+      [QUEUE_NAMES.outgoingWhatsapp, maxAgeMs / 1000],
+    ).catch((err) => console.warn(`${new Date().toISOString()} [${WORKER_NAME}] expire-stale failed: ${err.message}`));
+  }
+
+  const ageClause = maxAgeMs > 0 ? 'AND created_at > NOW() - make_interval(secs => $3)' : '';
+  const params = maxAgeMs > 0
+    ? [QUEUE_NAMES.outgoingWhatsapp, limit, maxAgeMs / 1000]
+    : [QUEUE_NAMES.outgoingWhatsapp, limit];
   const result = await db.query(
     `SELECT job_key, payload
      FROM jobs
      WHERE queue_name = $1
+       ${ageClause}
        AND (
          status IN ('queued', 'processing')
          OR (status = 'failed' AND COALESCE(last_error, '') ILIKE '%not connected%')
        )
      ORDER BY created_at ASC
      LIMIT $2`,
-    [QUEUE_NAMES.outgoingWhatsapp, limit],
+    params,
   );
   if (!result.rows.length) return;
 
