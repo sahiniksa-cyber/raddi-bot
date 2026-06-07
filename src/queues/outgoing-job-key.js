@@ -21,7 +21,7 @@ function normalizeOutgoingJobKey(jobKey, payload = {}) {
     if (raw.endsWith(':escalation')) {
       return buildEscalationJobKey(raw.slice(0, -':escalation'.length));
     }
-    if (raw.endsWith('-escalation')) return raw;
+    if (raw.endsWith('-escalation')) return sanitize(raw);
     return buildEscalationJobKey(payload.replyMessageId || raw);
   }
 
