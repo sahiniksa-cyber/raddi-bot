@@ -54,6 +54,20 @@ test('dashboard does not show the legacy cost panel', () => {
   assert.doesNotMatch(html, /id="costTotal"/);
 });
 
+test('dashboard exposes the ownerPauseMinutes setting (input + load + save) and paused panel', () => {
+  const html = dashboardHtml();
+  // Input element
+  assert.match(html, /id="ownerPauseMinutes"/);
+  // Loaded from config (default 30)
+  assert.match(html, /getElementById\('ownerPauseMinutes'\)\.value=c\.ownerPauseMinutes/);
+  // Persisted in the save payload
+  assert.match(html, /ownerPauseMinutes:\(\(\)=>\{const v=parseInt\(document\.getElementById\('ownerPauseMinutes'\)/);
+  // Paused-chats panel wired to the real endpoint
+  assert.match(html, /id="pausedPanel"/);
+  assert.match(html, /fetch\('\/api\/paused-chats'\)/);
+  assert.match(html, /fetch\('\/api\/paused-chats\/resume'/);
+});
+
 test('dashboard shows the message quota panel', () => {
   const fs = require('fs');
   const path = require('path');
