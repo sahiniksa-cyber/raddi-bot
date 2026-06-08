@@ -2175,13 +2175,21 @@ function formatConvTime(value){
   if(Number.isNaN(date.getTime()))return '—';
   const now=new Date();
   const diff=now-date;
-  if(diff<60000)return 'الآن';
-  if(diff<3600000)return 'قبل '+Math.floor(diff/60000)+' د';
-  const sameDay=date.toDateString()===now.toDateString();
-  if(sameDay)return date.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'});
-  const yesterday=new Date(now); yesterday.setDate(now.getDate()-1);
-  if(date.toDateString()===yesterday.toDateString())return 'أمس '+date.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'});
-  return date.toLocaleDateString('ar-SA',{month:'short',day:'numeric'});
+  if(diff>=0&&diff<60000)return 'الآن';
+  if(diff>=0&&diff<3600000)return 'قبل '+Math.floor(diff/60000)+' د';
+  // Always display in Riyadh time (Asia/Riyadh), regardless of the viewer's
+  // device timezone. DB timestamps are UTC; without an explicit timeZone the
+  // browser rendered them in its own locale, so times were off by hours.
+  const TZ='Asia/Riyadh';
+  const timeOpts={timeZone:TZ,hour:'2-digit',minute:'2-digit'};
+  // Compare day boundaries in Riyadh time too, so "اليوم/أمس" are correct for KSA.
+  const dayKey=(d)=>d.toLocaleDateString('en-CA',{timeZone:TZ});
+  const todayKey=dayKey(now);
+  const yesterdayKey=dayKey(new Date(now.getTime()-86400000));
+  const valueKey=dayKey(date);
+  if(valueKey===todayKey)return date.toLocaleTimeString('ar-SA',timeOpts);
+  if(valueKey===yesterdayKey)return 'أمس '+date.toLocaleTimeString('ar-SA',timeOpts);
+  return date.toLocaleDateString('ar-SA',{timeZone:TZ,month:'short',day:'numeric'});
 }
 
 function renderConversationPanel(conv){
