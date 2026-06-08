@@ -276,7 +276,11 @@ function createApp() {
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.session?.userId || req.ip,
+    // Use the library's ipKeyGenerator for the IP fallback so IPv6 addresses are
+    // normalized (subnet-masked) instead of used raw — raw req.ip lets IPv6
+    // clients bypass the limit and trips express-rate-limit's ERR_ERL_KEY_GEN_IPV6
+    // validation on every boot.
+    keyGenerator: (req) => req.session?.userId || rateLimit.ipKeyGenerator(req.ip),
     message: { success: false, message: 'استخدم الذكاء الاصطناعي ببطء أكثر' },
   });
 
@@ -812,7 +816,10 @@ async function main() {
     // bot can't block shutdown past Railway's SIGKILL window.
     const releaseDeadlineMs = parseInt(process.env.SHUTDOWN_LEASE_RELEASE_TIMEOUT_MS || '5000', 10);
     const releaseAll = Promise.allSettled(
-      Array.from(botCache.values()).map(bot => bot.releaseConnectionLease()),
+      // Close the live WhatsApp socket AND free the lease. Releasing only the
+      // DB lease (without closing the socket) left the old container connected
+      // until SIGKILL, colliding with the new replica's session → WhatsApp 440.
+      Array.from(botCache.values()).map(bot => bot.releaseForShutdown()),
     );
     await Promise.race([
       releaseAll,

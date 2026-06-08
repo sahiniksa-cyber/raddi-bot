@@ -65,8 +65,9 @@ function backupWhatsappSession({ source, target, logger, rootDir, userId }) {
 }
 
 class RuntimeBot {
-  constructor(userId, { dataDir = process.env.DATA_DIR || process.cwd(), logger = null } = {}) {
+  constructor(userId, { dataDir = process.env.DATA_DIR || process.cwd(), logger = null, database = db } = {}) {
     this.userId = userId;
+    this.db = database;
     this.rootDir = dataDir;
     this.dataDir = path.join(dataDir, 'data', userId);
     try {
@@ -86,6 +87,12 @@ class RuntimeBot {
     this._autoRecoverTimer = null;
     this._leaseRenewTimer = null;
     this._sessionBackupTimer = null;
+    // WhatsApp 440 (connectionReplaced) smart-recovery state. A single conflict
+    // recovers fast; repeated conflicts within a short window escalate the delay
+    // so we don't fight a persistent duplicate-device session in a tight loop.
+    this._connConflictCount = 0;
+    this._lastConflictAt = 0;
+    this._connConflictRecoveryUntil = 0;
     this.lastPersistedSession = null;
     this._persistQueue = Promise.resolve();
     this.instanceId = process.env.RAILWAY_REPLICA_ID ||
@@ -166,12 +173,26 @@ class RuntimeBot {
       this.releaseConnectionLease().catch((err) => {
         this.logger.warn('connection', `440: failed to release lease: ${err.message}`);
       });
-      const retryMs = this.leaseTtlMs() + 5000;
+
+      // Smart recovery backoff. A 440 (connectionReplaced) usually means the
+      // owner opened the same number on another linked device. A lone conflict
+      // should recover in seconds; conflicts that keep firing within a short
+      // window escalate the delay so we don't loop against a persistent
+      // duplicate session. The old fixed delay (leaseTtlMs + 5s ≈ 125s) made
+      // every conflict a 2-minute outage even for a one-off device switch.
+      const now = Date.now();
+      const resetMs = parseInt(process.env.WA_CONN_CONFLICT_RESET_MS || '180000', 10);
+      if (now - (this._lastConflictAt || 0) > resetMs) this._connConflictCount = 0;
+      this._lastConflictAt = now;
+      this._connConflictCount++;
+      const retryMs = this.connloopRecoveryDelayMs(this._connConflictCount);
+      this._connConflictRecoveryUntil = now + retryMs;
+
       clearTimeout(this._autoRecoverTimer);
       this._autoRecoverTimer = setTimeout(() => {
         this._autoRecoverTimer = null;
         if (this.sessionDesiredState === 'running' && this.connection.status === 'stopped') {
-          this.logger.info('connection', '440 auto-recovery: re-acquiring WhatsApp lease');
+          this.logger.info('connection', `440 auto-recovery (attempt ${this._connConflictCount}): re-acquiring WhatsApp lease`);
           this.startBot('440_recovery').catch((err) => {
             this.logger.warn('connection', `440 auto-recovery failed: ${err.message}`);
           });
@@ -299,8 +320,24 @@ class RuntimeBot {
     return new Date(Date.now() + this.leaseTtlMs());
   }
 
+  // Escalating recovery delay for repeated WhatsApp 440 conflicts. count=1 →
+  // base (8s), then doubles each consecutive conflict up to a cap (120s).
+  connloopRecoveryDelayMs(count) {
+    const base = parseInt(process.env.WA_CONN_CONFLICT_BASE_MS || '8000', 10);
+    const cap = parseInt(process.env.WA_CONN_CONFLICT_MAX_MS || '120000', 10);
+    const n = Math.max(1, Number(count) || 1);
+    return Math.min(base * 2 ** (n - 1), cap);
+  }
+
+  // True while we are intentionally backing off after a 440 conflict. The
+  // outgoing worker checks this so it does not force an immediate reconnect and
+  // defeat the backoff (which would create a tight reconnect loop).
+  isInConnConflictBackoff() {
+    return Date.now() < (this._connConflictRecoveryUntil || 0);
+  }
+
   async acquireConnectionLease(reason = 'start') {
-    const result = await db.query(
+    const result = await this.db.query(
       `UPDATE whatsapp_sessions
        SET connection_owner = $2,
            connection_lease_expires_at = $3,
@@ -331,26 +368,51 @@ class RuntimeBot {
     clearInterval(this._leaseRenewTimer);
     const interval = Math.max(10000, Math.floor(this.leaseTtlMs() / 3));
     this._leaseRenewTimer = setInterval(() => {
-      db.query(
-        `UPDATE whatsapp_sessions
-         SET connection_lease_expires_at = $3
-         WHERE user_id = $1 AND connection_owner = $2`,
-        [this.userId, this.instanceId, this.leaseExpiresAt()],
-      ).catch((err) => this.logger.warn('connection', `failed to renew WhatsApp lease: ${err.message}`));
+      this._renewLeaseOnce().catch((err) => this.logger.warn('connection', `failed to renew WhatsApp lease: ${err.message}`));
     }, interval);
     if (typeof this._leaseRenewTimer.unref === 'function') this._leaseRenewTimer.unref();
+  }
+
+  // One lease-renewal tick. CRITICAL: if the UPDATE matches 0 rows, another
+  // instance has taken ownership of this session (e.g. a new Railway replica
+  // after a redeploy). Continuing to run our Baileys socket against the same
+  // credentials triggers a WhatsApp 440 on the live connection. So on lease
+  // loss we stop our local connection and stop renewing — desired_state in the
+  // DB is untouched, so the owning instance keeps the session alive.
+  async _renewLeaseOnce() {
+    const result = await this.db.query(
+      `UPDATE whatsapp_sessions
+       SET connection_lease_expires_at = $3
+       WHERE user_id = $1 AND connection_owner = $2`,
+      [this.userId, this.instanceId, this.leaseExpiresAt()],
+    );
+    if (result && Number(result.rowCount) === 0) {
+      this.logger.warn('connection', 'WhatsApp lease lost to another instance — stopping local connection to avoid a 440 conflict');
+      clearInterval(this._leaseRenewTimer);
+      this._leaseRenewTimer = null;
+      try { await this.connection.stop(); } catch (_) {}
+    }
   }
 
   async releaseConnectionLease() {
     clearInterval(this._leaseRenewTimer);
     this._leaseRenewTimer = null;
-    await db.query(
+    await this.db.query(
       `UPDATE whatsapp_sessions
        SET connection_owner = NULL,
            connection_lease_expires_at = NULL
        WHERE user_id = $1 AND connection_owner = $2`,
       [this.userId, this.instanceId],
     );
+  }
+
+  // Used on process shutdown (e.g. Railway redeploy): close the live WhatsApp
+  // socket so the next replica doesn't collide with our session (440), and free
+  // the DB lease. Does NOT change desired_state, so the next replica
+  // auto-recovers the session.
+  async releaseForShutdown() {
+    try { await this.connection.stop(); } catch (_) {}
+    await this.releaseConnectionLease();
   }
 
   scheduleLeaseRetry(reason) {
