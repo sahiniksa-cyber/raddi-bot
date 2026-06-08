@@ -2320,11 +2320,11 @@ function addKW(k='',v=''){
 }
 function renderProd(arr){
   document.getElementById('prodContainer').innerHTML='';
-  arr.forEach(p=>addProd(p.name,p.description,p.price,p.variants||[]));
+  arr.forEach(p=>addProd(p.name,p.description,p.price,p.variants||[],p.url||'',p.longDescription||''));
 }
-function addProd(n='',d='',p='',variants=[]){
+function addProd(n='',d='',p='',variants=[],url='',longDesc=''){
   const c=document.getElementById('prodContainer'),el=document.createElement('div');el.className='prod-card';
-  el.innerHTML=`<div class="g2"><div><label>المنتج</label><input type="text" class="pn" placeholder="اسم المنتج" value="${esc(n)}"></div><div><label>السعر</label><input type="text" class="pp" placeholder="150 ريال" value="${esc(p)}"></div></div><label>الوصف</label><input type="text" class="pd" placeholder="وصف مختصر" value="${esc(d)}"><label style="margin-top:10px;font-size:12px;color:var(--text-soft)">الخيارات المتاحة (اختياري)</label><div class="prod-variants"></div><button class="add-variant-btn" type="button" onclick="addVariantRow(this)">+ إضافة خيار</button><button class="prod-del" onclick="this.parentElement.remove();updProd()">× حذف</button>`;
+  el.innerHTML=`<div class="g2"><div><label>المنتج</label><input type="text" class="pn" placeholder="اسم المنتج" value="${esc(n)}"></div><div><label>السعر</label><input type="text" class="pp" placeholder="150 ريال" value="${esc(p)}"></div></div><label>الوصف المختصر</label><input type="text" class="pd" placeholder="وصف مختصر" value="${esc(d)}"><label style="margin-top:10px">رابط المنتج (اختياري)</label><input type="text" class="pu" placeholder="https://..." dir="ltr" value="${esc(url)}"><label style="margin-top:10px">وصف طويل (اختياري)</label><textarea class="pl" placeholder="تفاصيل إضافية عن المنتج يستخدمها البوت في الرد">${esc(longDesc)}</textarea><label style="margin-top:10px;font-size:12px;color:var(--text-soft)">الخيارات المتاحة (اختياري)</label><div class="prod-variants"></div><button class="add-variant-btn" type="button" onclick="addVariantRow(this)">+ إضافة خيار</button><button class="prod-del" onclick="this.parentElement.remove();updProd()">× حذف</button>`;
   c.appendChild(el);
   const variantsContainer=el.querySelector('.prod-variants');
   for(const v of (variants||[])){if(v&&(v.label||v.price))appendVariantRow(variantsContainer,v.label||'',v.price||'');}
@@ -2402,6 +2402,10 @@ async function saveConf(){
       description:r.querySelector('.pd')?.value?.trim()||'',
       price:r.querySelector('.pp')?.value?.trim()||'',
     };
+    const url=r.querySelector('.pu')?.value?.trim()||'';
+    const longDescription=r.querySelector('.pl')?.value?.trim()||'';
+    if(url)product.url=url;
+    if(longDescription)product.longDescription=longDescription;
     if(variants.length>0)product.variants=variants;
     prods.push(product);
   });

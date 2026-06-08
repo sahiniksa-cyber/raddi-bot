@@ -9,6 +9,8 @@ function normalizeImportedProduct(product) {
 
   const price = String(product.price || product.sale_price || product.regular_price || '').trim();
   const description = String(product.description || product.short_description || product.summary || '').trim();
+  const url = String(product.url || product.link || product.permalink || product.product_url || '').trim();
+  const longDescription = String(product.longDescription || product.long_description || product.full_description || product.body || '').trim();
   const rawVariants = Array.isArray(product.variants) ? product.variants : [];
   const variants = rawVariants
     .map(v => ({
@@ -22,6 +24,8 @@ function normalizeImportedProduct(product) {
     description,
     source: product.source || product.platform || 'import',
   };
+  if (url) out.url = url;
+  if (longDescription) out.longDescription = longDescription;
   if (variants.length > 0) out.variants = variants;
   return out;
 }
@@ -45,6 +49,8 @@ function mergeImportedProducts(existingProducts = [], importedProducts = []) {
     if (product.description && !current.description.includes(product.description)) {
       current.description = [current.description, product.description].filter(Boolean).join('\n');
     }
+    if (!current.url && product.url) current.url = product.url;
+    if (!current.longDescription && product.longDescription) current.longDescription = product.longDescription;
     if (!current.source && product.source) current.source = product.source;
     if (!current.variants && Array.isArray(product.variants) && product.variants.length > 0) {
       current.variants = product.variants;
@@ -71,6 +77,8 @@ function organizeProductsForConfig(config = {}, importedProducts = []) {
         description: product.description || '',
         source: product.source || 'platform',
       };
+      if (product.url) out.url = product.url;
+      if (product.longDescription) out.longDescription = product.longDescription;
       if (Array.isArray(product.variants) && product.variants.length > 0) {
         out.variants = product.variants;
       }
