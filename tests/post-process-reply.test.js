@@ -5,6 +5,33 @@ const assert = require('node:assert/strict');
 
 const { stripAvoidedContent } = require('../lib/post-process-reply');
 
+test('markdown link is converted to a clickable "label: url" (WhatsApp does not render markdown)', () => {
+  const out = stripAvoidedContent('تفضل رابط الاشتراك: [أدوبي كريتف كلاود](https://prostoree.com/NAADyOm)');
+  assert.match(out, /https:\/\/prostoree\.com\/NAADyOm/, 'bare URL must survive');
+  assert.doesNotMatch(out, /\]\(/, 'no leftover markdown link syntax');
+  assert.match(out, /أدوبي كريتف كلاود: https:\/\/prostoree\.com\/NAADyOm/);
+});
+
+test('a bare URL is not broken by whitespace tidying (dots kept intact)', () => {
+  const out = stripAvoidedContent('شوف الرابط https://prostoree.com/NAADyOm وكمل الطلب.');
+  assert.match(out, /https:\/\/prostoree\.com\/NAADyOm/, 'URL dots/slashes preserved');
+  assert.doesNotMatch(out, /prostoree\. com/, 'must NOT insert a space after the dot');
+});
+
+test('markdown link with no label collapses to just the URL', () => {
+  const out = stripAvoidedContent('[https://prostoree.com/x](https://prostoree.com/x)');
+  assert.equal(out, 'https://prostoree.com/x');
+});
+
+test('the escalation marker [تحويل:...] is still preserved (not a link)', () => {
+  const reply = 'تم تحويلك [تحويل:الدعم] انتظر لحظة';
+  assert.match(stripAvoidedContent(reply), /\[تحويل:الدعم\]/);
+});
+
+test('prices with digits are not mangled by URL masking', () => {
+  assert.equal(stripAvoidedContent('السعر 99 ريال والمدة 12 شهر'), 'السعر 99 ريال والمدة 12 شهر');
+});
+
 test('stripAvoidedContent removes wrapping quotes around full reply', () => {
   assert.equal(stripAvoidedContent('"أبشر، السعر 99 ريال"'), 'أبشر، السعر 99 ريال');
 });
