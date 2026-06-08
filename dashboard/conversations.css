@@ -1,8 +1,11 @@
 /* === Two-pane shell === */
-.cv-shell { display: flex; gap: 0; min-height: 580px; background: var(--card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
-.cv-list-wrap { flex: 0 0 355px; display: flex; flex-direction: column; background: var(--card); border-left: 1px solid var(--border); overflow: hidden; }
-.cv-list { flex: 1; overflow-y: auto; max-height: calc(100vh - 220px); }
-.cv-panel { flex: 1; display: flex; flex-direction: column; background: #f0f2f5; overflow: hidden; min-height: 580px; position: relative; }
+/* Bounded height so the message area scrolls INTERNALLY and the input bar stays
+   pinned at the bottom (always reachable) instead of the whole panel growing
+   with the message count and pushing the input off the page. */
+.cv-shell { display: flex; gap: 0; height: calc(100vh - 200px); min-height: 460px; background: var(--card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.cv-list-wrap { flex: 0 0 355px; display: flex; flex-direction: column; background: var(--card); border-left: 1px solid var(--border); overflow: hidden; min-height: 0; }
+.cv-list { flex: 1; overflow-y: auto; min-height: 0; }
+.cv-panel { flex: 1; display: flex; flex-direction: column; background: #f0f2f5; overflow: hidden; min-height: 0; position: relative; }
 
 /* === List title (kept for compat — will be hidden by new search bar) === */
 .cv-list-title { display: none; }
@@ -83,13 +86,18 @@
 .cv-footer .cv-mic-btn { background: var(--green); color: #fff; border: none; width: 38px; height: 38px; border-radius: 10px; cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background .15s; }
 .cv-footer .cv-mic-btn:hover { background: var(--green2); }
 
+/* === Jump-to-latest button (floats above the input, shows when scrolled up) === */
+.cv-jump-btn { position: absolute; left: 18px; bottom: 74px; width: 38px; height: 38px; border-radius: 50%; background: var(--card); border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,0.15); color: var(--text-soft); cursor: pointer; display: none; align-items: center; justify-content: center; z-index: 3; transition: background .15s; }
+.cv-jump-btn:hover { background: var(--bg-soft); color: var(--text); }
+.cv-jump-btn i[data-lucide] { width: 18px; height: 18px; stroke-width: 2; }
+
 /* === Empty / loading === */
 .cv-empty { text-align: center; color: var(--text-soft); padding: 80px 20px; font-size: 13px; }
 .cv-empty .cv-empty-icon { font-size: 38px; opacity: 0.35; margin-bottom: 10px; }
 
 /* === Mobile === */
 @media (max-width: 900px) {
-  .cv-shell { display: block; min-height: 0; border-radius: 12px; }
+  .cv-shell { display: block; min-height: 0; height: auto; border-radius: 12px; }
   .cv-list-wrap { flex: none; border-left: none; border-radius: 0; }
   .cv-panel { display: none; }
   .cv-shell.has-selection .cv-list-wrap { display: none; }

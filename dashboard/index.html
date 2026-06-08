@@ -2225,6 +2225,7 @@ function renderConversationPanel(conv){
     </div>
   </div>
   <div class="cv-bubbles" id="cvBubbles">${bubblesHtml}</div>
+  <button type="button" class="cv-jump-btn" id="cvJumpBtn" title="النزول لآخر المحادثة" onclick="scrollBubblesToBottom()"><i data-lucide="chevrons-down"></i></button>
   <div class="cv-footer">
     <button type="button" class="cv-icon-btn" title="إيموجي" disabled><i data-lucide="smile"></i></button>
     <button type="button" class="cv-icon-btn" title="مرفق" disabled><i data-lucide="paperclip"></i></button>
@@ -2235,8 +2236,21 @@ function renderConversationPanel(conv){
     <button type="button" class="cv-mic-btn" title="إرسال" disabled><i data-lucide="send"></i></button>`}
   </div>`;
   const bubbles=document.getElementById('cvBubbles');
-  if(bubbles)bubbles.scrollTop=bubbles.scrollHeight;
+  if(bubbles){
+    bubbles.scrollTop=bubbles.scrollHeight;
+    const jump=document.getElementById('cvJumpBtn');
+    if(jump){
+      const upd=()=>{const nearBottom=bubbles.scrollHeight-bubbles.scrollTop-bubbles.clientHeight<80;jump.style.display=nearBottom?'none':'flex';};
+      bubbles.addEventListener('scroll',upd);
+      upd();
+    }
+  }
   if(window.lucide) lucide.createIcons();
+}
+
+function scrollBubblesToBottom(){
+  const b=document.getElementById('cvBubbles');
+  if(b)b.scrollTo({top:b.scrollHeight,behavior:'smooth'});
 }
 
 async function sendManualReply(){
