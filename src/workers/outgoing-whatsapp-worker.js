@@ -325,7 +325,15 @@ async function waitForConnectedBot(bot, { reason, timeoutMs }) {
     return bot;
   }
 
-  if (bot.sessionDesiredState === 'running' && ['stopped', 'reconnecting', 'disconnected', 'waiting_qr'].includes(bot.appState.status)) {
+  // Don't force a reconnect while the bot is intentionally backing off after a
+  // WhatsApp 440 conflict — doing so defeats the smart backoff and creates a
+  // tight reconnect loop. The bot's own 440-recovery timer will reconnect when
+  // the backoff window elapses; meanwhile we let BullMQ re-queue this send.
+  if (
+    bot.sessionDesiredState === 'running' &&
+    !bot.isInConnConflictBackoff?.() &&
+    ['stopped', 'reconnecting', 'disconnected', 'waiting_qr'].includes(bot.appState.status)
+  ) {
     bot.startBot(reason).catch((err) => bot.log?.(`outgoing start failed: ${err.message}`));
   }
 
