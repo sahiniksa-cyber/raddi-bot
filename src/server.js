@@ -20,6 +20,7 @@ try { helmet = require('helmet'); } catch (_) {
 }
 
 const { createBotResolver } = require('./runtime/bot-resolver');
+const { recoverRunningBots } = require('./runtime/boot-recovery');
 const requireSameOrigin = require('./middleware/require-same-origin');
 const { assertPublicUrl } = require('./middleware/ssrf-guard');
 const { checkMessageQuota, decrementMessageQuota } = require('./services/billing/message-quota');
@@ -780,6 +781,14 @@ async function runPostStartupTasks(startupState) {
     if (recovered.recovered > 0) {
       console.log(`${new Date().toISOString()} [server] recovered ${recovered.recovered} queued AI reply jobs`);
     }
+    // Reconnect every bot that was running before this restart, WITHOUT waiting
+    // for someone to open its dashboard. Without this, each merchant's bot stays
+    // offline after a deploy until visited.
+    await recoverRunningBots({
+      db,
+      resolveBot: getUserBot,
+      log: (m) => console.log(`${new Date().toISOString()} [server] ${m}`),
+    });
   } catch (err) {
     startupState.migration = 'failed';
     startupState.migrationError = err.message;
