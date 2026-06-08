@@ -95,7 +95,9 @@ function structuredProducts(products = []) {
       const out = {
         name: String(product.name || '').trim(),
         description: String(product.description || '').trim(),
+        longDescription: String(product.longDescription || '').trim(),
         price: String(product.price || '').trim(),
+        url: String(product.url || '').trim(),
         source: product.source || 'fields',
       };
       if (Array.isArray(product.variants) && product.variants.length > 0) {
@@ -119,6 +121,8 @@ function mergeProducts(products) {
       ...existing,
       price: existing.price || product.price,
       description: [existing.description, product.description].filter(Boolean).join('\n').trim(),
+      longDescription: existing.longDescription || product.longDescription || '',
+      url: existing.url || product.url || '',
       source: existing.source === 'fields' ? existing.source : (existing.source || product.source),
       variants: existing.variants || product.variants,
     });
@@ -136,7 +140,7 @@ function buildProductCatalog(config = {}) {
 function scoreProduct(product, customerText) {
   const query = normalizeProductText(customerText);
   const name = normalizeProductText(product.name);
-  const details = normalizeProductText(`${product.name} ${product.description} ${product.price}`);
+  const details = normalizeProductText(`${product.name} ${product.description} ${product.longDescription || ''} ${product.price}`);
   if (!query || !name) return 0;
   if (query.includes(name) || name.includes(query)) return 100;
 
@@ -163,7 +167,11 @@ function findRelevantProducts(config = {}, customerText = '', limit = 4) {
 function formatProduct(product, index) {
   const lines = [`${index + 1}. ${product.name}`];
   if (product.price) lines.push(`السعر: ${product.price}`);
-  if (product.description) lines.push(product.description);
+  // Prefer the long description for the AI context (more detail); fall back to
+  // the short one. Include the product link when available so the bot can share it.
+  const detail = String(product.longDescription || '').trim() || String(product.description || '').trim();
+  if (detail) lines.push(detail);
+  if (product.url) lines.push(`الرابط: ${product.url}`);
   return lines.join('\n');
 }
 
