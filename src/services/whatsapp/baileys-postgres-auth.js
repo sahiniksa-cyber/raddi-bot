@@ -105,6 +105,18 @@ class BaileysPostgresAuthState {
         },
       },
       saveCreds: async () => this.persist(),
+      // Await all queued key/cred writes. Called on shutdown so a redeploy can't
+      // kill the process while the latest signal ratchet step is still in the
+      // write queue (a lost step → "Bad MAC" on the next message until the
+      // session re-negotiates). Drains until the queue stops growing, so a write
+      // that was still being enqueued (set() awaits load() first) is not missed.
+      flush: async () => {
+        for (let i = 0; i < 10; i++) {
+          const q = this.writeQueue;
+          try { await q; } catch (_) {}
+          if (q === this.writeQueue) break;
+        }
+      },
     };
   }
 
