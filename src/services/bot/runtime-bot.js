@@ -313,7 +313,9 @@ class RuntimeBot {
   }
 
   leaseTtlMs() {
-    return parseInt(process.env.WA_CONNECTION_LEASE_MS || '120000', 10);
+    // 45s (was 120s): shorter TTL means a crash-killed container's stale lease
+    // frees up faster for automatic recovery. Renewal runs at TTL/3 (~15s).
+    return parseInt(process.env.WA_CONNECTION_LEASE_MS || '45000', 10);
   }
 
   leaseExpiresAt() {
@@ -336,7 +338,21 @@ class RuntimeBot {
     return Date.now() < (this._connConflictRecoveryUntil || 0);
   }
 
-  async acquireConnectionLease(reason = 'start') {
+  async acquireConnectionLease(reason = 'start', { force = false } = {}) {
+    // force=true claims the lease unconditionally. Used for operator-initiated
+    // starts (the dashboard button / restart): the deployment is single-replica,
+    // so any lease still pointing at a different instanceId belongs to a DEAD
+    // previous container — waiting out its 120s TTL is exactly the "press start,
+    // nothing happens for two minutes" bug. If a displaced instance were somehow
+    // still alive, its _renewLeaseOnce detects the lost lease and stands down.
+    const ownerGuard = force
+      ? ''
+      : `AND (
+           connection_owner IS NULL
+           OR connection_owner = $2
+           OR connection_lease_expires_at IS NULL
+           OR connection_lease_expires_at < NOW()
+         )`;
     const result = await this.db.query(
       `UPDATE whatsapp_sessions
        SET connection_owner = $2,
@@ -344,12 +360,7 @@ class RuntimeBot {
            desired_state = 'running',
            last_error = NULL
        WHERE user_id = $1
-         AND (
-           connection_owner IS NULL
-           OR connection_owner = $2
-           OR connection_lease_expires_at IS NULL
-           OR connection_lease_expires_at < NOW()
-         )
+         ${ownerGuard}
        RETURNING connection_owner, connection_lease_expires_at`,
       [this.userId, this.instanceId, this.leaseExpiresAt()],
     );
@@ -452,7 +463,11 @@ class RuntimeBot {
       return this.restartBot();
     }
     this.sessionDesiredState = 'running';
-    if (!(await this.acquireConnectionLease(source))) return false;
+    // Operator-initiated starts steal the lease so the button always works
+    // immediately (single-replica → any other owner is a dead container).
+    // Automatic starts (auto_recover / outgoing) stay polite.
+    const operatorInitiated = manualStart || source === 'restart' || source.includes('manual') || source.includes('restart');
+    if (!(await this.acquireConnectionLease(source, { force: operatorInitiated }))) return false;
     this.persistSessionState({ desiredState: 'running' }).catch((err) => {
       this.logger.warn('connection', `failed to persist start intent: ${err.message}`);
     });
@@ -474,7 +489,7 @@ class RuntimeBot {
     this.sessionDesiredState = 'running';
     this.stopWhatsappSessionBackup();
     await this.connection.stop();
-    if (!(await this.acquireConnectionLease('restart'))) return false;
+    if (!(await this.acquireConnectionLease('restart', { force: true }))) return false;
     await this.persistSessionState({ desiredState: 'running', state: { ...this.connection.state(), status: 'restarting' } });
     this.logger.info('boot', 'force restarting WhatsApp connection');
     return this.connection.start(0);
