@@ -2193,11 +2193,15 @@ function formatConvTime(value){
 }
 
 let cvCurrentReplyPhone='';
+let cvCurrentReplySender='';
 function renderConversationPanel(conv){
   const panel=document.getElementById('cvPanel');
   if(!panel)return;
   const replyPhone=String(conv.phoneNumber||'').replace(/[^\d]/g,'');
+  const replySender=String(conv.sender||'').trim();
   cvCurrentReplyPhone=replyPhone;
+  cvCurrentReplySender=replySender;
+  const canReply=!!(replySender||replyPhone);
   const messages=conv.messages||[];
   const bubblesHtml=messages.length
     ? '<div class="cv-day-pill">اليوم</div>'+messages.map(renderBubble).join('')
@@ -2224,10 +2228,10 @@ function renderConversationPanel(conv){
   <div class="cv-footer">
     <button type="button" class="cv-icon-btn" title="إيموجي" disabled><i data-lucide="smile"></i></button>
     <button type="button" class="cv-icon-btn" title="مرفق" disabled><i data-lucide="paperclip"></i></button>
-    ${replyPhone
+    ${canReply
       ? `<input type="text" class="cv-message-input" id="cvMsgInput" placeholder="اكتب رسالة..." onkeydown="if(event.key==='Enter'){event.preventDefault();sendManualReply();}">
     <button type="button" class="cv-mic-btn" id="cvSendBtn" title="إرسال" onclick="sendManualReply()"><i data-lucide="send"></i></button>`
-      : `<input type="text" class="cv-message-input" placeholder="رقم العميل غير متوفر — لا يمكن الرد" disabled>
+      : `<input type="text" class="cv-message-input" placeholder="تعذّر تحديد العميل — لا يمكن الرد" disabled>
     <button type="button" class="cv-mic-btn" title="إرسال" disabled><i data-lucide="send"></i></button>`}
   </div>`;
   const bubbles=document.getElementById('cvBubbles');
@@ -2241,11 +2245,12 @@ async function sendManualReply(){
   const text=input.value.trim();
   if(!text)return;
   const phone=cvCurrentReplyPhone;
-  if(!phone){toast('رقم العميل غير متوفر — لا يمكن الرد',true);return;}
+  const sender=cvCurrentReplySender;
+  if(!phone&&!sender){toast('تعذّر تحديد العميل — لا يمكن الرد',true);return;}
   const btn=document.getElementById('cvSendBtn');
   input.disabled=true; if(btn)btn.disabled=true;
   try{
-    const r=await fetch('/api/send-message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,message:text})});
+    const r=await fetch('/api/send-message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,sender,message:text})});
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
     if(!d.success){

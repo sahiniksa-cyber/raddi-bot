@@ -116,6 +116,20 @@ test('sendMessage rejects missing phone or message', async () => {
   assert.equal(res._status, 400);
 });
 
+test('sendMessage uses an explicit sender JID when phone is unavailable (e.g. @lid)', async () => {
+  const database = makeDb();
+  const bot = makeBot();
+  const ctrl = createBotController({ getUserBot: () => bot, database });
+
+  const req = { session: { userId: 'user-1' }, body: { sender: '12345@lid', message: 'مرحبا' } };
+  const res = makeRes();
+  await ctrl.sendMessage(req, res);
+
+  assert.equal(res._body.success, true);
+  const convQuery = database.queries.find(q => q.sql.includes('INSERT INTO conversations'));
+  assert.equal(convQuery.params[1], '12345@lid', 'must send/store using the raw JID, not a phone-built one');
+});
+
 test('sendMessage pauses the AI on the conversation for 30 minutes (manual reply)', async () => {
   const database = makeDb();
   const bot = makeBot();
