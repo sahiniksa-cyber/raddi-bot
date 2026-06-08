@@ -2192,9 +2192,12 @@ function formatConvTime(value){
   return date.toLocaleDateString('ar-SA',{timeZone:TZ,month:'short',day:'numeric'});
 }
 
+let cvCurrentReplyPhone='';
 function renderConversationPanel(conv){
   const panel=document.getElementById('cvPanel');
   if(!panel)return;
+  const replyPhone=String(conv.phoneNumber||'').replace(/[^\d]/g,'');
+  cvCurrentReplyPhone=replyPhone;
   const messages=conv.messages||[];
   const bubblesHtml=messages.length
     ? '<div class="cv-day-pill">اليوم</div>'+messages.map(renderBubble).join('')
@@ -2221,12 +2224,48 @@ function renderConversationPanel(conv){
   <div class="cv-footer">
     <button type="button" class="cv-icon-btn" title="إيموجي" disabled><i data-lucide="smile"></i></button>
     <button type="button" class="cv-icon-btn" title="مرفق" disabled><i data-lucide="paperclip"></i></button>
-    <input type="text" class="cv-message-input" placeholder="اكتب رسالة..." disabled>
-    <button type="button" class="cv-mic-btn" title="إرسال" disabled><i data-lucide="send"></i></button>
+    ${replyPhone
+      ? `<input type="text" class="cv-message-input" id="cvMsgInput" placeholder="اكتب رسالة..." onkeydown="if(event.key==='Enter'){event.preventDefault();sendManualReply();}">
+    <button type="button" class="cv-mic-btn" id="cvSendBtn" title="إرسال" onclick="sendManualReply()"><i data-lucide="send"></i></button>`
+      : `<input type="text" class="cv-message-input" placeholder="رقم العميل غير متوفر — لا يمكن الرد" disabled>
+    <button type="button" class="cv-mic-btn" title="إرسال" disabled><i data-lucide="send"></i></button>`}
   </div>`;
   const bubbles=document.getElementById('cvBubbles');
   if(bubbles)bubbles.scrollTop=bubbles.scrollHeight;
   if(window.lucide) lucide.createIcons();
+}
+
+async function sendManualReply(){
+  const input=document.getElementById('cvMsgInput');
+  if(!input)return;
+  const text=input.value.trim();
+  if(!text)return;
+  const phone=cvCurrentReplyPhone;
+  if(!phone){toast('رقم العميل غير متوفر — لا يمكن الرد',true);return;}
+  const btn=document.getElementById('cvSendBtn');
+  input.disabled=true; if(btn)btn.disabled=true;
+  try{
+    const r=await fetch('/api/send-message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,message:text})});
+    if(r.status===401){window.location.href='/login';return;}
+    const d=await r.json();
+    if(!d.success){
+      toast(d.message==='bot is not connected'?'البوت غير متصل — شغّله أولاً':('تعذر الإرسال: '+(d.message||'خطأ')),true);
+      input.disabled=false; if(btn)btn.disabled=false; input.focus();
+      return;
+    }
+    // Reflect the sent reply in the open conversation immediately.
+    const conv=cvConversations.find(c=>c.id===cvSelectedId);
+    if(conv){
+      conv.messages=conv.messages||[];
+      conv.messages.push({direction:'outbound',speaker:'AI',content:text,at:new Date().toISOString(),status:'sent'});
+      renderConversationPanel(conv);
+      const ni=document.getElementById('cvMsgInput'); if(ni)ni.focus();
+    }
+  }catch(e){
+    toast('تعذر الإرسال: '+(e.message||'خطأ'),true);
+    const i=document.getElementById('cvMsgInput'); if(i){i.disabled=false;i.focus();}
+    const b=document.getElementById('cvSendBtn'); if(b)b.disabled=false;
+  }
 }
 
 function bubbleStatusIcon(status){

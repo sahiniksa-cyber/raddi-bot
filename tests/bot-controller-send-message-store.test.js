@@ -115,3 +115,15 @@ test('sendMessage rejects missing phone or message', async () => {
   await ctrl.sendMessage(makeReq({ phone: '' }), res);
   assert.equal(res._status, 400);
 });
+
+test('sendMessage pauses the AI on the conversation for 30 minutes (manual reply)', async () => {
+  const database = makeDb();
+  const bot = makeBot();
+  const ctrl = createBotController({ getUserBot: () => bot, database });
+
+  await ctrl.sendMessage(makeReq(), makeRes());
+
+  const muteQuery = database.queries.find(q => q.sql.includes('escalated_until'));
+  assert.ok(muteQuery, 'manual send must mute the AI so it does not talk over the human');
+  assert.equal(muteQuery.params[0], 'conv-id-1', 'mute targets the resolved conversation');
+});

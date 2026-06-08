@@ -152,6 +152,16 @@ function createBotController({ getUserBot, database = null }) {
                 [conversationId, userId, sender, text, providerMessageId,
                   JSON.stringify({ source: 'manual_send' })],
               );
+              // Owner replied manually → pause the AI on this conversation for
+              // 30 minutes so it doesn't talk over the human (mirrors the
+              // fromMe-on-phone behavior). escalated_until may not exist on very
+              // old schemas — fail open.
+              try {
+                await db.query(
+                  `UPDATE conversations SET escalated_until = NOW() + INTERVAL '30 minutes' WHERE id = $1`,
+                  [conversationId],
+                );
+              } catch (_) { /* column missing on old schema — ignore */ }
             }
           } catch (dbErr) {
             // Log but don't fail — message was already sent
