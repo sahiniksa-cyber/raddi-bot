@@ -19,6 +19,7 @@ try { helmet = require('helmet'); } catch (_) {
   console.warn('[server] helmet not installed — CSP headers disabled. Run `npm install helmet`.');
 }
 
+const { createBotResolver } = require('./runtime/bot-resolver');
 const requireSameOrigin = require('./middleware/require-same-origin');
 const { assertPublicUrl } = require('./middleware/ssrf-guard');
 const { checkMessageQuota, decrementMessageQuota } = require('./services/billing/message-quota');
@@ -108,13 +109,23 @@ function isPrivateUrl(url) {
   }
 }
 
-async function getUserBot(userId) {
-  if (!botCache.has(userId)) {
+// Single-flight resolver: concurrent boot-time callers (dashboard + health
+// monitor + outgoing worker) for the SAME user now share one creation instead
+// of each building their own RuntimeBot. Multiple RuntimeBots per number opened
+// competing WhatsApp sockets that fought and triggered 440 (seen in production
+// logs as the same userId "auto recovering" 3× at once). Resolved bots still
+// live in botCache so the shutdown loop and syncBotLookup read it unchanged.
+const resolveUserBot = createBotResolver({
+  cache: botCache,
+  create: async (userId) => {
     const bot = new RuntimeBot(userId, { dataDir: DATA_DIR });
     await bot.load();
-    botCache.set(userId, bot);
-  }
-  return botCache.get(userId);
+    return bot;
+  },
+});
+
+function getUserBot(userId) {
+  return resolveUserBot(userId);
 }
 
 let _ownerBotUserId = null;
