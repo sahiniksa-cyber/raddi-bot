@@ -112,16 +112,25 @@ function createBotController({ getUserBot, database = null }) {
 
     async sendMessage(req, res) {
       const bot = getUserBot(req.session.userId);
-      const { phone, message } = req.body;
-      if (!phone || !message?.trim()) {
-        return res.status(400).json({ success: false, message: 'phone and message are required' });
+      const { phone, message, sender: senderJid } = req.body;
+      if ((!phone && !senderJid) || !message?.trim()) {
+        return res.status(400).json({ success: false, message: 'phone/sender and message are required' });
       }
       if (!bot.botRunning || !bot.client || bot.appState.status !== 'connected') {
         return res.json({ success: false, message: 'bot is not connected' });
       }
 
-      const cleanPhone = phone.replace(/\+/g, '').replace(/[\s\-()]/g, '');
-      const sender = `${cleanPhone}@s.whatsapp.net`;
+      // Prefer an explicit JID (sender) when provided — this lets the
+      // conversations page reply even when the customer's phone number isn't
+      // available (e.g. privacy @lid contacts or older rows with no phone).
+      // Otherwise build the JID from the phone number.
+      let sender;
+      if (senderJid && String(senderJid).includes('@')) {
+        sender = String(senderJid).trim();
+      } else {
+        const cleanPhone = String(phone || senderJid).replace(/\+/g, '').replace(/[\s\-()]/g, '');
+        sender = `${cleanPhone}@s.whatsapp.net`;
+      }
       const text = message.trim();
 
       try {
@@ -129,7 +138,7 @@ function createBotController({ getUserBot, database = null }) {
           bot.client.sendMessage(sender, text),
           new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), TIMERS.SEND_MESSAGE_TIMEOUT_MS)),
         ]);
-        bot.log(`direct message sent to ${cleanPhone}`);
+        bot.log(`direct message sent to ${sender}`);
 
         // Persist to DB so the message appears in conversation history
         if (db && typeof db.isConfigured === 'function' && db.isConfigured()) {
