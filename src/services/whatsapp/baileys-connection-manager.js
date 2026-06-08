@@ -164,6 +164,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._qrStuckTimer = null;
     this._version = null;
     this._socketGeneration = 0;
+    this._authFlush = null;
     this.startupTime = Date.now();
     this._hasEverConnected = false;
     this._stableTimer = null;
@@ -226,7 +227,8 @@ class BaileysConnectionManager extends EventEmitter {
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
     try {
-      const { state, saveCreds } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
+      const { state, saveCreds, flush } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
+      this._authFlush = flush || null;
       if (!this._version) {
         const { version } = await fetchLatestBaileysVersion();
         this._version = version;
@@ -299,6 +301,12 @@ class BaileysConnectionManager extends EventEmitter {
     try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
     try { sock?.end?.(new Error('stopped')); } catch (_) {}
     try { sock?.ws?.close?.(); } catch (_) {}
+
+    // Flush any queued signal-key writes so a redeploy doesn't lose the latest
+    // ratchet step (which would cause "Bad MAC" on the next inbound message).
+    const flush = this._authFlush;
+    this._authFlush = null;
+    if (flush) { try { await flush(); } catch (_) {} }
   }
 
   startQrWatchdog(retryCount) {
