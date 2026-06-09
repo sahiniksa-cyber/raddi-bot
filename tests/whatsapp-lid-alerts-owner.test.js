@@ -50,18 +50,18 @@ test('@lid send failure triggers owner notification with Arabic alert', async ()
       appState: { status: 'connected', statusAgeMs: 99999, whatsappEngine: 'baileys' },
       sessionDesiredState: 'running',
       startBot: async () => {},
-      client: { sendMessage: async () => ({}) }, // truthy for waitForConnectedBot
-      sock: {
-        ws: { readyState: 1 },
-        // First send (to the customer @lid) FAILS; this is the "primary" attempt.
-        sendMessage: async (jid, msg) => {
-          sendCalls.push({ jid, msg });
-          if (jid.endsWith('@lid')) throw new Error('lid_undeliverable');
-          // Owner alert path — succeed
-          return { id: 'ok' };
+      // bot.client is the live-socket wrapper; the outgoing worker routes
+      // ALL sends through it (never bot.sock directly — that would pin a
+      // stale socket reference across reconnects).
+      client: {
+        sendMessage: async (target, text) => {
+          sendCalls.push({ jid: target, text });
+          if (target.endsWith('@lid')) throw new Error('lid_undeliverable');
+          return { key: { id: 'ok', remoteJid: target, fromMe: true } };
         },
         sendPresenceUpdate: async () => {},
       },
+      sock: { ws: { readyState: 1 } },
       log: () => {},
     };
 
@@ -72,14 +72,13 @@ test('@lid send failure triggers owner notification with Arabic alert', async ()
     assert.equal(result.skipped, true);
     assert.equal(result.reason, 'sender_is_lid_only');
 
-    // At least one attempt to the @lid jid, and the owner alert went to @s.whatsapp.net
     const lidAttempt = sendCalls.find(c => c.jid.endsWith('@lid'));
     const ownerAlert = sendCalls.find(c => c.jid === '966500000000@s.whatsapp.net');
     assert.ok(lidAttempt, 'must attempt best-effort send to @lid first');
     assert.ok(ownerAlert, 'must notify owner @s.whatsapp.net after failure');
-    assert.match(ownerAlert.msg.text, /تعذّر/);
-    assert.match(ownerAlert.msg.text, /lid:/);
-    assert.match(ownerAlert.msg.text, /278571713060916@lid/);
+    assert.match(ownerAlert.text, /تعذّر/);
+    assert.match(ownerAlert.text, /lid:/);
+    assert.match(ownerAlert.text, /278571713060916@lid/);
   } finally {
     if (prev === undefined) delete process.env.OWNER_ALERT_PHONE;
     else process.env.OWNER_ALERT_PHONE = prev;
@@ -93,7 +92,7 @@ test('notifyOwnerOfLidFailure no-ops when OWNER_ALERT_PHONE is unset', async () 
     const sent = [];
     const getUserBot = async () => ({
       appState: { status: 'connected' },
-      sock: { sendMessage: async (jid, msg) => sent.push({ jid, msg }) },
+      client: { sendMessage: async (jid, text) => sent.push({ jid, text }) },
     });
     const ok = await notifyOwnerOfLidFailure({
       userId: 'u',
@@ -114,12 +113,14 @@ test('@lid best-effort send that succeeds marks job completed (no alert)', async
     const sendCalls = [];
     const getUserBot = async () => ({
       appState: { status: 'connected', statusAgeMs: 99999, whatsappEngine: 'baileys' },
-      client: { sendMessage: async () => ({}) },
-      sock: {
-        ws: { readyState: 1 },
-        sendMessage: async (jid, msg) => { sendCalls.push({ jid, msg }); return { id: 'ok' }; },
+      client: {
+        sendMessage: async (target, text) => {
+          sendCalls.push({ jid: target, text });
+          return { key: { id: 'ok', remoteJid: target, fromMe: true } };
+        },
         sendPresenceUpdate: async () => {},
       },
+      sock: { ws: { readyState: 1 } },
       sessionDesiredState: 'running',
       startBot: async () => {},
       log: () => {},

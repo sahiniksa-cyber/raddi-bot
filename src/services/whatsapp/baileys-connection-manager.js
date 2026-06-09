@@ -251,12 +251,30 @@ class BaileysConnectionManager extends EventEmitter {
         keepAliveIntervalMs: parseInt(process.env.WA_KEEPALIVE_INTERVAL_MS || '20000', 10),
         connectTimeoutMs: parseInt(process.env.WA_CONNECT_TIMEOUT_MS || '60000', 10),
         retryRequestDelayMs: parseInt(process.env.WA_RETRY_REQUEST_DELAY_MS || '350', 10),
+        // Retry-receipt handler: when a peer fails to decrypt one of our sent
+        // replies, WhatsApp asks us to re-encrypt and resend. Without this
+        // callback Baileys returns undefined → peer rebuilds its Signal session
+        // → every in-flight message on the OLD session decrypts to "Bad MAC".
+        // Looking up by whatsapp_message_id (set by the outgoing worker after a
+        // successful send) returns the original text so the peer's retry
+        // succeeds and the session stays healthy.
+        getMessage: (key) => this.getStoredMessage(key),
       });
 
       this.sock = sock;
       const socketGeneration = ++this._socketGeneration;
+      // Each start() builds a fresh `client` wrapper closed over the new
+      // `sock` const, and atomically replaces `this.client`. Callers that
+      // re-read `bot.client` on every send always target the live socket.
+      // Callers that capture `bot.client` into a local before a reconnect
+      // will throw "socket closed" — but the outgoing worker re-reads
+      // `bot.client` per job, so that's the safe pattern.
+      // sendMessage returns the Baileys WAMessage so callers can record
+      // key.id (used by getMessage on retry receipts to short-circuit the
+      // "Bad MAC" cascade).
       this.client = {
         sendMessage: async (target, text) => sock.sendMessage(normalizeOutboundJid(target), { text: String(text || '') }),
+        sendPresenceUpdate: async (state, target) => sock.sendPresenceUpdate(state, normalizeOutboundJid(target)),
         getState: async () => (this.ready ? 'CONNECTED' : this.status.toUpperCase()),
       };
 
@@ -267,7 +285,20 @@ class BaileysConnectionManager extends EventEmitter {
           this.log('error', 'connection', `Baileys connection update failed: ${err.message}`, err);
         });
       });
-      sock.ev.on('messages.upsert', (event) => this.handleMessages(event));
+      // Guard against ghost messages from an old socket after reconnect.
+      // handleConnectionUpdate already checks _socketGeneration; without the same
+      // check here, messages emitted by a dying socket would be ingested by the
+      // new socket's pipeline → AI generates a reply, then the live socket
+      // generates a second reply for the same key.id → duplicate-in-one-second.
+      sock.ev.on('messages.upsert', (event) => {
+        if (socketGeneration !== this._socketGeneration) {
+          this.log('info', 'message', `dropped messages.upsert from generation=${socketGeneration} current=${this._socketGeneration}`);
+          return;
+        }
+        // Pass the captured generation INTO handleMessages so the loop can
+        // also bail out per-message if a reconnect happens while we iterate.
+        this.handleMessages(event, socketGeneration);
+      });
       this.startQrWatchdog(retryCount);
       return true;
     } catch (err) {
@@ -387,10 +418,18 @@ class BaileysConnectionManager extends EventEmitter {
     try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
     try { sock?.end?.(new Error('reconnect')); } catch (_) {}
     try { sock?.ws?.close?.(); } catch (_) {}
-    this._retryTimer = setTimeout(() => {
+    // Capture the auth flush BEFORE the socket teardown above replaces it on
+    // the next start(). Awaiting it inside the timer ensures the latest
+    // ratchet step from the dying socket is durably on disk before we open a
+    // new socket — otherwise a key write still in the debounce timer would be
+    // dropped on the floor, leaving us out of sync with the peer and
+    // producing "Bad MAC" on the very next inbound message.
+    const flushBeforeReconnect = this._authFlush;
+    this._retryTimer = setTimeout(async () => {
       this._retryTimer = null;
       if (socketGeneration !== this._socketGeneration) return;
       if (this.ready || this.status === 'connected') return;
+      if (flushBeforeReconnect) { try { await flushBeforeReconnect(); } catch (_) {} }
       this._running = false;
       this.start(retryCount + 1).catch((err) => {
         this.log('error', 'connection', `Baileys reconnect failed: ${err.message}`, err);
@@ -498,7 +537,31 @@ class BaileysConnectionManager extends EventEmitter {
     }
   }
 
-  handleMessages(event) {
+  // Baileys retry-receipt callback. The peer's WhatsApp couldn't decrypt one
+  // of our sent replies and is asking the server to ask us to resend. Returning
+  // the original text lets the lib re-encrypt and resend. Returning undefined
+  // is safe (Baileys falls back to a placeholder), but unreliable — undefined
+  // is the path that produces the "Closing open session in favor of incoming
+  // prekey bundle" + Bad MAC cascade.
+  async getStoredMessage(key) {
+    const id = key?.id ? String(key.id) : '';
+    if (!id) return undefined;
+    try {
+      const result = await this.db.query(
+        `SELECT content FROM messages
+         WHERE user_id = $1 AND whatsapp_message_id = $2
+         LIMIT 1`,
+        [this.userId, id],
+      );
+      const text = result?.rows?.[0]?.content;
+      return text ? { conversation: String(text) } : undefined;
+    } catch (err) {
+      this.log('warn', 'getMessage', `lookup failed for ${id}: ${err.message}`);
+      return undefined;
+    }
+  }
+
+  handleMessages(event, socketGeneration = this._socketGeneration) {
     if (!this._running || !Array.isArray(event?.messages)) return;
     if (event.type && event.type !== 'notify') {
       this.log('info', 'message', `ignored Baileys ${event.type} message batch`);
@@ -524,6 +587,14 @@ class BaileysConnectionManager extends EventEmitter {
     }
 
     for (const { raw, msg } of candidates) {
+      // Per-message generation check: a reconnect mid-batch invalidates the
+      // rest. The listener-level guard only catches events that arrive AFTER
+      // the increment; this catches events that were already mid-loop when
+      // _socketGeneration was bumped by stop()/scheduleReconnect.
+      if (socketGeneration !== this._socketGeneration) {
+        this.log('info', 'message', `aborted message loop mid-batch: generation rolled from ${socketGeneration} to ${this._socketGeneration}`);
+        return;
+      }
       this.processInboundBaileysMessage(raw, msg).catch(err => {
         this.lastError = err.message;
         this.emit('message_ingest_error', err);
