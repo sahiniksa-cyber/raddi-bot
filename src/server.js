@@ -1,5 +1,10 @@
 'use strict';
 
+// Install libsignal log throttle FIRST, before any require that might transitively
+// load Baileys/libsignal. Once libsignal binds to console.error, our patch can't
+// intercept the binding it captured. Explicit install() is required (no
+// self-install at require time, so tests can re-require cleanly).
+require('./runtime/libsignal-log-throttle').install();
 require('dotenv').config({ quiet: true });
 
 const fs = require('fs');

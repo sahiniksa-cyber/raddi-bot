@@ -1,5 +1,10 @@
 'use strict';
 
+// Install libsignal log throttle FIRST, before any require that might transitively
+// load Baileys/libsignal. Without this each Bad MAC error prints a 5-line stack
+// to stderr, flooding Railway's log rate-limit. Explicit install() — no
+// self-install at require time.
+require('../runtime/libsignal-log-throttle').install();
 require('dotenv').config({ quiet: true });
 
 const crypto = require('crypto');

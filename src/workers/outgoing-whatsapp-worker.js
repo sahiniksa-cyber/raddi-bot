@@ -41,6 +41,23 @@ async function markReplyMessage(replyMessageId, status, rawPayload = {}) {
   );
 }
 
+// Records the Baileys-assigned WhatsApp message ID so getMessage(key) can look
+// up the original text when the peer asks for a retry receipt. The lookup is
+// what stops the Bad MAC cascade — without it Baileys returns undefined, the
+// peer rebuilds its Signal session, and every in-flight message decrypts wrong.
+// The user_id filter is load-bearing: getMessage looks up by (user_id, key.id),
+// and we MUST guarantee the row we write under one user's key.id can never be
+// updated by a different user's worker even if they share a Postgres pool.
+async function recordWhatsappMessageId(userId, replyMessageId, whatsappMessageId) {
+  if (!userId || !replyMessageId || !whatsappMessageId) return;
+  await db.query(
+    `UPDATE messages SET whatsapp_message_id = $3 WHERE user_id = $1 AND id = $2`,
+    [userId, replyMessageId, String(whatsappMessageId)],
+  ).catch((err) => {
+    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] failed to record whatsapp_message_id: ${err.message}`);
+  });
+}
+
 async function getPersistedJobCreatedAt(jobKey) {
   if (!db.isConfigured() || !jobKey) return null;
   const result = await db.query(
@@ -146,10 +163,13 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     throw new Error('socket_not_open');
   }
 
-  // Best-effort typing indicator — never block the send if it fails.
-  try { await bot.sock?.sendPresenceUpdate?.('composing', sender); } catch (_) {}
+  // Best-effort typing indicator — never block the send if it fails. Route
+  // through bot.client so the wrapper resolves the live socket; capturing
+  // bot.sock here would pin a dead reference across reconnects.
+  try { await bot.client?.sendPresenceUpdate?.('composing', sender); } catch (_) {}
 
-  await sendWhatsappReply(bot, { sender, reply, providerMessageId });
+  const sendResult = await sendWhatsappReply(bot, { sender, reply, providerMessageId });
+  await recordWhatsappMessageId(userId, replyMessageId, sendResult?.key?.id);
 
   // Send-only path: quota is decremented only when sendWhatsappReply resolves
   // without throwing. If the send throws (including socket_not_open above), this
@@ -160,7 +180,7 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   }
 
   // Best-effort "stopped typing" — fire and forget.
-  try { await bot.sock?.sendPresenceUpdate?.('paused', sender); } catch (_) {}
+  try { await bot.client?.sendPresenceUpdate?.('paused', sender); } catch (_) {}
 
   await markReplyMessage(replyMessageId, 'sent', {
     sentBy: WORKER_NAME,
@@ -210,13 +230,9 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
       timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
     });
     if (!isSocketOpen(bot)) throw new Error('socket_not_open');
-    if (typeof bot?.sock?.sendMessage === 'function') {
-      await bot.sock.sendMessage(sender, { text: String(reply || '') });
-    } else if (bot?.client?.sendMessage) {
-      await bot.client.sendMessage(sender, reply);
-    } else {
-      throw new Error('no_send_channel_for_lid');
-    }
+    if (!bot?.client?.sendMessage) throw new Error('no_send_channel_for_lid');
+    const lidResult = await bot.client.sendMessage(sender, reply);
+    await recordWhatsappMessageId(userId, replyMessageId, lidResult?.key?.id);
     await markReplyMessage(replyMessageId, 'sent', {
       sentBy: WORKER_NAME,
       sentAt: new Date().toISOString(),
@@ -259,10 +275,9 @@ async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
   // arrives on the owner's phone alongside normal customer chats.
   const loadedBot = await getUserBot(userId).catch(() => null);
   if (!loadedBot || loadedBot?.appState?.status !== 'connected') return false;
-  if (loadedBot?.sock?.sendMessage) {
-    await loadedBot.sock.sendMessage(ownerJid, { text });
-    return true;
-  }
+  // Route through bot.client only — bot.sock can hold a stale reference across
+  // reconnects, sending to a dead socket throws silently in fire-and-forget
+  // contexts.
   if (loadedBot?.client?.sendMessage) {
     await loadedBot.client.sendMessage(ownerJid, text);
     return true;

@@ -412,6 +412,21 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_customer_api_keys_user
     ON customer_api_keys(user_id)`,
+
+  // ── Added 2026-06-09: WhatsApp message ID for the outbound replies we send.
+  //    Baileys assigns its own key.id on sendMessage; we record it so the
+  //    getMessage(key) callback can return the original text when a peer asks
+  //    for a retry receipt. Without this, the peer rebuilds its Signal session
+  //    and every in-flight message decrypts to "Bad MAC".
+  //    UNIQUE on (user_id, whatsapp_message_id) is load-bearing: it guarantees
+  //    the retry-receipt lookup can never return a row from a DIFFERENT
+  //    conversation that happened to share key.id. Returning the wrong
+  //    plaintext to a peer's retry would corrupt its ratchet permanently.
+  `ALTER TABLE messages ADD COLUMN IF NOT EXISTS whatsapp_message_id TEXT`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_user_whatsapp_id_unique
+    ON messages(user_id, whatsapp_message_id)
+    WHERE whatsapp_message_id IS NOT NULL`,
 ];
 
 async function migrate() {
