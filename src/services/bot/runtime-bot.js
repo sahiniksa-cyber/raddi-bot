@@ -206,6 +206,15 @@ class RuntimeBot {
     return this.connection.client;
   }
 
+  // Live view of the underlying Baileys socket so the outgoing worker's
+  // isSocketOpen() guard can inspect ws.readyState. Reading at call time
+  // (not capturing) means it never pins a dead socket across reconnects.
+  // whatsapp-web.js engine has no sock — getter returns undefined and the
+  // guard falls through to "open", same as before.
+  get sock() {
+    return this.connection?.sock;
+  }
+
   get botRunning() {
     return !['stopped', 'error'].includes(this.connection.status);
   }

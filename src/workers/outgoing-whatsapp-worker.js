@@ -72,6 +72,18 @@ async function getPersistedJobCreatedAt(jobKey) {
 
 const ESCALATION_MAX_AGE_MS = 60 * 60 * 1000; // 60 minutes
 
+// 30 minutes: long enough to ride out a full reconnect ladder + outgoing retry
+// chain, short enough that customers never get hours-old replies. Symmetric
+// with AI_PENDING_MAX_AGE_MS on the inbound side.
+const DEFAULT_OUTGOING_STALE_MAX_AGE_MS = 30 * 60 * 1000;
+
+function outgoingStaleMaxAgeMs() {
+  return parseInt(
+    process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || String(DEFAULT_OUTGOING_STALE_MAX_AGE_MS),
+    10,
+  );
+}
+
 function shouldSkipStaleOutgoingPayload(payload = {}, ageMs, maxAgeMs) {
   if (payload.escalation) {
     // Now that ai-worker has dedup via escalation_log, we can safely cap escalation
@@ -82,7 +94,7 @@ function shouldSkipStaleOutgoingPayload(payload = {}, ageMs, maxAgeMs) {
 }
 
 async function skipStaleOutgoingJob(job, { replyMessageId }) {
-  const maxAgeMs = parseInt(process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || '600000', 10);
+  const maxAgeMs = outgoingStaleMaxAgeMs();
   if (maxAgeMs <= 0) return false;
 
   const createdAt = await getPersistedJobCreatedAt(job.id) || job.timestamp || Date.now();
@@ -143,6 +155,22 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
       last_error: message,
     });
     return { skipped: true, reason: 'bot_stopped_by_owner' };
+  }
+
+  if (!payload.escalation && await isConversationOwnerPaused({ userId, sender })) {
+    const message = 'outgoing reply canceled because owner replied (escalated_until active)';
+    await markReplyMessage(replyMessageId, 'canceled', {
+      sentBy: WORKER_NAME,
+      canceledAt: new Date().toISOString(),
+      error: message,
+    });
+    await updateJobStatus(job.id, {
+      status: 'canceled',
+      finished_at: new Date(),
+      attempts: job.attemptsMade,
+      last_error: message,
+    });
+    return { skipped: true, reason: 'owner_paused' };
   }
 
   await updateJobStatus(job.id, {
@@ -289,6 +317,28 @@ function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
   return bot?.sessionDesiredState === 'stopped' && !payload.escalation;
 }
 
+// The owner replying manually sets conversations.escalated_until (ingest for
+// phone replies, dashboard for panel replies). The AI worker already refuses
+// to GENERATE during the pause — but a reply queued before the owner stepped
+// in (humanization delay 50-75s) would still fire after their message and
+// "interrupt" the conversation. Cancel it here. Fail-open on every edge so a
+// missing column / DB hiccup can never block customer replies.
+async function isConversationOwnerPaused({ userId, sender, database = db }) {
+  if (!userId || !sender || !database?.isConfigured?.()) return false;
+  try {
+    const result = await database.query(
+      `SELECT escalated_until FROM conversations
+       WHERE user_id = $1 AND sender = $2
+       LIMIT 1`,
+      [userId, sender],
+    );
+    const until = result.rows[0]?.escalated_until;
+    return !!until && new Date(until).getTime() > Date.now();
+  } catch (_) {
+    return false;
+  }
+}
+
 async function sendWhatsappReply(bot, { sender, reply, providerMessageId }) {
   const timeoutMs = TIMERS.SEND_MESSAGE_TIMEOUT_MS;
   return Promise.race([
@@ -365,7 +415,7 @@ async function waitForConnectedBot(bot, { reason, timeoutMs }) {
 
 async function requeuePersistedOutgoingJobs(limit = 200) {
   if (!db.isConfigured()) return;
-  const maxAgeMs = parseInt(process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || '600000', 10);
+  const maxAgeMs = outgoingStaleMaxAgeMs();
 
   // Expire outgoing jobs older than the staleness window so a (re)start never
   // resurrects and sends day-old replies to customers. The requeue used to pick
@@ -504,8 +554,10 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 module.exports = {
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
+  isConversationOwnerPaused,
   isSocketOpen,
   notifyOwnerOfLidFailure,
+  outgoingStaleMaxAgeMs,
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,
