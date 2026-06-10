@@ -25,7 +25,7 @@ const DEFAULT_REMOVE_ON_FAIL = {
 };
 
 const DEFAULT_AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '9000', 10);
-const STALE_ACTIVE_JOB_MS = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '120000', 10) * 2;
+const STALE_ACTIVE_JOB_MS = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '180000', 10) * 2;
 
 let connection = null;
 let queues = null;

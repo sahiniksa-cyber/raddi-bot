@@ -30,12 +30,16 @@ const {
 } = require('../services/ai/openai-media-analysis');
 
 const WORKER_NAME = 'ai-worker';
-const CONCURRENCY = parseInt(process.env.AI_WORKER_CONCURRENCY || '2', 10);
+const CONCURRENCY = parseInt(process.env.AI_WORKER_CONCURRENCY || '4', 10);
 const RATE_LIMIT_MAX = parseInt(process.env.AI_WORKER_RATE_LIMIT_MAX || '15', 10);
 const RATE_LIMIT_DURATION_MS = parseInt(process.env.AI_WORKER_RATE_LIMIT_DURATION_MS || '60000', 10);
 const DB_READY_TIMEOUT_MS = parseInt(process.env.AI_WORKER_DB_READY_TIMEOUT_MS || '120000', 10);
 const DB_READY_INTERVAL_MS = parseInt(process.env.AI_WORKER_DB_READY_INTERVAL_MS || '2000', 10);
 const AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '9000', 10);
+// Must outlive the worst-case ai-client retry chain (30s timeout × 3 attempts
+// + 429 backoff waits ≈ 150s). message-queue.js derives its stale-active
+// cleanup threshold from the same env var (×2) — keep the defaults in sync.
+const LOCK_DURATION_MS = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '180000', 10);
 
 function createLogger(jobId) {
   const prefix = `[${WORKER_NAME}:${jobId || 'manual'}]`;
@@ -907,7 +911,7 @@ function createWorker() {
       max: RATE_LIMIT_MAX,
       duration: RATE_LIMIT_DURATION_MS,
     },
-    lockDuration: parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '120000', 10),
+    lockDuration: LOCK_DURATION_MS,
   });
 }
 
@@ -983,6 +987,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CONCURRENCY,
+  LOCK_DURATION_MS,
   buildCombinedInboundText,
   createWorker,
   enqueueFollowupIfPending,
