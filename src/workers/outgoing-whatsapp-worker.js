@@ -72,6 +72,18 @@ async function getPersistedJobCreatedAt(jobKey) {
 
 const ESCALATION_MAX_AGE_MS = 60 * 60 * 1000; // 60 minutes
 
+// 30 minutes: long enough to ride out a full reconnect ladder + outgoing retry
+// chain, short enough that customers never get hours-old replies. Symmetric
+// with AI_PENDING_MAX_AGE_MS on the inbound side.
+const DEFAULT_OUTGOING_STALE_MAX_AGE_MS = 30 * 60 * 1000;
+
+function outgoingStaleMaxAgeMs() {
+  return parseInt(
+    process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || String(DEFAULT_OUTGOING_STALE_MAX_AGE_MS),
+    10,
+  );
+}
+
 function shouldSkipStaleOutgoingPayload(payload = {}, ageMs, maxAgeMs) {
   if (payload.escalation) {
     // Now that ai-worker has dedup via escalation_log, we can safely cap escalation
@@ -82,7 +94,7 @@ function shouldSkipStaleOutgoingPayload(payload = {}, ageMs, maxAgeMs) {
 }
 
 async function skipStaleOutgoingJob(job, { replyMessageId }) {
-  const maxAgeMs = parseInt(process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || '600000', 10);
+  const maxAgeMs = outgoingStaleMaxAgeMs();
   if (maxAgeMs <= 0) return false;
 
   const createdAt = await getPersistedJobCreatedAt(job.id) || job.timestamp || Date.now();
@@ -365,7 +377,7 @@ async function waitForConnectedBot(bot, { reason, timeoutMs }) {
 
 async function requeuePersistedOutgoingJobs(limit = 200) {
   if (!db.isConfigured()) return;
-  const maxAgeMs = parseInt(process.env.OUTGOING_STALE_JOB_MAX_AGE_MS || '600000', 10);
+  const maxAgeMs = outgoingStaleMaxAgeMs();
 
   // Expire outgoing jobs older than the staleness window so a (re)start never
   // resurrects and sends day-old replies to customers. The requeue used to pick
@@ -506,6 +518,7 @@ module.exports = {
   handleLidOutgoing,
   isSocketOpen,
   notifyOwnerOfLidFailure,
+  outgoingStaleMaxAgeMs,
   processOutgoingWhatsapp,
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,
