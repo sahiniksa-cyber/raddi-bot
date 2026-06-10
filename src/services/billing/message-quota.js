@@ -34,6 +34,7 @@ async function decrementMessageQuota(userId, { database = db } = {}) {
   const result = await database.query(
     `UPDATE billing_accounts
      SET messages_remaining = messages_remaining - 1,
+         messages_used = messages_used + 1,
          updated_at = NOW()
      WHERE user_id = $1
        AND messages_remaining > 0

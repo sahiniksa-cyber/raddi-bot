@@ -119,6 +119,12 @@ test('decrementMessageQuota returns failure when UPDATE matches no rows', async 
   assert.deepEqual(result, { success: false });
 });
 
+test('decrementMessageQuota also increments the tracked messages_used counter', async () => {
+  const database = fakeDbCapture([{ messages_remaining: 2846 }]);
+  await decrementMessageQuota('user-1', { database });
+  assert.match(database.calls[0].sql, /messages_used = messages_used \+ 1/);
+});
+
 test('addMessagesToQuota issues an UPSERT with INTERVAL and returns the new state', async () => {
   const database = fakeDbCapture([{
     messages_remaining: 5847,

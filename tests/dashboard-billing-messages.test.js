@@ -28,6 +28,9 @@ require.cache[dbPath] = {
         expire_resets_quota: true,
         last_topup_amount: 3000,
         last_topup_at: new Date().toISOString(),
+        // Deliberately different from (last_topup - remaining) = 153 so the test
+        // proves the route reads the tracked column, not the old derivation.
+        messages_used: 410,
       }],
     }),
   }
@@ -65,6 +68,7 @@ test('GET /api/billing/messages returns quota snapshot', async () => {
     assert.equal(typeof r.body.remaining, 'number');
     assert.equal(r.body.supportWhatsappPhone, '966500000000');
     assert.ok(['active', 'empty', 'expired'].includes(r.body.status));
+    assert.equal(r.body.used, 410, 'used must come from the tracked messages_used column');
   } finally {
     server.close();
   }
