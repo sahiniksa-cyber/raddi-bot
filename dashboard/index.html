@@ -2840,17 +2840,16 @@ async function loadLearnedReplies(){
     d.learned.forEach(p=>{
       const off=p.status!=='active';
       const row=document.createElement('div');
-      row.style.cssText='background:'+(off?'var(--card-soft)':'var(--green-bg)')+';border:1px solid '+(off?'var(--border)':'var(--green-border)')+';border-radius:9px;padding:10px 14px;font-size:13px'+(off?';opacity:.55':'');
-      row.innerHTML=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap">
-        <div style="flex:1;min-width:200px">
-          <div style="font-weight:700;color:var(--text)">س: ${esc(p.question)}</div>
-          <div style="color:var(--text-soft);margin-top:4px">ج: ${esc(p.answer)}</div>
-        </div>
-        <button onclick="toggleLearned('${esc(String(p.id))}','${off?'active':'disabled'}')"
-          style="padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:${off?'var(--green2)':'var(--text-soft)'};font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer">
-          ${off?'▶ تفعيل':'⏸ تعطيل'}
-        </button>
-      </div>`;
+      row.style.cssText='background:'+(off?'var(--card-soft)':'var(--green-bg)')+';border:1px solid '+(off?'var(--border)':'var(--green-border)')+';border-radius:9px;padding:10px 14px;font-size:13px;display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap'+(off?';opacity:.55':'');
+      const txt=document.createElement('div');
+      txt.style.cssText='flex:1;min-width:200px';
+      txt.innerHTML=`<div style="font-weight:700;color:var(--text)">س: ${esc(p.question)}</div>
+        <div style="color:var(--text-soft);margin-top:4px">ج: ${esc(p.answer)}</div>`;
+      const btn=document.createElement('button');
+      btn.textContent=off?'▶ تفعيل':'⏸ تعطيل';
+      btn.style.cssText='padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:'+(off?'var(--green2)':'var(--text-soft)')+';font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer';
+      btn.addEventListener('click',()=>toggleLearned(p.id,off?'active':'disabled'));
+      row.appendChild(txt);row.appendChild(btn);
       list.appendChild(row);
     });
   }catch(_){}
