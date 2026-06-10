@@ -157,6 +157,22 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     return { skipped: true, reason: 'bot_stopped_by_owner' };
   }
 
+  if (!payload.escalation && await isConversationOwnerPaused({ userId, sender })) {
+    const message = 'outgoing reply canceled because owner replied (escalated_until active)';
+    await markReplyMessage(replyMessageId, 'canceled', {
+      sentBy: WORKER_NAME,
+      canceledAt: new Date().toISOString(),
+      error: message,
+    });
+    await updateJobStatus(job.id, {
+      status: 'canceled',
+      finished_at: new Date(),
+      attempts: job.attemptsMade,
+      last_error: message,
+    });
+    return { skipped: true, reason: 'owner_paused' };
+  }
+
   await updateJobStatus(job.id, {
     status: 'processing',
     started_at: new Date(),
@@ -299,6 +315,28 @@ async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
 
 function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
   return bot?.sessionDesiredState === 'stopped' && !payload.escalation;
+}
+
+// The owner replying manually sets conversations.escalated_until (ingest for
+// phone replies, dashboard for panel replies). The AI worker already refuses
+// to GENERATE during the pause — but a reply queued before the owner stepped
+// in (humanization delay 50-75s) would still fire after their message and
+// "interrupt" the conversation. Cancel it here. Fail-open on every edge so a
+// missing column / DB hiccup can never block customer replies.
+async function isConversationOwnerPaused({ userId, sender, database = db }) {
+  if (!userId || !sender || !database?.isConfigured?.()) return false;
+  try {
+    const result = await database.query(
+      `SELECT escalated_until FROM conversations
+       WHERE user_id = $1 AND sender = $2
+       LIMIT 1`,
+      [userId, sender],
+    );
+    const until = result.rows[0]?.escalated_until;
+    return !!until && new Date(until).getTime() > Date.now();
+  } catch (_) {
+    return false;
+  }
 }
 
 async function sendWhatsappReply(bot, { sender, reply, providerMessageId }) {
@@ -516,6 +554,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 module.exports = {
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
+  isConversationOwnerPaused,
   isSocketOpen,
   notifyOwnerOfLidFailure,
   outgoingStaleMaxAgeMs,
