@@ -25,3 +25,15 @@ test('decrementMessageQuota is called after sendWhatsappReply', () => {
 test('quotaRemainingAfter is recorded in markReplyMessage payload', () => {
   assert.match(workerSource, /quotaRemainingAfter/);
 });
+
+test('lid best-effort send also decrements quota after success', () => {
+  const lidStart = workerSource.indexOf('async function handleLidOutgoing');
+  const lidEnd = workerSource.indexOf('async function notifyOwnerOfLidFailure');
+  assert.ok(lidStart > -1 && lidEnd > lidStart, 'handleLidOutgoing must exist before notifyOwnerOfLidFailure');
+  const lidBody = workerSource.slice(lidStart, lidEnd);
+  const sendIdx = lidBody.indexOf('bot.client.sendMessage');
+  const decIdx = lidBody.indexOf('decrementMessageQuota');
+  assert.ok(sendIdx > -1, 'lid path must send via bot.client.sendMessage');
+  assert.ok(decIdx > sendIdx, 'decrementMessageQuota must run AFTER the lid send succeeds');
+  assert.match(lidBody, /quotaRemainingAfter/);
+});

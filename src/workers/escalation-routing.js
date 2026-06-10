@@ -14,10 +14,19 @@ function normalizeEscalationPhone(phone) {
   return `${digits}@c.us`;
 }
 
+// Longest real phone number is 15 digits (E.164); WhatsApp group ids are 18+.
+// A bare digit string at or past this length can only be a group id pasted
+// without its @g.us suffix.
+const GROUP_ID_MIN_DIGITS = 16;
+
 function normalizeEscalationTarget(target) {
   const raw = String(target || '').trim();
   if (!raw) return null;
   if (raw.endsWith('@g.us') || raw.endsWith('@c.us') || raw.endsWith('@s.whatsapp.net') || raw.endsWith('@lid')) return raw;
+  const digits = cleanDigits(raw);
+  if (digits && digits === raw.replace(/[\s+-]/g, '') && digits.length >= GROUP_ID_MIN_DIGITS) {
+    return `${digits}@g.us`;
+  }
   return normalizeEscalationPhone(raw);
 }
 
@@ -146,9 +155,28 @@ function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNu
   }
 
   const target = normalizeEscalationTarget(contactTarget);
-  if (!target) return { customerReply, ownerMessage: null };
-
   const summary = explicit?.summary || `قاعدة التحويل: ${contact.when || contact.role || contact.name || 'متابعة مطلوبة'}`;
+
+  if (!target) {
+    // Not a phone and not a JID — merchants type the GROUP NAME here because
+    // WhatsApp never shows them the literal @g.us id. Pass the raw name
+    // through; the outgoing worker (the only process holding a live socket)
+    // resolves it against the account's joined groups at send time.
+    const rawName = String(contactTarget).trim();
+    if (!rawName) return { customerReply, ownerMessage: null };
+    return {
+      customerReply,
+      ownerMessage: {
+        sender: rawName,
+        needsGroupResolution: true,
+        reply: buildEscalationNotification({ contact, customerSender, customerPhoneNumber, inboundText, summary }),
+        contact,
+        summary,
+        contactTarget: rawName,
+      },
+    };
+  }
+
   return {
     customerReply,
     ownerMessage: {
@@ -164,6 +192,7 @@ function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNu
 module.exports = {
   buildEscalationNotification,
   extractEscalationRequest,
+  normalizeArabic,
   normalizeEscalationPhone,
   normalizeEscalationTarget,
   prepareEscalation,
