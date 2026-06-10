@@ -70,7 +70,7 @@ function resolveDataDir() {
 const DATA_DIR = resolveDataDir();
 const PORT = process.env.PORT || 3000;
 const botCache = new Map();
-const AI_RECOVERY_INTERVAL_MS = parseInt(process.env.AI_RECOVERY_INTERVAL_MS || '60000', 10);
+const AI_RECOVERY_INTERVAL_MS = parseInt(process.env.AI_RECOVERY_INTERVAL_MS || '30000', 10);
 
 function ensureDatabaseConfigured() {
   if (!db.isConfigured()) throw new Error('DATABASE_URL is required for src server');
