@@ -261,10 +261,18 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     if (!bot?.client?.sendMessage) throw new Error('no_send_channel_for_lid');
     const lidResult = await bot.client.sendMessage(sender, reply);
     await recordWhatsappMessageId(userId, replyMessageId, lidResult?.key?.id);
+    // Same rule as the main path: a successful send consumes one quota unit.
+    // Without this, @lid customers (the majority on privacy-masked numbers)
+    // were never metered and the dashboard counter froze.
+    const dec = await decrementMessageQuota(userId);
+    if (!dec.success) {
+      console.warn(`${new Date().toISOString()} [${WORKER_NAME}] lid-sent ${replyMessageId} but quota already empty for ${userId}`);
+    }
     await markReplyMessage(replyMessageId, 'sent', {
       sentBy: WORKER_NAME,
       sentAt: new Date().toISOString(),
       lid: true,
+      quotaRemainingAfter: dec.remaining ?? 0,
     });
     await updateJobStatus(job.id, {
       status: 'completed',
