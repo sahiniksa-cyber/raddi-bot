@@ -428,6 +428,20 @@ const statements = [
     ON messages(user_id, whatsapp_message_id)
     WHERE whatsapp_message_id IS NOT NULL`,
 
+  // ── Added 2026-06-10: true sent-message counter. The dashboard used to
+  //    derive used = last_topup_amount - messages_remaining, which freezes at 0
+  //    whenever topups accumulate (remaining > last topup). Track usage
+  //    directly; decrementMessageQuota increments it in the same UPDATE.
+  `ALTER TABLE billing_accounts
+    ADD COLUMN IF NOT EXISTS messages_used INTEGER NOT NULL DEFAULT 0`,
+
+  // One-time backfill: seed the tracked counter with the value the dashboard
+  // currently derives, so the visible number never jumps backward. Safe to
+  // re-run (only touches rows still at the default 0).
+  `UPDATE billing_accounts
+      SET messages_used = GREATEST(0, last_topup_amount - messages_remaining)
+    WHERE messages_used = 0 AND last_topup_amount > messages_remaining`,
+
   // ── Added 2026-06-10: phase-1 self-learning. Q→A pairs harvested from the
   //    owner's manual replies only (status='sent_by_human'); injected into the
   //    AI knowledge block. UNIQUE(user_id, normalized_question) is the dedup.

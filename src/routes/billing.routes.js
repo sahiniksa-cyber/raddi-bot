@@ -153,14 +153,17 @@ function createBillingRoutes(deps = {}) {
     try {
       const result = await db.query(
         `SELECT messages_remaining, quota_expires_at, expire_resets_quota,
-                last_topup_amount, last_topup_at
+                last_topup_amount, last_topup_at, messages_used
          FROM billing_accounts WHERE user_id = $1`,
         [req.session.userId],
       );
       const row = result.rows[0] || {};
       const remaining = computeEffectiveRemaining(row);
       const total = Number(row.last_topup_amount || 0);
-      const used = Math.max(0, total - remaining);
+      // Tracked counter (incremented atomically with every quota decrement).
+      // The old derivation max(0, total - remaining) froze at 0 whenever
+      // topups accumulated past the last topup amount.
+      const used = Number(row.messages_used || 0);
 
       const expiresAt = row.quota_expires_at ? new Date(row.quota_expires_at) : null;
       const expired = !!row.expire_resets_quota && expiresAt && expiresAt < new Date();

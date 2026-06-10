@@ -7,8 +7,28 @@ const {
   buildEscalationNotification,
   extractEscalationRequest,
   normalizeEscalationPhone,
+  normalizeEscalationTarget,
   prepareEscalation,
 } = require('../src/workers/escalation-routing');
+
+test('bare 16+ digit targets are treated as group IDs, shorter stay phones', () => {
+  assert.equal(normalizeEscalationTarget('120363419087654321'), '120363419087654321@g.us');
+  assert.equal(normalizeEscalationTarget('966501234567'), '966501234567@c.us');
+});
+
+test('prepareEscalation passes a group NAME through for send-time resolution', () => {
+  const config = { escalationContacts: [{ name: 'الدعم', phone: 'متجر برو خدمة عملاء', when: 'مشكلة' }] };
+  const result = prepareEscalation({
+    reply: 'أبشر [تحويل:الدعم|مشكلة شحن]',
+    config,
+    customerSender: '966500000000@s.whatsapp.net',
+    inboundText: 'مشكلة في الشحن',
+  });
+  assert.ok(result.ownerMessage, 'name target must NOT be dropped');
+  assert.equal(result.ownerMessage.sender, 'متجر برو خدمة عملاء');
+  assert.equal(result.ownerMessage.needsGroupResolution, true);
+  assert.match(result.ownerMessage.reply, /مشكلة شحن/);
+});
 
 test('extractEscalationRequest removes private marker from customer reply', () => {
   const result = extractEscalationRequest('ثواني اتأكد لك [تحويل:محمد|العميل يسأل عن مشكلة دفع]');
