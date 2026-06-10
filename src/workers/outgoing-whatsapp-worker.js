@@ -7,6 +7,7 @@ const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, getQueues } = require('../queues/message-queue');
 const { normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
 const { decrementMessageQuota } = require('../services/billing/message-quota');
+const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -191,12 +192,37 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     throw new Error('socket_not_open');
   }
 
+  // Escalation contacts may be configured with a group NAME (merchants cannot
+  // know the literal @g.us id). Resolve it against the account's joined groups
+  // now that we hold a live socket. Unresolvable or ambiguous => cancel loudly
+  // with the name in the error — never guess and message the wrong chat.
+  let deliverTo = sender;
+  if (payload.escalation && !String(sender).includes('@')) {
+    deliverTo = await resolveGroupJidByName(bot, sender);
+    if (!deliverTo) {
+      const message = `escalation group not found by name: ${sender}`;
+      await markReplyMessage(replyMessageId, 'canceled', {
+        sentBy: WORKER_NAME,
+        canceledAt: new Date().toISOString(),
+        error: message,
+      });
+      await updateJobStatus(job.id, {
+        status: 'canceled',
+        finished_at: new Date(),
+        attempts: job.attemptsMade,
+        last_error: message,
+      });
+      console.warn(`${new Date().toISOString()} [${WORKER_NAME}] ${message}`);
+      return { skipped: true, reason: 'escalation_group_not_found' };
+    }
+  }
+
   // Best-effort typing indicator — never block the send if it fails. Route
   // through bot.client so the wrapper resolves the live socket; capturing
   // bot.sock here would pin a dead reference across reconnects.
-  try { await bot.client?.sendPresenceUpdate?.('composing', sender); } catch (_) {}
+  try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
-  const sendResult = await sendWhatsappReply(bot, { sender, reply, providerMessageId });
+  const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply, providerMessageId });
   await recordWhatsappMessageId(userId, replyMessageId, sendResult?.key?.id);
 
   // Send-only path: quota is decremented only when sendWhatsappReply resolves
@@ -208,7 +234,7 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   }
 
   // Best-effort "stopped typing" — fire and forget.
-  try { await bot.client?.sendPresenceUpdate?.('paused', sender); } catch (_) {}
+  try { await bot.client?.sendPresenceUpdate?.('paused', deliverTo); } catch (_) {}
 
   await markReplyMessage(replyMessageId, 'sent', {
     sentBy: WORKER_NAME,
@@ -222,7 +248,7 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     last_error: null,
   });
 
-  bot.log(`outgoing reply sent to ${sender}`);
+  bot.log(`outgoing reply sent to ${deliverTo}`);
 
   // Minimum inter-send pacing. Keeps us under WhatsApp's per-conversation rate
   // limits and gives presence updates time to flush. No Redis lock — single
