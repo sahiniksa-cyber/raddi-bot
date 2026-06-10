@@ -81,9 +81,18 @@ function buildBlock(replies) {
 }
 
 function retrieveRelevantPolicies(config = {}, customerText = '') {
-  const entries = Object.entries(config.autoReplyKeywords || {})
+  const manualEntries = Object.entries(config.autoReplyKeywords || {})
     .map(([keyword, reply]) => ({ keyword: String(keyword || '').trim(), reply: String(reply || '').trim() }))
     .filter(e => e.keyword && e.reply);
+
+  // Learned replies (phase-1 self-learning): Q→A pairs harvested from the
+  // owner's own manual replies. Deliberately a SEPARATE config key — merging
+  // into autoReplyKeywords would also trigger instant-reply keyword matching.
+  const learnedEntries = (Array.isArray(config.learnedReplies) ? config.learnedReplies : [])
+    .map(e => ({ keyword: String(e?.keyword || '').trim(), reply: String(e?.reply || '').trim() }))
+    .filter(e => e.keyword && e.reply);
+
+  const entries = [...manualEntries, ...learnedEntries];
 
   if (!entries.length) return { block: '', matched: [] };
 

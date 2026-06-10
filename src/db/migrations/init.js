@@ -441,6 +441,25 @@ const statements = [
   `UPDATE billing_accounts
       SET messages_used = GREATEST(0, last_topup_amount - messages_remaining)
     WHERE messages_used = 0 AND last_topup_amount > messages_remaining`,
+
+  // ── Added 2026-06-10: phase-1 self-learning. Q→A pairs harvested from the
+  //    owner's manual replies only (status='sent_by_human'); injected into the
+  //    AI knowledge block. UNIQUE(user_id, normalized_question) is the dedup.
+  `CREATE TABLE IF NOT EXISTS learned_replies (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    normalized_question TEXT NOT NULL,
+    source_conversation_id UUID,
+    source_message_id UUID,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, normalized_question)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS learned_replies_user_status_idx
+    ON learned_replies (user_id, status)`,
 ];
 
 async function migrate() {

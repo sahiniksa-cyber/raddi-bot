@@ -47,6 +47,7 @@ const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('./services/bot/platform-features');
 const { listPausedChats, resumePausedChat } = require('./services/bot/paused-chats');
+const { runLearningPass, listLearnedReplies, setLearnedReplyStatus, updateLearnedReply } = require('./services/learning/owner-reply-learner');
 const {
   buildTrainAnalyzeRequest,
   buildEnhanceInstructionsRequest,
@@ -433,6 +434,21 @@ function createApp() {
     const resumed = await resumePausedChat(db, req.session.userId, sender);
     res.json({ success: true, resumed });
   }));
+  app.get('/api/learned-replies', requireAuth, asyncRoute(async (req, res) => {
+    const learned = await listLearnedReplies({ userId: req.session.userId });
+    res.json({ success: true, learned });
+  }));
+  app.post('/api/learned-replies/toggle', requireAuth, asyncRoute(async (req, res) => {
+    const id = req.body?.id;
+    const status = req.body?.status === 'disabled' ? 'disabled' : 'active';
+    const updated = await setLearnedReplyStatus({ userId: req.session.userId, id, status });
+    res.json({ success: true, updated });
+  }));
+  app.post('/api/learned-replies/update', requireAuth, asyncRoute(async (req, res) => {
+    const { id, question, answer } = req.body || {};
+    const result = await updateLearnedReply({ userId: req.session.userId, id, question, answer });
+    res.json({ success: (result.updated || 0) > 0, ...result });
+  }));
   app.post('/api/test-chat', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
     const { sessionId, reset } = req.body || {};
@@ -816,6 +832,30 @@ function startAiRecoveryLoop() {
   return timer;
 }
 
+// Phase-1 self-learning pass: harvest Q→A pairs from the owner's manual
+// replies every LEARNING_PASS_INTERVAL_MS (default 6h), plus one warm-up run
+// shortly after boot. LEARNED_REPLIES_ENABLED=false disables both the pass
+// and the injection (checked inside the learner module).
+const LEARNING_PASS_INTERVAL_MS = parseInt(process.env.LEARNING_PASS_INTERVAL_MS || '21600000', 10);
+
+function startLearningLoop() {
+  if (LEARNING_PASS_INTERVAL_MS <= 0) return null;
+  const run = () => {
+    runLearningPass().then((result) => {
+      if (result.learned > 0) {
+        console.log(`${new Date().toISOString()} [server] learning pass: learned ${result.learned} replies across ${result.users} users`);
+      }
+    }).catch((err) => {
+      console.error(`${new Date().toISOString()} [server] learning pass failed: ${err.message}`);
+    });
+  };
+  const warmup = setTimeout(run, 2 * 60 * 1000);
+  if (typeof warmup.unref === 'function') warmup.unref();
+  const timer = setInterval(run, LEARNING_PASS_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
+
 async function main() {
   console.log(`${new Date().toISOString()} [server] starting Jwab server...`);
 
@@ -878,6 +918,7 @@ async function main() {
     console.error(`${new Date().toISOString()} [server] post-startup task failed: ${err.stack || err.message}`);
   });
   aiRecoveryTimer = startAiRecoveryLoop();
+  startLearningLoop();
 
   // Start outgoing worker after the dashboard is available.
   if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {
