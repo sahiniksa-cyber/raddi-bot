@@ -123,6 +123,18 @@ test('loadActiveLearnedReplies returns [] when the feature flag is off', async (
   }
 });
 
+// ── server wiring: routes + periodic loop
+
+test('server registers learned-replies routes and starts the learning loop', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  assert.match(serverSource, /\/api\/learned-replies/, 'list route must exist');
+  assert.match(serverSource, /\/api\/learned-replies\/toggle/, 'toggle route must exist');
+  assert.match(serverSource, /startLearningLoop/, 'learning loop must be started');
+  assert.match(serverSource, /LEARNING_PASS_INTERVAL_MS/, 'interval must be env-tunable');
+});
+
 // ── runLearningPass orchestration
 
 test('runLearningPass walks users with recent owner replies and saves filtered pairs', async () => {

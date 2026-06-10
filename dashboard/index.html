@@ -1208,6 +1208,17 @@ body{background-attachment:scroll}
     </div>
   </div>
 
+  <!-- ═══ LEARNED REPLIES (phase-1 self-learning) ═══ -->
+  <div class="panel" id="learnedPanel" style="display:none">
+    <div class="phdr"><span>🧠 ردود تعلّمها البوت منك</span></div>
+    <div class="pbdy">
+      <p class="hint" style="margin:0 0 10px;background:var(--green-bg);border-right:3px solid var(--green);padding:10px 13px;border-radius:8px;color:var(--green2);font-weight:600">
+        لما ترد بنفسك على سؤال البوت ما عرف له، يحفظ جوابك ويستخدمه تلقائياً المرات الجاية. عطّل أي رد ما تبيه.
+      </p>
+      <div id="learnedList" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+  </div>
+
   <!-- ═══ MEMORY & CONVERSATION ═══ -->
   <div class="panel">
     <div class="phdr">🧠 ذاكرة المحادثة — يفهم العميل ويكمل معاه</div>
@@ -2817,6 +2828,38 @@ async function resumeChat(sender){
   loadPausedChats();toast('✅ تم استئناف البوت على +'+sender);
 }
 
+// ── LEARNED REPLIES (phase-1 self-learning) ──
+async function loadLearnedReplies(){
+  try{
+    const d=await fetch('/api/learned-replies').then(r=>r.json());
+    const panel=document.getElementById('learnedPanel');
+    const list=document.getElementById('learnedList');
+    if(!d.learned||d.learned.length===0){panel.style.display='none';return;}
+    panel.style.display='block';
+    list.innerHTML='';
+    d.learned.forEach(p=>{
+      const off=p.status!=='active';
+      const row=document.createElement('div');
+      row.style.cssText='background:'+(off?'var(--card-soft)':'var(--green-bg)')+';border:1px solid '+(off?'var(--border)':'var(--green-border)')+';border-radius:9px;padding:10px 14px;font-size:13px'+(off?';opacity:.55':'');
+      row.innerHTML=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="font-weight:700;color:var(--text)">س: ${esc(p.question)}</div>
+          <div style="color:var(--text-soft);margin-top:4px">ج: ${esc(p.answer)}</div>
+        </div>
+        <button onclick="toggleLearned('${esc(String(p.id))}','${off?'active':'disabled'}')"
+          style="padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:${off?'var(--green2)':'var(--text-soft)'};font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer">
+          ${off?'▶ تفعيل':'⏸ تعطيل'}
+        </button>
+      </div>`;
+      list.appendChild(row);
+    });
+  }catch(_){}
+}
+async function toggleLearned(id,status){
+  await fetch('/api/learned-replies/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status})});
+  loadLearnedReplies();toast(status==='disabled'?'⏸ عُطّل الرد المتعلَّم':'✅ فُعّل الرد المتعلَّم');
+}
+
 // ── AUTH ──
 async function doLogout(){
   await fetch('/api/auth/logout',{method:'POST'}).catch(()=>{});
@@ -2891,7 +2934,7 @@ async function initDashboard(){
   await loadUserInfo();
   const active=await loadBillingState();
   if(active){
-    loadConf();poll();loadQuota();loadPausedChats();loadConversations();checkStorageStatus();
+    loadConf();poll();loadQuota();loadPausedChats();loadLearnedReplies();loadConversations();checkStorageStatus();
   }
 }
 initDashboard();
