@@ -427,6 +427,25 @@ const statements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_user_whatsapp_id_unique
     ON messages(user_id, whatsapp_message_id)
     WHERE whatsapp_message_id IS NOT NULL`,
+
+  // ── Added 2026-06-10: phase-1 self-learning. Q→A pairs harvested from the
+  //    owner's manual replies only (status='sent_by_human'); injected into the
+  //    AI knowledge block. UNIQUE(user_id, normalized_question) is the dedup.
+  `CREATE TABLE IF NOT EXISTS learned_replies (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    normalized_question TEXT NOT NULL,
+    source_conversation_id UUID,
+    source_message_id UUID,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, normalized_question)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS learned_replies_user_status_idx
+    ON learned_replies (user_id, status)`,
 ];
 
 async function migrate() {
