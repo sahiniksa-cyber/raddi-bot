@@ -23,6 +23,7 @@ const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsyn
 const { resolveReplyDelayMs } = require('./reply-delay');
 const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('../services/bot/platform-features');
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
+const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
 const { checkMessageQuota } = require('../services/billing/message-quota');
 const {
   OpenAIMediaAnalyzer,
@@ -508,6 +509,9 @@ async function processAiReply(job) {
     });
 
     const config = await resolveConfigForAI(userId);
+    // Phase-1 self-learning: attach Q→A pairs harvested from the owner's own
+    // manual replies. Fail-open ([]) — learning must never block a reply.
+    config.learnedReplies = await loadActiveLearnedReplies({ userId }).catch(() => []);
     const conversation = await resolveConversation({
       userId,
       conversationId: payload.conversationId,
