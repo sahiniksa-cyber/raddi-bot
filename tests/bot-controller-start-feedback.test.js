@@ -69,3 +69,42 @@ test('start does NOT hang the response even if startBot never resolves', async (
   assert.equal(res.body.success, true);
   assert.equal(res.body.started, true);
 });
+
+test('start uses restartBot when the connection is stuck reconnecting', async () => {
+  let restartCalled = false;
+  let startCalled = false;
+  const controller = createBotController({
+    getUserBot: () => ({
+      startBot: async () => { startCalled = true; return false; },
+      restartBot: async () => { restartCalled = true; return true; },
+      appState: { status: 'reconnecting', error: null },
+    }),
+  });
+  const res = createResponse();
+
+  await controller.start({ session: { userId: 'user-1' } }, res);
+
+  assert.equal(res.body.success, true);
+  await Promise.resolve();
+  assert.equal(restartCalled, true, 'must force-restart during reconnect backoff');
+  assert.equal(startCalled, false, 'plain startBot is a no-op while _running=true');
+});
+
+test('start keeps using startBot for non-reconnecting states', async () => {
+  let restartCalled = false;
+  let startCalled = false;
+  const controller = createBotController({
+    getUserBot: () => ({
+      startBot: async () => { startCalled = true; return true; },
+      restartBot: async () => { restartCalled = true; return true; },
+      appState: { status: 'stopped', error: null },
+    }),
+  });
+  const res = createResponse();
+
+  await controller.start({ session: { userId: 'user-1' } }, res);
+
+  await Promise.resolve();
+  assert.equal(startCalled, true);
+  assert.equal(restartCalled, false);
+});

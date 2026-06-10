@@ -65,8 +65,13 @@ function createBotController({ getUserBot, database = null }) {
       // that can take ~20s, which would hang the button and the page. Kick it
       // off in the background and respond immediately; the dashboard polls
       // /api/status and /api/qr to reflect the real state as it progresses.
+      //
+      // While the manager is mid-reconnect (_running still true for the whole
+      // backoff window) a plain startBot() is silently ignored — route the
+      // button through restartBot() so it force-stops and reconnects now.
+      const stuckReconnecting = bot.appState.status === 'reconnecting';
       Promise.resolve()
-        .then(() => bot.startBot())
+        .then(() => (stuckReconnecting ? bot.restartBot() : bot.startBot()))
         .catch((err) => { try { bot.log?.(`start failed: ${err.message}`); } catch (_) {} });
       res.json({
         success: true,
