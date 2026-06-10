@@ -47,7 +47,7 @@ const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('./services/bot/platform-features');
 const { listPausedChats, resumePausedChat } = require('./services/bot/paused-chats');
-const { runLearningPass, listLearnedReplies, setLearnedReplyStatus } = require('./services/learning/owner-reply-learner');
+const { runLearningPass, listLearnedReplies, setLearnedReplyStatus, updateLearnedReply } = require('./services/learning/owner-reply-learner');
 const {
   buildTrainAnalyzeRequest,
   buildEnhanceInstructionsRequest,
@@ -443,6 +443,11 @@ function createApp() {
     const status = req.body?.status === 'disabled' ? 'disabled' : 'active';
     const updated = await setLearnedReplyStatus({ userId: req.session.userId, id, status });
     res.json({ success: true, updated });
+  }));
+  app.post('/api/learned-replies/update', requireAuth, asyncRoute(async (req, res) => {
+    const { id, question, answer } = req.body || {};
+    const result = await updateLearnedReply({ userId: req.session.userId, id, question, answer });
+    res.json({ success: (result.updated || 0) > 0, ...result });
   }));
   app.post('/api/test-chat', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);

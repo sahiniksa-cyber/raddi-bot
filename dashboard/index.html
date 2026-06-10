@@ -2845,11 +2845,19 @@ async function loadLearnedReplies(){
       txt.style.cssText='flex:1;min-width:200px';
       txt.innerHTML=`<div style="font-weight:700;color:var(--text)">س: ${esc(p.question)}</div>
         <div style="color:var(--text-soft);margin-top:4px">ج: ${esc(p.answer)}</div>`;
+      const btnStyle='padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:var(--card);font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer';
+      const btns=document.createElement('div');
+      btns.style.cssText='display:flex;gap:6px;flex-direction:column';
+      const editBtn=document.createElement('button');
+      editBtn.textContent='✏️ تعديل';
+      editBtn.style.cssText=btnStyle+';color:var(--text)';
+      editBtn.addEventListener('click',()=>editLearned(row,txt,btns,p));
       const btn=document.createElement('button');
       btn.textContent=off?'▶ تفعيل':'⏸ تعطيل';
-      btn.style.cssText='padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:'+(off?'var(--green2)':'var(--text-soft)')+';font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer';
+      btn.style.cssText=btnStyle+';color:'+(off?'var(--green2)':'var(--text-soft)');
       btn.addEventListener('click',()=>toggleLearned(p.id,off?'active':'disabled'));
-      row.appendChild(txt);row.appendChild(btn);
+      btns.appendChild(editBtn);btns.appendChild(btn);
+      row.appendChild(txt);row.appendChild(btns);
       list.appendChild(row);
     });
   }catch(_){}
@@ -2857,6 +2865,30 @@ async function loadLearnedReplies(){
 async function toggleLearned(id,status){
   await fetch('/api/learned-replies/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status})});
   loadLearnedReplies();toast(status==='disabled'?'⏸ عُطّل الرد المتعلَّم':'✅ فُعّل الرد المتعلَّم');
+}
+function editLearned(row,txt,btns,p){
+  const inStyle='width:100%;min-height:44px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-family:var(--font);font-size:13px;background:var(--card);color:var(--text);resize:vertical;box-sizing:border-box';
+  txt.innerHTML='';
+  const qLbl=document.createElement('div');qLbl.textContent='السؤال:';qLbl.style.cssText='font-weight:700;font-size:11px;color:var(--text-soft);margin-bottom:4px';
+  const qIn=document.createElement('textarea');qIn.value=p.question;qIn.style.cssText=inStyle;
+  const aLbl=document.createElement('div');aLbl.textContent='الجواب:';aLbl.style.cssText='font-weight:700;font-size:11px;color:var(--text-soft);margin:8px 0 4px';
+  const aIn=document.createElement('textarea');aIn.value=p.answer;aIn.style.cssText=inStyle;
+  txt.appendChild(qLbl);txt.appendChild(qIn);txt.appendChild(aLbl);txt.appendChild(aIn);
+  btns.innerHTML='';
+  const saveBtn=document.createElement('button');
+  saveBtn.textContent='💾 حفظ';
+  saveBtn.style.cssText='padding:5px 12px;border-radius:7px;border:1px solid var(--green-border);background:var(--green-bg);color:var(--green2);font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer';
+  saveBtn.addEventListener('click',async()=>{
+    const r=await fetch('/api/learned-replies/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:p.id,question:qIn.value,answer:aIn.value})}).then(x=>x.json()).catch(()=>({success:false}));
+    if(r.success)toast('✅ تم تعديل الرد المتعلَّم');
+    else toast(r.reason==='duplicate_question'?'⚠️ يوجد رد محفوظ بنفس السؤال':'⚠️ تعذر الحفظ — تأكد أن السؤال والجواب غير فارغين',true);
+    loadLearnedReplies();
+  });
+  const cancelBtn=document.createElement('button');
+  cancelBtn.textContent='✖ إلغاء';
+  cancelBtn.style.cssText='padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text-soft);font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer';
+  cancelBtn.addEventListener('click',()=>loadLearnedReplies());
+  btns.appendChild(saveBtn);btns.appendChild(cancelBtn);
 }
 
 // ── AUTH ──

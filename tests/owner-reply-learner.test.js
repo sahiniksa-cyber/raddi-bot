@@ -9,6 +9,7 @@ const {
   extractLearnablePairs,
   saveLearnedReplies,
   loadActiveLearnedReplies,
+  updateLearnedReply,
   runLearningPass,
 } = require('../src/services/learning/owner-reply-learner');
 
@@ -123,6 +124,45 @@ test('loadActiveLearnedReplies returns [] when the feature flag is off', async (
   }
 });
 
+// ── updateLearnedReply: owner edits saved Q→A from the dashboard
+
+test('updateLearnedReply updates text and recomputes the dedup key, scoped to the user', async () => {
+  const calls = [];
+  const database = {
+    isConfigured: () => true,
+    query: async (sql, params) => { calls.push({ sql, params }); return { rows: [], rowCount: 1 }; },
+  };
+  const result = await updateLearnedReply({
+    database, userId: 'u1', id: '7',
+    question: 'كم يستغرق الشحن؟', answer: 'يومين عمل لكل المدن',
+  });
+  assert.equal(result.updated, 1);
+  assert.match(calls[0].sql, /UPDATE learned_replies/);
+  assert.match(calls[0].sql, /normalized_question/);
+  assert.match(calls[0].sql, /WHERE user_id = \$1 AND id = \$2/);
+  assert.equal(calls[0].params[4], normalizeQuestion('كم يستغرق الشحن؟'));
+});
+
+test('updateLearnedReply rejects empty input without touching the DB', async () => {
+  const calls = [];
+  const database = { isConfigured: () => true, query: async (sql) => { calls.push(sql); return { rows: [], rowCount: 1 }; } };
+  const r1 = await updateLearnedReply({ database, userId: 'u1', id: '7', question: '  ', answer: 'جواب' });
+  const r2 = await updateLearnedReply({ database, userId: 'u1', id: '7', question: 'سؤال', answer: '' });
+  assert.equal(r1.updated, 0);
+  assert.equal(r2.updated, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('updateLearnedReply reports a duplicate question instead of throwing', async () => {
+  const database = {
+    isConfigured: () => true,
+    query: async () => { throw new Error('duplicate key value violates unique constraint "learned_replies_user_id_normalized_question_key"'); },
+  };
+  const result = await updateLearnedReply({ database, userId: 'u1', id: '7', question: 'سؤال مكرر هنا', answer: 'جواب ما' });
+  assert.equal(result.updated, 0);
+  assert.equal(result.reason, 'duplicate_question');
+});
+
 // ── server wiring: routes + periodic loop
 
 test('server registers learned-replies routes and starts the learning loop', () => {
@@ -131,6 +171,7 @@ test('server registers learned-replies routes and starts the learning loop', () 
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
   assert.match(serverSource, /\/api\/learned-replies/, 'list route must exist');
   assert.match(serverSource, /\/api\/learned-replies\/toggle/, 'toggle route must exist');
+  assert.match(serverSource, /\/api\/learned-replies\/update/, 'update route must exist');
   assert.match(serverSource, /startLearningLoop/, 'learning loop must be started');
   assert.match(serverSource, /LEARNING_PASS_INTERVAL_MS/, 'interval must be env-tunable');
 });

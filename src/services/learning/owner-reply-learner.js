@@ -152,6 +152,30 @@ async function listLearnedReplies({ database = db, userId } = {}) {
   return result.rows || [];
 }
 
+// Owner edits a saved Q→A from the dashboard — e.g. to strip something
+// customer-specific from the original manual reply before it gets reused.
+// Recomputes the dedup key; a collision with another saved question is
+// reported, not thrown, so the UI can explain it.
+async function updateLearnedReply({ database = db, userId, id, question, answer } = {}) {
+  const q = String(question || '').trim().slice(0, MAX_TEXT_LEN);
+  const a = String(answer || '').trim().slice(0, MAX_TEXT_LEN);
+  if (!userId || !id || !q || !a || !database?.isConfigured?.()) return { updated: 0, reason: 'invalid' };
+  try {
+    const result = await database.query(
+      `UPDATE learned_replies
+          SET question = $3, answer = $4, normalized_question = $5
+        WHERE user_id = $1 AND id = $2`,
+      [userId, id, q, a, normalizeQuestion(q)],
+    );
+    return { updated: result.rowCount || 0 };
+  } catch (err) {
+    if (/duplicate key|unique constraint/i.test(err.message)) {
+      return { updated: 0, reason: 'duplicate_question' };
+    }
+    throw err;
+  }
+}
+
 async function setLearnedReplyStatus({ database = db, userId, id, status } = {}) {
   if (!userId || !id || !['active', 'disabled'].includes(status) || !database?.isConfigured?.()) return 0;
   const result = await database.query(
@@ -195,5 +219,6 @@ module.exports = {
   loadActiveLearnedReplies,
   listLearnedReplies,
   setLearnedReplyStatus,
+  updateLearnedReply,
   runLearningPass,
 };
