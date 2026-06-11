@@ -92,23 +92,28 @@ function retrieveRelevantPolicies(config = {}, customerText = '') {
     .map(e => ({ keyword: String(e?.keyword || '').trim(), reply: String(e?.reply || '').trim() }))
     .filter(e => e.keyword && e.reply);
 
-  const entries = [...manualEntries, ...learnedEntries];
+  if (!manualEntries.length && !learnedEntries.length) return { block: '', matched: [] };
 
-  if (!entries.length) return { block: '', matched: [] };
+  const scoreOf = e => ({ ...e, score: scorePolicy(customerText, e.keyword, e.reply) });
+  const scoredManual = manualEntries.map(scoreOf).sort((a, b) => b.score - a.score);
+  const scoredLearned = learnedEntries.map(scoreOf).sort((a, b) => b.score - a.score);
 
-  const scored = entries
-    .map(e => ({ ...e, score: scorePolicy(customerText, e.keyword, e.reply) }))
+  // Learned entries inject ONLY on a real match. The zero-score fallbacks
+  // (small-set inject-all / medium-set top-N) apply to the merchant's MANUAL
+  // policies only — a learned mid-conversation pair injected without a match
+  // made the bot send a stale verification code to the wrong customer
+  // (production 2026-06-11).
+  const matched = [...scoredManual, ...scoredLearned]
+    .filter(e => e.score >= SCORE_THRESHOLD)
     .sort((a, b) => b.score - a.score);
-
-  const matched = scored.filter(e => e.score >= SCORE_THRESHOLD);
 
   let selected;
   if (matched.length) {
     selected = matched.slice(0, MAX_INJECTED);
-  } else if (entries.length <= SMALL_SET) {
-    selected = entries;                 // مجموعة صغيرة: احقن الكل (آمن ورخيص)
-  } else if (entries.length <= LARGE_SET) {
-    selected = scored.slice(0, MAX_INJECTED); // متوسطة: أعلى درجات
+  } else if (scoredManual.length && scoredManual.length <= SMALL_SET) {
+    selected = scoredManual;            // مجموعة صغيرة: احقن الكل (آمن ورخيص)
+  } else if (scoredManual.length && scoredManual.length <= LARGE_SET) {
+    selected = scoredManual.slice(0, MAX_INJECTED); // متوسطة: أعلى درجات
   } else {
     selected = [];                      // كبيرة جداً بلا مطابقة: لا تحقن (تشويش/تكلفة)
   }
