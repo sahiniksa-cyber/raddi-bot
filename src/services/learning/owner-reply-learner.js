@@ -33,15 +33,34 @@ function learningEnabled() {
   return process.env.LEARNED_REPLIES_ENABLED !== 'false';
 }
 
-const GREETING_ONLY_RE = /^(و?عليكم السلام|السلام عليكم|هلا|اهلا|أهلا|حياك|مرحبا)[\sو،.!ورحمة الله بركاته]*$/;
 const MEDIA_PLACEHOLDER_RE = /^\[(صورة|ملف|صوت|فيديو|ملصق)/;
+
+// Tokens (in normalizeArabic form) that carry zero store knowledge: greetings,
+// pleasantries, courtesy fillers. A text made ONLY of these is small talk —
+// learning it would make the bot parrot the owner's personal tone ("طمني عنك")
+// at random customers. Real content mixed with a greeting still passes because
+// the non-courtesy tokens remain.
+const COURTESY_TOKENS = new Set([
+  'السلام', 'سلام', 'عليكم', 'وعليكم', 'ورحمه', 'الله', 'وبركاته', 'بركاته',
+  'هلا', 'اهلا', 'اهلين', 'مرحبا', 'مراحب', 'حياك', 'حياكم', 'حياك', 'يا', 'والله',
+  'صباح', 'مساء', 'الخير', 'النور', 'الورد',
+  'كيف', 'كيفك', 'كيفكم', 'حالك', 'الحال', 'الاحوال', 'شخبارك', 'اخبارك', 'شلونك', 'عساك', 'طيب', 'طيبين',
+  'بخير', 'تمام', 'الحمدلله', 'الحمد', 'لله', 'طمني', 'عنك', 'عنكم', 'انت', 'انا',
+  'شكرا', 'يعطيك', 'العافيه', 'الغالي', 'الغاليه', 'اخوي', 'اختي', 'عزيزي', 'عزيزتي',
+]);
+
+function isSmallTalkOnly(text) {
+  const tokens = normalizeArabic(text).split(' ').filter(Boolean);
+  if (!tokens.length) return true;
+  return tokens.every((t) => COURTESY_TOKENS.has(t));
+}
 
 function isLearnablePair(question, answer) {
   const q = String(question || '').trim();
   const a = String(answer || '').trim();
   if (q.length < MIN_QUESTION_LEN || a.length < MIN_ANSWER_LEN) return false;
   if (MEDIA_PLACEHOLDER_RE.test(q) || MEDIA_PLACEHOLDER_RE.test(a)) return false;
-  if (GREETING_ONLY_RE.test(a)) return false;
+  if (isSmallTalkOnly(q) || isSmallTalkOnly(a)) return false;
   if (a.includes('[تحويل:')) return false;
   return true;
 }
@@ -213,6 +232,7 @@ async function runLearningPass({ database = db, lookbackMs = LOOKBACK_MS } = {})
 
 module.exports = {
   isLearnablePair,
+  isSmallTalkOnly,
   normalizeQuestion,
   extractLearnablePairs,
   saveLearnedReplies,
