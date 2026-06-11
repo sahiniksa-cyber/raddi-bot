@@ -56,7 +56,11 @@ test('sendUnlinkAlert sends via admin bot to owner phone and merchant phone, plu
     assert.ok(result.channels.includes('email'), 'email channel');
     assert.equal(bot.sent.length, 2, 'two WhatsApp messages (owner + merchant)');
     assert.match(bot.sent[0].text, /jwap\.net/);
-    assert.ok(mailer.mails.length >= 1);
+    // The MERCHANT's own contact data (the same data shown in the admin page)
+    // must be targeted — not just the platform owner's.
+    assert.ok(bot.sent.some(s => s.jid === '966512345678@s.whatsapp.net'), 'merchant WhatsApp number must receive the alert');
+    assert.ok(mailer.mails.some(m => m.to === 'merchant@example.com'), 'merchant email must receive the alert');
+    assert.ok(mailer.mails.some(m => m.to === 'alerts@example.com'), 'owner email copy');
   } finally {
     if (prevPhone === undefined) delete process.env.OWNER_ALERT_PHONE; else process.env.OWNER_ALERT_PHONE = prevPhone;
     if (prevEmail === undefined) delete process.env.OWNER_ALERT_EMAIL; else process.env.OWNER_ALERT_EMAIL = prevEmail;
