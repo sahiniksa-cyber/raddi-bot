@@ -460,6 +460,23 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS learned_replies_user_status_idx
     ON learned_replies (user_id, status)`,
+
+  // ── Added 2026-06-11: two-way escalation bridge. Every bot→team message
+  //    (escalation or customer-forward) is recorded by its WhatsApp message id
+  //    so a team member's quote-reply can be routed back to the right customer.
+  `CREATE TABLE IF NOT EXISTS escalation_threads (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    whatsapp_message_id TEXT NOT NULL,
+    target_jid TEXT NOT NULL,
+    customer_sender TEXT NOT NULL,
+    conversation_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, whatsapp_message_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS escalation_threads_customer_idx
+    ON escalation_threads (user_id, customer_sender, created_at DESC)`,
 ];
 
 async function migrate() {
