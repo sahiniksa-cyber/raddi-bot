@@ -80,13 +80,22 @@ function collectInstantReplies(config = {}, text = '') {
   const matched = [];
   if (!lower) return { matched, hasExtraQuestion: false };
   let remainder = lower;
-  for (const [keyword, reply] of Object.entries(config.autoReplyKeywords || {})) {
-    const k = String(keyword || '').trim().toLowerCase();
-    const r = String(reply || '').trim();
-    if (!k || !r) continue;
-    if (!lower.includes(k)) continue;
-    matched.push({ keyword: k, reply: r });
+  // Longest keyword first, matched against the CONSUMED remainder, so an
+  // overlapping shorter keyword ("سلام") can never fire on the same text a
+  // longer one ("السلام عليكم") already answered — that overlap produced a
+  // duplicated greeting inside one reply in production (2026-06-11). Two
+  // different keywords carrying the SAME canned text also collapse to once.
+  const entries = Object.entries(config.autoReplyKeywords || {})
+    .map(([keyword, reply]) => ({ k: String(keyword || '').trim().toLowerCase(), r: String(reply || '').trim() }))
+    .filter(e => e.k && e.r)
+    .sort((a, b) => b.k.length - a.k.length);
+  const seenReplies = new Set();
+  for (const { k, r } of entries) {
+    if (!remainder.includes(k)) continue;
     remainder = remainder.split(k).join(' ');
+    if (seenReplies.has(r)) continue;
+    seenReplies.add(r);
+    matched.push({ keyword: k, reply: r });
   }
   remainder = remainder.replace(/\s+/g, ' ').trim();
   const meaningful = remainder
