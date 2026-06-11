@@ -437,6 +437,19 @@ async function markInboundMessageFailed({ database = db, messageId, error }) {
  * answered-marking invariant (FIX 2) is unit-testable without Redis/Postgres.
  * Deps are injectable; defaults bind to the module's real implementations.
  */
+// Which of the batched inbound messages does the canned prefix actually
+// answer? Only those may be marked answered when we fall back to canned-only
+// (AI failure) — marking the OTHERS buried real customer questions with no
+// reply, no escalation and no retry (production 2026-06-11, conv d8618a0a).
+function messagesCoveredByTriggers(messages = [], matched = []) {
+  if (!matched.length) return [];
+  const keywords = matched.map(m => String(m.keyword || '').toLowerCase()).filter(Boolean);
+  return messages.filter((message) => {
+    const content = String(message?.content || '').toLowerCase();
+    return content && keywords.some(k => content.includes(k));
+  });
+}
+
 async function sendInstantAutoReply({
   job,
   payload = {},
@@ -650,8 +663,16 @@ async function processAiReply(job) {
       reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix }) || '').trim();
     } catch (aiErr) {
       if (combinePrefix) {
+        // Send the canned part now, but ONLY mark the trigger messages as
+        // answered — the customer's real questions stay queued_for_ai so the
+        // follow-up/recovery retries them (and the retry won't re-match the
+        // greeting because its message is already answered).
         logger.warn('ai-worker', `AI failed but sending canned prefix as fallback: ${aiErr.message}`);
-        return await sendInstantAutoReply({ job, payload, conversation, userId, instantReply: combinePrefix, enrichedMessages });
+        return await sendInstantAutoReply({
+          job, payload, conversation, userId,
+          instantReply: combinePrefix,
+          enrichedMessages: messagesCoveredByTriggers(enrichedMessages, instantMatched),
+        });
       }
       throw aiErr;
     }
@@ -1004,6 +1025,7 @@ module.exports = {
   loadPendingInboundMessages,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
+  messagesCoveredByTriggers,
   markInboundMessagesQuotaExceeded,
   storeAssistantMessage,
   processAiReply,
