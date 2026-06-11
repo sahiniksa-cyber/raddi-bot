@@ -49,6 +49,8 @@ test('isLearnablePair rejects short/greeting/media/escalation content', () => {
   assert.equal(isLearnablePair('هلا', 'الشحن يومين عمل للرياض'), false, 'short question');
   assert.equal(isLearnablePair('كم يستغرق الشحن للرياض؟', 'تم'), false, 'short answer');
   assert.equal(isLearnablePair('[صورة من العميل]', 'الشحن يومين عمل للرياض'), false, 'media placeholder question');
+  assert.equal(isLearnablePair('متى يوصل الطلب للرياض؟', '[رسالة صوتية من العميل]'), false, 'voice-note placeholder answer');
+  assert.equal(isLearnablePair('[رسالة صوتية من العميل]', 'يوصل خلال يومين عمل'), false, 'voice-note placeholder question');
   assert.equal(isLearnablePair('كم يستغرق الشحن للرياض؟', 'وعليكم السلام ورحمة الله'), false, 'greeting-only answer');
   assert.equal(isLearnablePair('كم يستغرق الشحن؟', 'ثواني أحولك [تحويل:أحمد|مشكلة شحن]'), false, 'escalation marker in answer');
 });
