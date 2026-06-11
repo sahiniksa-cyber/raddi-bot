@@ -33,7 +33,11 @@ function learningEnabled() {
   return process.env.LEARNED_REPLIES_ENABLED !== 'false';
 }
 
-const MEDIA_PLACEHOLDER_RE = /^\[(صورة|ملف|صوت|فيديو|ملصق)/;
+// Any leading bracket means an ingest-generated placeholder ("[صورة من
+// العميل]", "[رسالة صوتية من العميل]", ...) — never real owner knowledge.
+// Matching the whole family by prefix beats enumerating label variants
+// (a "[رسالة صوتية" answer slipped past the old enumerated list in prod).
+const MEDIA_PLACEHOLDER_RE = /^\[/;
 
 // Tokens (in normalizeArabic form) that carry zero store knowledge: greetings,
 // pleasantries, courtesy fillers. A text made ONLY of these is small talk —
