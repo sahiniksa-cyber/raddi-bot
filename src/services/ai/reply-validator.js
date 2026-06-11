@@ -2,6 +2,19 @@
 
 const { tokenize } = require('./knowledge-retrieval');
 
+// الحد الفعّال للطول: سؤال واحد = الحد كما هو، أسئلة متعددة (علامات استفهام
+// أو دفعة رسائل مجمّعة) = الحد × عدد الإشارات بسقف 3×. السبب (إنتاج
+// 2026-06-11): حد 100 حرف كان يقصّ الجواب بعد التحية ويترك أسئلة العميل
+// الحقيقية بلا رد، ورسالة فيها 3 أسئلة كانت تاخذ جواب سؤال واحد.
+function scaledMaxLength(maxLen, customerText = '') {
+  const base = Math.max(40, parseInt(maxLen, 10) || 300);
+  const text = String(customerText || '');
+  const marks = (text.match(/[؟?]/g) || []).length;
+  const batched = text.includes('رسائل العميل المتتالية') ? 1 : 0;
+  const signals = Math.min(3, Math.max(marks, 1) + batched);
+  return base * signals;
+}
+
 // قصّ الرد على حدّ الطول، مفضّلاً نهاية جملة كاملة قبل الحدّ.
 function enforceLength(reply, maxLen) {
   const text = String(reply || '').trim();
@@ -122,7 +135,7 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
   const tagMatch = tagged.match(/\s*\[تحويل:[^\]]*\]\s*$/);
   const tag = tagMatch ? tagMatch[0].trim() : '';
   const body = tagMatch ? tagged.slice(0, tagMatch.index).trim() : tagged;
-  const trimmedBody = enforceLength(body, maxLen);   // القصّ على المتن فقط
+  const trimmedBody = enforceLength(body, scaledMaxLength(maxLen, customerText));   // القصّ على المتن فقط
   current = tag ? `${trimmedBody} ${tag}` : trimmedBody;
   return current;
 }
@@ -146,7 +159,7 @@ function enforceStyleRules(reply, config = {}) {
 }
 
 module.exports = {
-  enforceLength, detectEscalationIntent, enforceEscalationTag,
+  enforceLength, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
   enforceStyleRules, botSignalsTransfer,
 };

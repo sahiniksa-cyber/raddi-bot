@@ -59,12 +59,34 @@ function isSmallTalkOnly(text) {
   return tokens.every((t) => COURTESY_TOKENS.has(t));
 }
 
+// A learnable "question" must actually ASK something: a question mark or a
+// question/request token. Mid-conversation statements ("اوه فهمت عليك",
+// "الله يعطيك العافيه تم") harvested as questions poisoned the knowledge in
+// production (2026-06-11) — including an owner reply carrying a verification
+// code that the bot then re-sent to the wrong customer.
+const QUESTION_TOKENS = new Set([
+  'كم', 'بكم', 'وش', 'ايش', 'متي', 'كيف', 'هل', 'وين', 'اين', 'ليش', 'لماذا',
+  'ابي', 'ابغي', 'ابغا', 'احتاج', 'ممكن', 'عندكم', 'عندك', 'متوفر', 'تبيعون',
+  'طريقه', 'شلون', 'يوجد', 'فيه',
+]);
+
+function looksLikeQuestion(text) {
+  if (/[؟?]/.test(String(text || ''))) return true;
+  const tokens = normalizeArabic(text).split(' ').filter(Boolean);
+  return tokens.some((t) => QUESTION_TOKENS.has(t));
+}
+
+// One-time codes / OTPs must never become reusable knowledge.
+const CODE_ANSWER_RE = /(كود|رمز|تحقق|otp|code)[^\n]{0,25}\d{3,}/i;
+
 function isLearnablePair(question, answer) {
   const q = String(question || '').trim();
   const a = String(answer || '').trim();
   if (q.length < MIN_QUESTION_LEN || a.length < MIN_ANSWER_LEN) return false;
   if (MEDIA_PLACEHOLDER_RE.test(q) || MEDIA_PLACEHOLDER_RE.test(a)) return false;
   if (isSmallTalkOnly(q) || isSmallTalkOnly(a)) return false;
+  if (!looksLikeQuestion(q)) return false;
+  if (CODE_ANSWER_RE.test(a)) return false;
   if (a.includes('[تحويل:')) return false;
   return true;
 }
