@@ -84,7 +84,10 @@ async function sendUnlinkAlert({ userId, phone } = {}) {
   const text = buildUnlinkMessage({ phone });
   const merchant = await lookupMerchantContact(userId);
   const ownerPhone = String(process.env.OWNER_ALERT_PHONE || '').replace(/[^\d]/g, '');
-  const merchantPhone = String(merchant.phone || '').replace(/[^\d]/g, '');
+  // users.phone first; fall back to the unlinked session's own number — the
+  // merchant's personal WhatsApp account still receives messages (only the
+  // BOT link died), so alerting that same number is reliable.
+  const merchantPhone = String(merchant.phone || phone || '').replace(/[^\d]/g, '');
 
   const channels = [];
   if (await sendViaOwnerBot(ownerPhone, text)) channels.push('whatsapp_owner');

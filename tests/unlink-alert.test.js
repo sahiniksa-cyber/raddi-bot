@@ -63,6 +63,23 @@ test('sendUnlinkAlert sends via admin bot to owner phone and merchant phone, plu
   }
 });
 
+test('merchant phone falls back to the unlinked session number when users.phone is empty', async () => {
+  // The unlink kills the BOT link only — the merchant's own WhatsApp account
+  // on their phone still receives messages, so alerting that same number works.
+  __lastSent.clear();
+  const bot = fakeOwnerBot();
+  const prev = process.env.OWNER_ALERT_PHONE;
+  process.env.OWNER_ALERT_PHONE = '966500000001';
+  try {
+    configureUnlinkAlerts({ getOwnerBot: async () => bot, mailer: null, database: fakeDb(null, null) });
+    const result = await sendUnlinkAlert({ userId: 'u1', phone: '966593216744' });
+    assert.ok(result.channels.includes('whatsapp_merchant'), `expected merchant channel via session phone, got ${result.channels}`);
+    assert.ok(bot.sent.some(s => s.jid === '966593216744@s.whatsapp.net'));
+  } finally {
+    if (prev === undefined) delete process.env.OWNER_ALERT_PHONE; else process.env.OWNER_ALERT_PHONE = prev;
+  }
+});
+
 test('cooldown: a second alert for the same user within the window is suppressed', async () => {
   __lastSent.clear();
   const bot = fakeOwnerBot();
@@ -70,11 +87,12 @@ test('cooldown: a second alert for the same user within the window is suppressed
   process.env.OWNER_ALERT_PHONE = '966500000001';
   try {
     configureUnlinkAlerts({ getOwnerBot: async () => bot, mailer: null, database: fakeDb() });
-    await sendUnlinkAlert({ userId: 'u1', phone: '9665' });
-    const second = await sendUnlinkAlert({ userId: 'u1', phone: '9665' });
+    await sendUnlinkAlert({ userId: 'u1', phone: '' });
+    const sentAfterFirst = bot.sent.length;
+    const second = await sendUnlinkAlert({ userId: 'u1', phone: '' });
     assert.deepEqual(second.channels, []);
     assert.equal(second.skipped, 'cooldown');
-    assert.equal(bot.sent.length, 1, 'only the first alert goes out');
+    assert.equal(bot.sent.length, sentAfterFirst, 'second call must send nothing new');
   } finally {
     if (prev === undefined) delete process.env.OWNER_ALERT_PHONE; else process.env.OWNER_ALERT_PHONE = prev;
   }
