@@ -19,6 +19,18 @@ require.cache[require.resolve(dbModulePath)] = {
   },
 };
 
+// Quota is available — this suite tests @lid send mechanics, not metering.
+const quotaModulePath = path.resolve(__dirname, '..', 'src', 'services', 'billing', 'message-quota');
+require.cache[require.resolve(quotaModulePath)] = {
+  id: quotaModulePath,
+  filename: quotaModulePath + '.js',
+  loaded: true,
+  exports: {
+    checkMessageQuota: async () => ({ canReply: true, remaining: 100 }),
+    decrementMessageQuota: async () => ({ success: true, remaining: 99 }),
+  },
+};
+
 const {
   processOutgoingWhatsapp,
 } = require('../src/workers/outgoing-whatsapp-worker');

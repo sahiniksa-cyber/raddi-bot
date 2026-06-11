@@ -19,6 +19,18 @@ require.cache[require.resolve(dbModulePath)] = {
   },
 };
 
+// Quota available — this suite tests @lid owner-alert mechanics, not metering.
+const quotaModulePath = path.resolve(__dirname, '..', 'src', 'services', 'billing', 'message-quota');
+require.cache[require.resolve(quotaModulePath)] = {
+  id: quotaModulePath,
+  filename: quotaModulePath + '.js',
+  loaded: true,
+  exports: {
+    checkMessageQuota: async () => ({ canReply: true, remaining: 100 }),
+    decrementMessageQuota: async () => ({ success: true, remaining: 99 }),
+  },
+};
+
 const {
   processOutgoingWhatsapp,
   notifyOwnerOfLidFailure,

@@ -27,6 +27,7 @@ require.cache[require.resolve(quotaModulePath)] = {
   filename: quotaModulePath + '.js',
   loaded: true,
   exports: {
+    checkMessageQuota: async () => ({ canReply: true, remaining: 100 }),
     decrementMessageQuota: async () => {
       decrementCalls++;
       return { success: true, remaining: 100 };

@@ -6,7 +6,7 @@ const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, getQueues } = require('../queues/message-queue');
 const { normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
-const { decrementMessageQuota } = require('../services/billing/message-quota');
+const { checkMessageQuota, decrementMessageQuota } = require('../services/billing/message-quota');
 const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
 const { recordThreadMessage } = require('../services/escalation/escalation-bridge');
 const { TIMERS } = require('../../lib/constants');
@@ -175,6 +175,11 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     return { skipped: true, reason: 'owner_paused' };
   }
 
+  if (shouldBlockOutgoingForQuota(payload, await checkMessageQuota(userId))) {
+    await cancelOutgoingForQuota(job, { replyMessageId });
+    return { skipped: true, reason: 'quota_empty' };
+  }
+
   await updateJobStatus(job.id, {
     status: 'processing',
     started_at: new Date(),
@@ -295,6 +300,10 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     if (shouldCancelOutgoingForStoppedBot(loadedBot, payload)) {
       throw new Error('bot_stopped_by_owner');
     }
+    if (shouldBlockOutgoingForQuota(payload, await checkMessageQuota(userId))) {
+      await cancelOutgoingForQuota(job, { replyMessageId });
+      return { skipped: true, reason: 'quota_empty', lid: true };
+    }
     const bot = await waitForConnectedBot(loadedBot, {
       reason: `outgoing-lid:${job.id}`,
       timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
@@ -365,6 +374,32 @@ async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
 
 function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
   return bot?.sessionDesiredState === 'stopped' && !payload.escalation;
+}
+
+// Hard quota stop at the universal send chokepoint. A customer-facing reply is
+// blocked the instant remaining hits 0 — from ANY path (normal AI, instant,
+// escalation-bridge relay) and even when two jobs raced past the AI worker's
+// earlier check on the last credit. Team-facing escalation (alerts to the
+// group + customer-reply forwards, payload.escalation=true) is exempt so the
+// merchant still learns a customer needs help while their balance is empty.
+function shouldBlockOutgoingForQuota(payload = {}, quota = {}) {
+  if (payload.escalation) return false;
+  return quota.canReply === false;
+}
+
+async function cancelOutgoingForQuota(job, { replyMessageId }) {
+  const message = 'outgoing reply canceled — message quota empty';
+  await markReplyMessage(replyMessageId, 'quota_exceeded', {
+    sentBy: WORKER_NAME,
+    canceledAt: new Date().toISOString(),
+    error: message,
+  });
+  await updateJobStatus(job.id, {
+    status: 'canceled',
+    finished_at: new Date(),
+    attempts: job.attemptsMade,
+    last_error: message,
+  });
 }
 
 // The owner replying manually sets conversations.escalated_until (ingest for
@@ -612,6 +647,7 @@ module.exports = {
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,
   sendWhatsappReply,
+  shouldBlockOutgoingForQuota,
   shouldCancelOutgoingForStoppedBot,
   shouldSkipStaleOutgoingPayload,
   updatePersistedJobKey,
