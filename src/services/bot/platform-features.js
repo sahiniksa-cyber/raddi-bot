@@ -117,7 +117,7 @@ function collectInstantReplies(config = {}, text = '') {
 // Opening greeting/salutation in an AI reply. Used to avoid duplicating the
 // greeting when a canned greeting instant-reply is already prepended in combine
 // mode (the AI tends to also greet, producing "وعليكم السلام ... وعليكم السلام").
-const GREETING_OPENER = /^[\s،,!.⁩⁦]*(?:(?:و\s*)?عليكم\s*السلام|(?:ال)?سلام\s*عليكم(?:\s*ورحمة\s*الله(?:\s*وبركاته)?)?|أهلين|اهلين|أهلاً|اهلا|مرحبتين|مرحبا|مرحباً|هلا\s*والله|هلا\s*بك|هلا|حيّاك\s*الله|حياك\s*الله|حياك|يا\s*هلا|صباح\s*الخير|مساء\s*الخير)[\s،,!.؟…]*/i;
+const GREETING_OPENER = /^[\s،,!.⁩⁦]*(?:(?:و\s*)?عليكم\s*السلام|(?:ال)?سلام\s*عليكم(?:\s*ورحمة\s*الله(?:\s*وبركاته)?)?|أهلين|اهلين|أهلاً|اهلا|مرحبتين|(?:و\s*)?مرحبا|مرحباً|هلا\s*والله|هلا\s*بك|هلا|حيّاك\s*الله|حياك\s*الله|حياك|(?:يا|يـ)\s*هلا|صباح\s*الخير|مساء\s*الخير)[\s،,!.؟…]*/i;
 
 // Combine a verbatim canned instant-reply (e.g. a greeting) with the AI's
 // answer WITHOUT duplicating the greeting: strip any leading greeting from the
