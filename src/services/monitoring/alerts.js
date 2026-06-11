@@ -5,7 +5,15 @@ const { normalizeOutboundJid } = require('../whatsapp/baileys-connection-manager
 function formatIncidentMessage(kind, incident) {
   const title = kind === 'resolved' ? '✅ تعافت الخدمة' : '🚨 تنبيه: عطل في منصة جواب';
   const when = new Date().toLocaleString('ar-SA', { timeZone: process.env.MONITOR_TZ || 'Asia/Riyadh' });
-  return `${title}\n\nالمكوّن: ${incident.component}\nالحالة: ${incident.detail || '—'}\nالخطورة: ${incident.severity === 'warning' ? 'تحذير' : 'حرجة'}\nالوقت: ${when}`;
+  let text = `${title}\n\nالمكوّن: ${incident.component}\nالحالة: ${incident.detail || '—'}\nالخطورة: ${incident.severity === 'warning' ? 'تحذير' : 'حرجة'}\nالوقت: ${when}`;
+  // WhatsApp-session incidents are actionable: the fix is always "open the
+  // dashboard and re-link" — put the link in the alert itself.
+  const isWhatsapp = String(incident.key || '').startsWith('whatsapp:') || String(incident.component || '').startsWith('واتساب');
+  if (kind !== 'resolved' && isWhatsapp) {
+    const dashboardUrl = (process.env.DASHBOARD_URL || 'https://jwap.net').trim();
+    text += `\n\nلإعادة الربط افتح الرابط وامسح الباركود: ${dashboardUrl}`;
+  }
+  return text;
 }
 
 function ownerJid(phone) {

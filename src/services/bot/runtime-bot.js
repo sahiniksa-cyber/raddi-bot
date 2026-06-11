@@ -14,6 +14,7 @@ const { getAllAdminApiKeys } = require('../admin/admin-api-keys');
 const { getCustomerApiKeysFor } = require('../admin/customer-api-keys');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
+const { sendUnlinkAlert } = require('../monitoring/unlink-alert');
 const { resolveWhatsappEngine } = require('./engine-config');
 const {
   buildPersistSessionStateQuery,
@@ -162,6 +163,11 @@ class RuntimeBot {
       } catch (err) {
         this.logger.warn('auth', `failed to remove persisted WhatsApp backup: ${err.message}`);
       }
+    });
+    this.connection.on('logged_out', () => {
+      // Device was unlinked — fire the instant owner alert (best-effort,
+      // never blocks the disconnect handling).
+      sendUnlinkAlert({ userId: this.userId, phone: this.connection.phone }).catch(() => {});
     });
     this.connection.on('connection_conflict', () => {
       if (this.sessionDesiredState !== 'running') return;

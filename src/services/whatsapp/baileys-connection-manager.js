@@ -512,6 +512,10 @@ class BaileysConnectionManager extends EventEmitter {
         try { sock?.ev?.removeAllListeners?.(); } catch (_) {}
         try { sock?.end?.(new Error('logged_out')); } catch (_) {}
         try { sock?.ws?.close?.(); } catch (_) {}
+        // A loggedOut is the ONE disconnect that never self-heals (the device
+        // was unlinked) — emit a dedicated event so the owner gets an instant
+        // "re-link now" alert instead of waiting for the health monitor.
+        this.emit('logged_out', technicalMessage);
         this.emit('disconnected', technicalMessage);
         return;
       }
