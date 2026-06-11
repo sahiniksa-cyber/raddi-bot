@@ -58,6 +58,7 @@ const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
 const { getQueues } = require('./queues/message-queue');
 const { HealthMonitor, setActiveMonitor } = require('./services/monitoring/health-monitor');
 const { createAlertDispatcher } = require('./services/monitoring/alerts');
+const { configureUnlinkAlerts } = require('./services/monitoring/unlink-alert');
 const { createMailer } = require('./services/notify/mailer');
 const storeScanner = require('../lib/store-scanner');
 
@@ -938,6 +939,8 @@ async function main() {
         getOwnerBot: resolveOwnerBot,
         mailer: createMailer(),
       });
+      // Instant unlink (loggedOut) alerts share the same channels.
+      configureUnlinkAlerts({ getOwnerBot: resolveOwnerBot, mailer: createMailer() });
       healthMonitor = new HealthMonitor({ getQueues, dispatcher });
       healthMonitor.start();
       setActiveMonitor(healthMonitor);
