@@ -8,6 +8,7 @@ const { QUEUE_NAMES, getQueues } = require('../queues/message-queue');
 const { normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
 const { decrementMessageQuota } = require('../services/billing/message-quota');
 const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
+const { recordThreadMessage } = require('../services/escalation/escalation-bridge');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -224,6 +225,21 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
 
   const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply, providerMessageId });
   await recordWhatsappMessageId(userId, replyMessageId, sendResult?.key?.id);
+
+  // Escalation bridge: remember which customer this team-bound message is
+  // about, keyed by its WhatsApp id, so a quote-reply in the group can be
+  // routed straight back to that customer. Best-effort — never blocks a send.
+  if (payload.escalation && payload.customerSender && sendResult?.key?.id) {
+    await recordThreadMessage({
+      userId,
+      whatsappMessageId: sendResult.key.id,
+      targetJid: deliverTo,
+      customerSender: payload.customerSender,
+      conversationId: payload.conversationId || null,
+    }).catch((err) => {
+      console.warn(`${new Date().toISOString()} [${WORKER_NAME}] failed to record escalation thread: ${err.message}`);
+    });
+  }
 
   // Send-only path: quota is decremented only when sendWhatsappReply resolves
   // without throwing. If the send throws (including socket_not_open above), this

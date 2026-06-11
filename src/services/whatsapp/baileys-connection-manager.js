@@ -102,6 +102,18 @@ function extractPhoneNumber(key) {
   return null;
 }
 
+// Extracts the WhatsApp id of the message being quoted (reply-to), wherever
+// the contextInfo lives (extendedTextMessage for text replies, or directly on
+// media parts). Used by the escalation bridge to map a team member's
+// quote-reply back to the customer it answers.
+function quotedStanzaIdFromBaileysMessage(message = {}) {
+  for (const part of Object.values(message || {})) {
+    const stanzaId = part?.contextInfo?.stanzaId;
+    if (stanzaId) return String(stanzaId);
+  }
+  return null;
+}
+
 function toWhatsappWebMessage(msg) {
   const remoteJid = msg.key?.remoteJid || null;
   return {
@@ -115,6 +127,7 @@ function toWhatsappWebMessage(msg) {
     timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : null,
     type: Object.keys(msg.message || {})[0] || 'unknown',
     hasMedia: !!detectMediaPart(msg.message || {}),
+    quotedStanzaId: quotedStanzaIdFromBaileysMessage(msg.message || {}),
     deviceType: 'baileys',
   };
 }
@@ -647,4 +660,4 @@ class BaileysConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { BaileysConnectionManager, normalizeOutboundJid, extractPhoneNumber, toWhatsappWebMessage, isSocketDeadReadyState };
+module.exports = { BaileysConnectionManager, normalizeOutboundJid, extractPhoneNumber, toWhatsappWebMessage, quotedStanzaIdFromBaileysMessage, isSocketDeadReadyState };

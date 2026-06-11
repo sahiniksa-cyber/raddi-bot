@@ -2,6 +2,7 @@
 
 const db = require('../../db/client');
 const { enqueueAiReply } = require('../../queues/message-queue');
+const escalationBridge = require('../escalation/escalation-bridge');
 
 function messageIdFromWhatsappMessage(msg) {
   return msg?.id?._serialized || msg?.id?.id || null;
@@ -133,10 +134,49 @@ function ownerPauseExpiry(minutes, nowMs) {
 }
 
 class MessageIngestService {
-  constructor({ logger = console, queue = { enqueueAiReply }, database = db } = {}) {
+  constructor({ logger = console, queue = { enqueueAiReply }, database = db, bridge = escalationBridge } = {}) {
     this.logger = logger;
     this.queue = queue;
     this.db = database;
+    this.bridge = bridge;
+  }
+
+  /**
+   * Escalation bridge: a message (group or 1:1, even fromMe) that QUOTES one
+   * of our team-bound escalation messages is the team's solution — relay it
+   * to the mapped customer instead of treating it as customer input. Returns
+   * a result object when bridged, or null to fall through to normal handling.
+   */
+  async tryEscalationBridge({ userId, msg }) {
+    const quotedId = msg?.quotedStanzaId;
+    if (!quotedId || !this.db.isConfigured?.()) return null;
+    try {
+      const thread = await this.bridge.findThreadByQuotedId({ database: this.db, userId, quotedId });
+      if (!thread) return null;
+      const text = textFromWhatsappMessage(msg);
+      if (!text) {
+        this.logger.warn?.('bridge', 'quoted team reply has no text — skipped (send text, not media)');
+        return { accepted: false, statusCode: 200, reason: 'bridge_empty_text' };
+      }
+      const result = await this.bridge.relayResolutionToCustomer({
+        database: this.db,
+        userId,
+        thread,
+        text,
+        authorJid: msg.author || msg.from || null,
+      });
+      this.logger.info?.('bridge', `relayed team resolution to ${thread.customer_sender}`);
+      return {
+        accepted: true,
+        statusCode: 200,
+        bridged: true,
+        relayed: !!result.relayed,
+        customerSender: thread.customer_sender,
+      };
+    } catch (err) {
+      this.logger.warn?.('bridge', `bridge check failed: ${err.message}`);
+      return null; // fail-open: normal handling decides (groups stay ignored)
+    }
   }
 
   shouldIgnore(msg) {
@@ -149,7 +189,18 @@ class MessageIngestService {
 
   async ingestWhatsappMessage({ userId, msg, source = 'whatsapp-web.js' }) {
     if (!userId) throw new Error('userId is required');
-    if (!msg || msg.from === 'status@broadcast' || String(msg?.from || '').includes('@g.us')) {
+    if (!msg || msg.from === 'status@broadcast') {
+      return { accepted: false, statusCode: 200, reason: 'ignored' };
+    }
+
+    // Escalation-bridge check runs BEFORE the group drop and the fromMe
+    // routing: the team's quote-reply may arrive from a group, from a
+    // contact's 1:1 chat, or from the owner's own phone (fromMe) inside the
+    // group — all of them must reach the customer.
+    const bridged = await this.tryEscalationBridge({ userId, msg });
+    if (bridged) return bridged;
+
+    if (String(msg?.from || '').includes('@g.us')) {
       return { accepted: false, statusCode: 200, reason: 'ignored' };
     }
 
@@ -207,6 +258,20 @@ class MessageIngestService {
     });
 
     this.logger.info?.('message', `queued inbound message ${providerMessageId} from ${sender}`);
+
+    // Active escalation thread (< window): the team owns this conversation —
+    // forward the customer's reply to the group/contact so they can quote it
+    // back. Fire-and-forget; a failure never affects normal ingestion.
+    this.bridge.findActiveThreadForCustomer({ database: this.db, userId, customerSender: sender })
+      .then((thread) => {
+        if (!thread) return null;
+        return this.bridge.forwardCustomerReplyToTeam({ userId, thread, customerSender: sender, text });
+      })
+      .then((fwd) => {
+        if (fwd?.forwarded) this.logger.info?.('bridge', `forwarded customer reply from ${sender} to the team`);
+      })
+      .catch((err) => this.logger.warn?.('bridge', `customer forward failed: ${err.message}`));
+
     return {
       accepted: true,
       statusCode: 200,
