@@ -59,6 +59,7 @@ const { getQueues } = require('./queues/message-queue');
 const { HealthMonitor, setActiveMonitor } = require('./services/monitoring/health-monitor');
 const { createAlertDispatcher } = require('./services/monitoring/alerts');
 const { configureUnlinkAlerts } = require('./services/monitoring/unlink-alert');
+const { installProcessSafetyNet } = require('./runtime/process-safety');
 const { createMailer } = require('./services/notify/mailer');
 const storeScanner = require('../lib/store-scanner');
 
@@ -858,6 +859,7 @@ function startLearningLoop() {
 }
 
 async function main() {
+  installProcessSafetyNet({ processName: 'web' });
   console.log(`${new Date().toISOString()} [server] starting Jwab server...`);
 
   const startupState = {

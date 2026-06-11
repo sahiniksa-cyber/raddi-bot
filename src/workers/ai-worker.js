@@ -25,6 +25,7 @@ const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('..
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
 const { checkMessageQuota } = require('../services/billing/message-quota');
+const { installProcessSafetyNet } = require('../runtime/process-safety');
 const {
   OpenAIMediaAnalyzer,
   buildMediaAnalysisText,
@@ -941,6 +942,7 @@ function createWorker() {
 }
 
 async function main() {
+  installProcessSafetyNet({ processName: WORKER_NAME });
   await waitForDatabaseReady({
     logger: {
       warn: (stage, message) => console.warn(`${new Date().toISOString()} [${WORKER_NAME}] [${stage}] ${message}`),
