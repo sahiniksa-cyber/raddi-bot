@@ -34,6 +34,17 @@ test('isLearnablePair accepts a real question with a real owner answer', () => {
   assert.equal(isLearnablePair('كم يستغرق الشحن للرياض؟', 'الشحن للرياض يومين عمل وبرسوم 25 ريال'), true);
 });
 
+test('isLearnablePair rejects pure small-talk (greetings + pleasantries carry no store knowledge)', () => {
+  // The exact production case that slipped through (2026-06-11):
+  assert.equal(isLearnablePair('السلام عليكم كيفك ؟', 'وعليكم السلام بخير طمني عنك'), false, 'greeting question + courtesy answer');
+  assert.equal(isLearnablePair('صباح الخير شخبارك', 'صباح النور تمام الحمدلله'), false, 'morning small talk');
+  assert.equal(isLearnablePair('هلا والله كيف الحال', 'اهلين حياك الله تمام'), false, 'casual small talk');
+  // Greeting + a REAL question must stay learnable:
+  assert.equal(isLearnablePair('السلام عليكم كم سعر اشتراك السنة؟', 'سعر اشتراك السنة 250 ريال'), true, 'greeting followed by real content');
+  // Real question with a courtesy-flavored but informative answer stays learnable:
+  assert.equal(isLearnablePair('متى يوصل الطلب للدمام؟', 'حياك الله، يوصل خلال ثلاثة ايام عمل'), true);
+});
+
 test('isLearnablePair rejects short/greeting/media/escalation content', () => {
   assert.equal(isLearnablePair('هلا', 'الشحن يومين عمل للرياض'), false, 'short question');
   assert.equal(isLearnablePair('كم يستغرق الشحن للرياض؟', 'تم'), false, 'short answer');
