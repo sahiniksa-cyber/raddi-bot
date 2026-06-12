@@ -2,6 +2,7 @@
 
 const { spawn } = require('child_process');
 const { RETRY } = require('../../lib/constants');
+const { installProcessSafetyNet } = require('./process-safety');
 
 const processes = [
   { name: 'web', command: 'node', args: ['src/server.js'], required: true },
@@ -83,6 +84,9 @@ function shutdown(exitCode = 0) {
 }
 
 function main() {
+  // The supervisor MUST never die on a stray error — if it does, every child
+  // (and every merchant) goes with it.
+  installProcessSafetyNet({ processName: 'start-all' });
   console.log(`${new Date().toISOString()} [start-all] launching all processes...`);
   for (const definition of processes) startProcess(definition);
   process.on('SIGTERM', () => shutdown(0));
