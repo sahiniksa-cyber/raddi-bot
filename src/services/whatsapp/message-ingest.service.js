@@ -305,18 +305,12 @@ class MessageIngestService {
 
     this.logger.info?.('message', `queued inbound message ${providerMessageId} from ${sender}`);
 
-    // Active escalation thread (< window): the team owns this conversation —
-    // forward the customer's reply to the group/contact so they can quote it
-    // back. Fire-and-forget; a failure never affects normal ingestion.
-    this.bridge.findActiveThreadForCustomer({ database: this.db, userId, customerSender: sender })
-      .then((thread) => {
-        if (!thread) return null;
-        return this.bridge.forwardCustomerReplyToTeam({ userId, thread, customerSender: sender, text });
-      })
-      .then((fwd) => {
-        if (fwd?.forwarded) this.logger.info?.('bridge', `forwarded customer reply from ${sender} to the team`);
-      })
-      .catch((err) => this.logger.warn?.('bridge', `customer forward failed: ${err.message}`));
+    // REMOVED 2026-06-12 (owner's explicit, repeated demand): NO automatic
+    // forwarding of customer messages to the group. It shuttled every single
+    // customer message into the team chat — and self-extended its own window
+    // with each forward. The group hears about a customer ONLY via
+    // escalations/updates (when the AI can't handle it) and answers status
+    // questions; the AI handles the normal conversation alone.
 
     return {
       accepted: true,
