@@ -66,7 +66,22 @@ async function findActiveThreadForCustomer({
   return result.rows[0] || null;
 }
 
-// Rephrases the team's raw answer in the bot's own voice WITHOUT changing the
+// The team's quoted message is often a DIRECTIVE to the bot ("قوله يعطينا
+// ايميله"), not a ready answer — the prompt must execute directives by
+// addressing the customer directly, never forward them verbatim, and never
+// reveal the behind-the-scenes instruction.
+function buildRephraseInstruction(teamAnswer) {
+  return [
+    'وصلتك رسالة داخلية من صاحب المتجر بخصوص العميل الحالي:',
+    `«${teamAnswer}»`,
+    'حوّلها إلى رسالة واحدة موجهة للعميل بأسلوبك المعتاد:',
+    '- إذا كانت تعليمات لك (مثل: قوله كذا، اطلب منه كذا، اسأله عن كذا) فنفّذها وخاطب العميل مباشرة.',
+    '- إذا كانت جواباً على سؤال العميل فصغه له بأسلوب ودي.',
+    'إلزامي: لا تضف أي معلومة جديدة، ولا تحذف معلومة أو رقماً ذُكر، ولا تذكر صاحب المتجر أو الرسالة الداخلية في ردك.',
+  ].join('\n');
+}
+
+// Rephrases the team's raw message in the bot's own voice WITHOUT changing the
 // facts. Lazy-requires runtime-bot to avoid a circular import (runtime-bot →
 // manager → ingest → bridge). Throws on failure — the caller falls back to
 // the verbatim answer, which always beats silence.
@@ -75,13 +90,9 @@ async function rephraseTeamAnswerWithAI({ userId, teamAnswer }) {
   const AIClient = require('../../../lib/ai-client');
   const config = await resolveConfigForAI(userId);
   const ai = new AIClient(config, console);
-  const instruction = [
-    'هذا جواب صاحب المتجر على استفسار العميل الحالي:',
-    `«${teamAnswer}»`,
-    'أعد صياغته برسالة واحدة للعميل بأسلوبك المعتاد.',
-    'إلزامي: لا تضف أي معلومة جديدة، ولا تحذف أي معلومة أو رقم ذكره صاحب المتجر، ولا تغير المعنى.',
-  ].join('\n');
-  const reply = String(await ai.getReply([{ role: 'user', content: instruction }]) || '').trim();
+  const reply = String(
+    await ai.getReply([{ role: 'user', content: buildRephraseInstruction(teamAnswer) }]) || '',
+  ).trim();
   if (!reply) throw new Error('empty rephrase');
   return reply;
 }
@@ -105,10 +116,15 @@ async function relayResolutionToCustomer({
   if (!database?.isConfigured?.()) return { relayed: false };
 
   let reply = teamAnswer;
+  let rephraseError = null;
   try {
     reply = String(await rephrase({ userId, teamAnswer }) || '').trim() || teamAnswer;
-  } catch (_) {
+  } catch (err) {
     reply = teamAnswer; // verbatim beats silence
+    rephraseError = err?.message || String(err);
+    // Loud + persisted (below): the 2026-06-12 production failure was
+    // swallowed silently and undiagnosable without Railway log access.
+    console.warn(`${new Date().toISOString()} [escalation-bridge] rephrase failed, sending verbatim: ${rephraseError}`);
   }
 
   const providerMessageId = `bridge:${thread.id || 'x'}:${Date.now()}`;
@@ -122,7 +138,7 @@ async function relayResolutionToCustomer({
       thread.customer_sender,
       reply,
       providerMessageId,
-      JSON.stringify({ escalationBridge: true, relayedBy: authorJid, targetJid: thread.target_jid, teamAnswer }),
+      JSON.stringify({ escalationBridge: true, relayedBy: authorJid, targetJid: thread.target_jid, teamAnswer, rephraseError }),
     ],
   );
   const replyMessageId = inserted.rows[0]?.id || null;
@@ -202,5 +218,6 @@ module.exports = {
   relayResolutionToCustomer,
   forwardCustomerReplyToTeam,
   buildCustomerForwardText,
+  buildRephraseInstruction,
   BRIDGE_WINDOW_MS,
 };

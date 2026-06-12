@@ -89,20 +89,44 @@ test('relay rephrases the team answer via AI, closes the thread, and hands back 
   assert.ok(unmute, 'AI must be UN-muted so it continues the conversation');
 });
 
-test('relay falls back to the verbatim team answer when the AI rephrase fails', async () => {
-  const database = fakeDbCapture([{ re: /INSERT INTO messages/, rows: [{ id: 'reply-1' }] }]);
+test('relay falls back to verbatim AND persists the rephrase error for diagnosis', async () => {
+  const calls = [];
+  const database = {
+    calls,
+    isConfigured: () => true,
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (/INSERT INTO messages/.test(sql)) return { rows: [{ id: 'reply-1' }] };
+      return { rows: [] };
+    },
+  };
   const enqueued = [];
   const thread = { customer_sender: '9665@s.whatsapp.net', target_jid: '120363@g.us', conversation_id: 'c1' };
   const result = await relayResolutionToCustomer({
     database,
     enqueue: async (payload, opts) => { enqueued.push({ payload, opts }); },
-    rephrase: async () => { throw new Error('ai down'); },
+    rephrase: async () => { throw new Error('أضف مفتاح OpenAI'); },
     userId: 'u1',
     thread,
-    text: 'تم حل المشكلة، الطلب ينوصل بكرة',
+    text: 'قوله يعطينا ايميله',
   });
   assert.equal(result.relayed, true);
-  assert.equal(enqueued[0].payload.reply, 'تم حل المشكلة، الطلب ينوصل بكرة', 'verbatim beats silence');
+  assert.equal(enqueued[0].payload.reply, 'قوله يعطينا ايميله', 'verbatim beats silence');
+  // The production failure on 2026-06-12 was swallowed silently — the error
+  // must now land in the stored message's raw_payload so it can be diagnosed
+  // from the database without Railway log access.
+  const insert = calls.find(c => /INSERT INTO messages/.test(c.sql));
+  const rawPayload = JSON.parse(insert.params[5]);
+  assert.match(String(rawPayload.rephraseError), /أضف مفتاح OpenAI/);
+});
+
+test('buildRephraseInstruction handles directives and forbids invention', () => {
+  const { buildRephraseInstruction } = require('../src/services/escalation/escalation-bridge');
+  const prompt = buildRephraseInstruction('قوله يعطينا ايميله');
+  assert.match(prompt, /قوله يعطينا ايميله/, 'team text embedded');
+  assert.match(prompt, /تعليمات/, 'must explain directive handling (قوله كذا = خاطب العميل)');
+  assert.match(prompt, /لا تضف/, 'no-invention rule');
+  assert.match(prompt, /لا تذكر صاحب المتجر|لا تقل إن صاحب المتجر/, 'must not expose the behind-the-scenes instruction');
 });
 
 test('relayResolutionToCustomer skips empty text without side effects', async () => {
