@@ -68,8 +68,18 @@ function detectEscalationIntent(customerText) {
 // ونضيف العلامة تلقائياً ليُشغَّل التصعيد الفعلي.
 const BOT_TRANSFER_RE = /أحوّل|أحول|احوّل|احول|نحوّل|نحول|حوّلت طلبك|يتواصلون معك|بيتواصلون معك|يتواصل معك|بيتواصل معك/;
 
+// إنتاج 2026-06-11/12: النموذج ادّعى التحويل بصيغ خارج القائمة أعلاه
+// ("رسلت للإدارة"، "حولتك للفريق المختص") فلم تُفرض العلامة ولم يصل شيء
+// للفريق. النمط الموسّع = فعلُ تحويل/إبلاغ قريبٌ من جهة (الإدارة/الفريق/
+// المختص/الدعم...) — الاقتران الثنائي يمنع الإنذارات الكاذبة ("أرسلت لك
+// الكود" بلا جهة، "الإدارة ترحب بك" بلا فعل).
+const TRANSFER_VERB = '(?:حوّ?لت(?:ك|كم|نا|ها)?|تم\\s*(?:تحويل|رفع|إبلاغ|ابلاغ|التصعيد|تصعيد)|أ?رسلت|رفعت|بلّ?غت|أبلغت|ابلغت|صعّ?دت)';
+const TRANSFER_ENTITY = '(?:لل|ال)?(?:[إا]دارة|فريق|مختص(?:ين)?|مسؤول(?:ين)?|دعم|قسم|موظف(?:ين)?)';
+const BOT_TRANSFER_CLAIM_RE = new RegExp(`${TRANSFER_VERB}[^\\n.؟!]{0,25}${TRANSFER_ENTITY}`);
+
 function botSignalsTransfer(reply) {
-  return BOT_TRANSFER_RE.test(String(reply || ''));
+  const text = String(reply || '');
+  return BOT_TRANSFER_RE.test(text) || BOT_TRANSFER_CLAIM_RE.test(text);
 }
 
 function enforceEscalationTag(reply, config = {}, customerText = '') {
