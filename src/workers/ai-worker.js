@@ -814,13 +814,15 @@ async function processAiReply(job) {
         logger.info('escalation', 'explicit customer request — bypassing cooldown/min-gap');
       }
 
-      if ((cooldown.rowCount > 0 || tooSoon) && !overCap) {
-        // Anti-spam guards used to swallow this silently while the customer
-        // was told "رسلت للإدارة" (production 2026-06-12 15:57). Send a light
-        // update to the SAME team target instead of a second full escalation.
+      if (cooldown.rowCount > 0 || tooSoon || overCap) {
+        // NO suppression is ever silent (production 2026-06-12 21:42: the
+        // 3/24h cap swallowed the 4th escalation while the customer was told
+        // "رسلت للإدارة" — the owner only found out from the angry customer).
+        // Every guard routes to a light "🔁 تحديث" on the SAME team target.
         logger.warn('escalation', 'suppressed full escalation — forwarding a customer UPDATE instead', {
           conversationId: conversation.id,
-          reason: cooldown.rowCount > 0 ? 'cooldown_30m' : 'min_gap_10m',
+          reason: cooldown.rowCount > 0 ? 'cooldown_30m' : (overCap ? 'cap_24h_reached' : 'min_gap_10m'),
+          count24h: escStats.count24h,
         });
         await enqueueOutgoingWhatsapp({
           userId,
@@ -834,12 +836,6 @@ async function processAiReply(job) {
           jobKey: `esc-update-${replyMessageId}`,
           delay: 0,
         }).catch((err) => logger.warn('escalation', `update forward failed: ${err.message}`));
-      } else if (overCap) {
-        logger.warn('escalation', 'escalation suppressed by per-conversation cap', {
-          conversationId: conversation.id,
-          count24h: escStats.count24h,
-          reason: 'cap_24h_reached',
-        });
       } else {
         await enqueueOutgoingWhatsapp({
           userId,
