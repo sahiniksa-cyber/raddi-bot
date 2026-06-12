@@ -88,9 +88,15 @@ const TRANSFER_VERB = '(?:حوّ?لت(?:ك|كم|نا|ها)?|تم\\s*(?:تحوي�
 const TRANSFER_ENTITY = '(?:لل|ال)?(?:[إا]دارة|فريق|مختص(?:ين)?|مسؤول(?:ين)?|دعم|قسم|موظف(?:ين)?)';
 const BOT_TRANSFER_CLAIM_RE = new RegExp(`${TRANSFER_VERB}[^\\n.؟!]{0,25}${TRANSFER_ENTITY}`);
 
+// إنتاج 2026-06-12 (~16:10): العميل وصف مشكلة كانفا والبوت وعد "بنحل لك
+// المشكلة" — ولا انطلق تصعيد حتى ألحّ العميل. وعد بصيغة المتكلم (بنحل/سنحل)
+// = التزام يستلزم الفريق → صعّد عند المشكلة فوراً. "تقدر تحل المشكلة بنفسك"
+// (إرشاد للعميل بصيغة المخاطَب) لا يطابق.
+const BOT_FIX_PROMISE_RE = /(?:^|\s)(?:بنحل|نحل|سنحل|راح\s*نحل|بنحلها|نحلها)\s*(?:لك|لكم)?[^\n.؟!]{0,12}(?:المشكلة|المشكله|مشكلتك|مشكلتكم)/;
+
 function botSignalsTransfer(reply) {
   const text = String(reply || '');
-  return BOT_TRANSFER_RE.test(text) || BOT_TRANSFER_CLAIM_RE.test(text);
+  return BOT_TRANSFER_RE.test(text) || BOT_TRANSFER_CLAIM_RE.test(text) || BOT_FIX_PROMISE_RE.test(text);
 }
 
 function enforceEscalationTag(reply, config = {}, customerText = '') {

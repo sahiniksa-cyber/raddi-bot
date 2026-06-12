@@ -444,6 +444,19 @@ async function markInboundMessageFailed({ database = db, messageId, error }) {
 // answer? Only those may be marked answered when we fall back to canned-only
 // (AI failure) — marking the OTHERS buried real customer questions with no
 // reply, no escalation and no retry (production 2026-06-11, conv d8618a0a).
+// The escalation notification used to carry only the TRIGGER message ("طيب
+// وش الحل ؟") — the actual problem stated earlier was lost (production
+// 2026-06-12 16:13). Join the last few customer turns so the team reads the
+// whole picture.
+function recentCustomerContext(history = [], fallback = '', limit = 3) {
+  const turns = (Array.isArray(history) ? history : [])
+    .filter(m => m?.role === 'user')
+    .map(m => String(m.content || '').trim())
+    .filter(Boolean);
+  const recent = turns.slice(-limit);
+  return recent.length ? recent.join('\n') : String(fallback || '');
+}
+
 function messagesCoveredByTriggers(messages = [], matched = []) {
   if (!matched.length) return [];
   const keywords = matched.map(m => String(m.keyword || '').toLowerCase()).filter(Boolean);
@@ -685,7 +698,7 @@ async function processAiReply(job) {
       config,
       customerSender: conversation.sender,
       customerPhoneNumber: conversation.phone_number,
-      inboundText: text,
+      inboundText: recentCustomerContext(history, text),
     });
     let customerReply = escalation.customerReply.trim();
     if (!customerReply) throw new Error('AI returned empty customer reply after escalation marker cleanup');
@@ -1058,6 +1071,7 @@ module.exports = {
   markInboundMessagesAnswered,
   messagesCoveredByTriggers,
   markInboundMessagesQuotaExceeded,
+  recentCustomerContext,
   storeAssistantMessage,
   processAiReply,
   waitForDatabaseReady,

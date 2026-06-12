@@ -23,9 +23,12 @@ test('still catches the original phrasings', () => {
 });
 
 test('does NOT fire on ordinary replies (no false escalations)', () => {
-  assert.equal(botSignalsTransfer('ما يهون علينا زعلك، بنحل لك المشكلة وتبشر بالعوض إن شاء الله'), false, 'promise without transfer claim');
+  // NOTE 2026-06-12: "بنحل لك المشكلة" moved to the POSITIVE list by owner
+  // request — a first-person promise to fix means the team must be looped in
+  // at problem time (see bridge-final-fixes.test.js).
   assert.equal(botSignalsTransfer('أرسلت لك الكود على الواتساب'), false, 'send verb without team entity');
   assert.equal(botSignalsTransfer('الإدارة ترحب بك في متجرنا'), false, 'entity without transfer verb');
+  assert.equal(botSignalsTransfer('تقدر تحل المشكلة بنفسك من الإعدادات'), false, 'second-person guidance');
   assert.equal(botSignalsTransfer('سعر الاشتراك 59 ريال'), false);
 });
 
