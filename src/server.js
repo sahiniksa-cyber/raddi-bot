@@ -60,6 +60,7 @@ const { HealthMonitor, setActiveMonitor } = require('./services/monitoring/healt
 const { createAlertDispatcher } = require('./services/monitoring/alerts');
 const { configureUnlinkAlerts } = require('./services/monitoring/unlink-alert');
 const { installProcessSafetyNet } = require('./runtime/process-safety');
+const { prepareEscalation } = require('./workers/escalation-routing');
 const { createMailer } = require('./services/notify/mailer');
 const storeScanner = require('../lib/store-scanner');
 
@@ -492,11 +493,30 @@ function createApp() {
 
     const aiRaw = await bot.getAIReply(history, { maxRetries: 0, isFirstMsg: isFirst, latestUserText: incomingMessage, instantAnswered: cannedPrefix });
     let reply = String(aiRaw || '').trim();
+
+    // The sandbox never sends to the group — but it must SHOW what the real
+    // pipeline would escalate (and strip the raw [تحويل:...] marker), otherwise
+    // the owner thinks escalation is broken when testing here.
+    const escalation = prepareEscalation({
+      reply,
+      config: bot.config,
+      customerSender: 'sandbox@test',
+      inboundText: incomingMessage,
+    });
+    reply = String(escalation.customerReply || '').trim() || reply;
+    const escalationPreview = escalation.ownerMessage
+      ? {
+          target: escalation.ownerMessage.contact?.name || escalation.ownerMessage.sender,
+          targetJid: escalation.ownerMessage.sender,
+          summary: escalation.ownerMessage.summary,
+        }
+      : null;
+
     if (cannedPrefix) {
       reply = combineCannedAndAi(cannedPrefix, reply);
     }
     history.push({ role: 'assistant', content: reply });
-    return res.json({ success: true, reply, source: cannedPrefix ? 'keyword+ai' : 'ai', historyLength: history.length, welcomeShown });
+    return res.json({ success: true, reply, source: cannedPrefix ? 'keyword+ai' : 'ai', historyLength: history.length, welcomeShown, escalationPreview });
   }));
   app.post('/api/learn-style', requireAuth, aiLimiter, aiQuotaGate, asyncRoute(async (req, res) => {
     const bot = await getUserBot(req.session.userId);
