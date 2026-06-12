@@ -112,7 +112,10 @@ test('quoted team reply with media only is skipped with a clear reason', async (
   assert.equal(result.reason, 'bridge_empty_text');
 });
 
-test('customer reply during an active thread is forwarded to the team (normal flow intact)', async () => {
+test('customer messages are NEVER auto-forwarded to the team — even with an open thread', async () => {
+  // Owner's hard rule (2026-06-12, after the shuttle incident): the group
+  // hears about a customer ONLY via escalations/updates. Normal conversation
+  // stays between the customer and the AI.
   const activeThread = { id: '9', customer_sender: '9665001@s.whatsapp.net', target_jid: '120363@g.us', conversation_id: 'conv-9' };
   const bridge = fakeBridge({ activeThread });
   let aiEnqueued = 0;
@@ -123,15 +126,14 @@ test('customer reply during an active thread is forwarded to the team (normal fl
 
   const result = await service.ingestWhatsappMessage({
     userId: 'u1',
-    msg: { id: { id: 'CUST1' }, from: '9665001@s.whatsapp.net', fromMe: false, body: 'طيب متى بالضبط؟' },
+    msg: { id: { id: 'CUST1' }, from: '9665001@s.whatsapp.net', fromMe: false, body: 'السلام عليكم' },
     source: 'baileys',
   });
   assert.equal(result.accepted, true);
-  assert.equal(aiEnqueued, 1, 'normal ingestion still enqueues (AI worker is muted separately)');
+  assert.equal(aiEnqueued, 1, 'the AI handles the conversation normally');
   await new Promise(r => setImmediate(r));
   const fwd = bridge.ops.find(o => o.op === 'forward');
-  assert.ok(fwd, 'customer reply must be forwarded to the team');
-  assert.equal(fwd.args.text, 'طيب متى بالضبط؟');
+  assert.equal(fwd, undefined, 'NO forwarding of customer messages, ever');
 });
 
 test('customer message without an active thread does not touch the bridge forward', async () => {
