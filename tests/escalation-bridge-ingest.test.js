@@ -27,12 +27,14 @@ function fakeDb() {
   };
 }
 
-function fakeBridge({ thread = null, activeThread = null } = {}) {
+function fakeBridge({ thread = null, activeThread = null, statusQuery = false } = {}) {
   const ops = [];
   return {
     ops,
     findThreadByQuotedId: async () => thread,
     findActiveThreadForCustomer: async () => activeThread,
+    isThreadStatusQuery: () => statusQuery,
+    buildThreadStatusReply: async () => '📊 وضع المحادثة',
     relayResolutionToCustomer: async (args) => { ops.push({ op: 'relay', args }); return { relayed: true, replyMessageId: 'r1' }; },
     forwardCustomerReplyToTeam: async (args) => { ops.push({ op: 'forward', args }); return { forwarded: true }; },
   };

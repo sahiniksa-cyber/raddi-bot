@@ -59,7 +59,18 @@ function detectEscalationIntent(customerText) {
   const tokens = tokenize(String(customerText || ''));
   const hasWant = tokens.some(t => WANT_TOKENS.has(t));
   const hasHuman = tokens.some(t => HUMAN_TOKENS.has(t));
-  return hasWant && hasHuman;
+  return hasWant && hasHuman || customerRequestedEscalation(customerText);
+}
+
+// طلب صريح من العميل بإرسال/تبليغ الفريق ("ارسل للادارة مرة ثانية"، "بلغ
+// الإدارة"، "كلم الدعم") — إنتاج 2026-06-12: البوت قال "تبشر" وما صعّد.
+// نفس مبدأ الاقتران الثنائي: فعل طلب + جهة، لمنع الإنذارات الكاذبة.
+const CUSTOMER_ESC_VERB = '(?:أ?رسل|بلّ?غ|أبلغ|ابلغ|صعّ?د|حوّ?ل|ارفع|كلّ?م|تواصل(?:وا)?\\s*مع|وصّ?ل)';
+const CUSTOMER_ESC_ENTITY = '(?:لل|ال|مع\\s*ال)?(?:[إا]دارة|فريق|مختص(?:ين)?|مسؤول(?:ين)?|دعم|قسم|موظف(?:ين)?|مالك|مدير)';
+const CUSTOMER_ESC_REQUEST_RE = new RegExp(`${CUSTOMER_ESC_VERB}[^\\n.؟!]{0,20}${CUSTOMER_ESC_ENTITY}`);
+
+function customerRequestedEscalation(customerText) {
+  return CUSTOMER_ESC_REQUEST_RE.test(String(customerText || ''));
 }
 
 // عبارات يقولها البوت نفسه وتدل على نية تحويل للفريق/الفني. كثير من برومبتات
@@ -171,5 +182,5 @@ function enforceStyleRules(reply, config = {}) {
 module.exports = {
   enforceLength, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
-  enforceStyleRules, botSignalsTransfer,
+  enforceStyleRules, botSignalsTransfer, customerRequestedEscalation,
 };

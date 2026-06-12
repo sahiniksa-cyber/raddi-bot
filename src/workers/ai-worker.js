@@ -26,6 +26,7 @@ const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
 const { checkMessageQuota } = require('../services/billing/message-quota');
 const { installProcessSafetyNet } = require('../runtime/process-safety');
+const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const {
   OpenAIMediaAnalyzer,
   buildMediaAnalysisText,
@@ -786,7 +787,18 @@ async function processAiReply(job) {
       const tenMinAgo = Date.now() - 10 * 60 * 1000;
       const lastSentMs = escStats.lastSentAt ? escStats.lastSentAt.getTime() : 0;
       const overCap = escStats.count24h >= 3;
-      const tooSoon = escStats.count24h >= 1 && lastSentMs > tenMinAgo;
+      let tooSoon = escStats.count24h >= 1 && lastSentMs > tenMinAgo;
+
+      // The customer EXPLICITLY asked to reach the team ("ارسل للادارة مرة
+      // ثانية") — production 2026-06-12: the bot promised and the anti-noise
+      // guards silently ate it. An explicit request bypasses the cooldown and
+      // the 10-minute gap; the 3/24h cap stays as the hard spam ceiling.
+      const explicitRequest = customerRequestedEscalation(text);
+      if (explicitRequest && !overCap) {
+        cooldown.rowCount = 0;
+        tooSoon = false;
+        logger.info('escalation', 'explicit customer request — bypassing cooldown/min-gap');
+      }
 
       if (cooldown.rowCount > 0) {
         console.warn(

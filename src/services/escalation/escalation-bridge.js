@@ -173,6 +173,54 @@ async function relayResolutionToCustomer({
   return { relayed: true, replyMessageId };
 }
 
+// A quote-reply in the group is NOT always an answer for the customer — the
+// owner also asks the BOT for status ("وش صار معاك"، "هل انحلت؟"). Production
+// 2026-06-12: such a question was relayed to the customer verbatim. Rule:
+// starts with an interrogative (وش/شو/ايش/هل/كيف/متى) or asks about a reply,
+// is short, and carries no directive verb aimed at the customer.
+// ملاحظة: \b لا يعمل مع الحروف العربية في JS — نستخدم lookahead للمسافة بدلاً منه.
+const STATUS_INTERROGATIVE_RE = /^[\s،]*((و?ش|شو|ايش|إيش|هل|كيف|متى)(?=[\s؟?]|$)|رد عليك|رد العميل)/;
+const DIRECTIVE_VERB_RE = /(?:^|\s)(جرب|يجرب|تجرب|سو|يسوي|تسوي|اضغط|يضغط|حمل|يحمل|افتح|يفتح|روح|يروح|ادخل|يدخل|اعطنا|يعطينا|ارسل لنا|قوله|اطلب)(?=\s|$)/;
+
+function isThreadStatusQuery(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 60) return false;
+  if (t.includes(':')) return false; // "الحل: ..." style answers
+  if (DIRECTIVE_VERB_RE.test(t)) return false;
+  return STATUS_INTERROGATIVE_RE.test(t);
+}
+
+// Deterministic status summary for the team — no AI, straight from the DB.
+async function buildThreadStatusReply({ database = dbDefault, userId, thread } = {}) {
+  const digits = String(thread?.customer_sender || '').replace(/@.*$/, '').replace(/[^\d]/g, '');
+  const header = `📊 وضع المحادثة مع العميل${digits ? ` (+${digits})` : ''}:`;
+  try {
+    const result = await database.query(
+      `SELECT direction, content, created_at
+         FROM messages
+        WHERE user_id = $1 AND conversation_id = $2
+        ORDER BY created_at DESC
+        LIMIT 4`,
+      [userId, thread?.conversation_id],
+    );
+    const lines = [header];
+    const lastInbound = (result.rows || []).find(r => r.direction === 'inbound');
+    const lastOutbound = (result.rows || []).find(r => r.direction === 'outbound');
+    const ago = (d) => {
+      const min = Math.max(0, Math.round((Date.now() - new Date(d).getTime()) / 60000));
+      return min < 60 ? `قبل ${min} دقيقة` : `قبل ${Math.round(min / 60)} ساعة`;
+    };
+    if (lastOutbound) lines.push(`آخر رسالة للعميل (${ago(lastOutbound.created_at)}): «${String(lastOutbound.content).slice(0, 120)}»`);
+    if (lastInbound) lines.push(`آخر رد من العميل (${ago(lastInbound.created_at)}): «${String(lastInbound.content).slice(0, 120)}»`);
+    else lines.push('العميل ما رد بعد.');
+    lines.push('');
+    lines.push('للرد على العميل: اقتبس رسالة التصعيد واكتب الجواب.');
+    return lines.join('\n');
+  } catch (_) {
+    return `${header}\nتعذر جلب التفاصيل حالياً.`;
+  }
+}
+
 function buildCustomerForwardText({ customerSender, text } = {}) {
   const digits = String(customerSender || '').replace(/@.*$/, '').replace(/[^\d]/g, '');
   return [
@@ -193,6 +241,7 @@ async function forwardCustomerReplyToTeam({
   thread,
   customerSender,
   text,
+  raw = false, // raw=true: send as-is (status summaries), no "رد العميل" wrapper
 } = {}) {
   const body = String(text || '').trim();
   if (!body || !userId || !thread?.target_jid) return { forwarded: false };
@@ -200,7 +249,7 @@ async function forwardCustomerReplyToTeam({
     userId,
     conversationId: thread.conversation_id || null,
     sender: thread.target_jid,
-    reply: buildCustomerForwardText({ customerSender, text: body }),
+    reply: raw ? body : buildCustomerForwardText({ customerSender, text: body }),
     escalation: true,
     customerSender,
     source: 'escalation_bridge_forward',
@@ -219,5 +268,7 @@ module.exports = {
   forwardCustomerReplyToTeam,
   buildCustomerForwardText,
   buildRephraseInstruction,
+  isThreadStatusQuery,
+  buildThreadStatusReply,
   BRIDGE_WINDOW_MS,
 };
