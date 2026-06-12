@@ -9,6 +9,16 @@ const { botSignalsTransfer, enforceEscalationTag } = require('../src/services/ai
 // outside the old narrow list, so no [تحويل:] tag was enforced and nothing
 // reached the team — while the customer was told "رسلت للإدارة".
 
+test('catches FUTURE-tense transfer promises (live E2E 2026-06-12 22:18)', () => {
+  // The bot said "إذا استمرت المشكلة، رح أبلغ الإدارة وأنتظر" — a future
+  // promise the past-tense list missed → no escalation while the customer
+  // was left waiting on "management".
+  assert.equal(botSignalsTransfer('إذا استمرت المشكلة، رح أبلغ الإدارة وأنتظر ردهم'), true);
+  assert.equal(botSignalsTransfer('بأرسل طلبك للفريق المختص الآن'), true);
+  assert.equal(botSignalsTransfer('سأحول الموضوع للدعم الفني'), true);
+  assert.equal(botSignalsTransfer('راح نرفع الموضوع للإدارة'), true);
+});
+
 test('catches the real production transfer claims', () => {
   assert.equal(botSignalsTransfer('رسلت للإدارة وأنتظر ردهم، أول ما يوصلني خبر بأبلغك'), true, 'رسلت للإدارة');
   assert.equal(botSignalsTransfer('تمام، حولتك للفريق المختص'), true, 'حولتك للفريق');
