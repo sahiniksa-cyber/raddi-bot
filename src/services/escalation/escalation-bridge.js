@@ -50,10 +50,14 @@ async function findActiveThreadForCustomer({
   windowMs = BRIDGE_WINDOW_MS,
 } = {}) {
   if (!userId || !customerSender || !database?.isConfigured?.()) return null;
+  // resolved_at IS NULL: once the team's answer has been relayed, the thread
+  // is CLOSED — customer messages stop forwarding to the group and the AI
+  // takes the conversation back (owner feedback 2026-06-12).
   const result = await database.query(
     `SELECT id, customer_sender, target_jid, conversation_id
        FROM escalation_threads
       WHERE user_id = $1 AND customer_sender = $2
+        AND resolved_at IS NULL
         AND created_at > NOW() - ($3 * interval '1 millisecond')
       ORDER BY created_at DESC
       LIMIT 1`,
@@ -62,21 +66,50 @@ async function findActiveThreadForCustomer({
   return result.rows[0] || null;
 }
 
-// The team member's quoted reply IS the customer-facing answer — relay it
-// verbatim through the standard outgoing pipeline (status flow, quota, retry)
-// but with zero humanization delay: it's a fix, not small talk.
+// Rephrases the team's raw answer in the bot's own voice WITHOUT changing the
+// facts. Lazy-requires runtime-bot to avoid a circular import (runtime-bot →
+// manager → ingest → bridge). Throws on failure — the caller falls back to
+// the verbatim answer, which always beats silence.
+async function rephraseTeamAnswerWithAI({ userId, teamAnswer }) {
+  const { resolveConfigForAI } = require('../bot/runtime-bot');
+  const AIClient = require('../../../lib/ai-client');
+  const config = await resolveConfigForAI(userId);
+  const ai = new AIClient(config, console);
+  const instruction = [
+    'هذا جواب صاحب المتجر على استفسار العميل الحالي:',
+    `«${teamAnswer}»`,
+    'أعد صياغته برسالة واحدة للعميل بأسلوبك المعتاد.',
+    'إلزامي: لا تضف أي معلومة جديدة، ولا تحذف أي معلومة أو رقم ذكره صاحب المتجر، ولا تغير المعنى.',
+  ].join('\n');
+  const reply = String(await ai.getReply([{ role: 'user', content: instruction }]) || '').trim();
+  if (!reply) throw new Error('empty rephrase');
+  return reply;
+}
+
+// The team member's quoted reply carries the ANSWER — the AI rephrases it in
+// the bot's voice (same facts, friendlier delivery) and it ships through the
+// standard outgoing pipeline with zero humanization delay. The relay CLOSES
+// the thread and hands the conversation back to the AI: no more forwarding,
+// no mute — anything new the AI can't answer triggers a fresh escalation.
 async function relayResolutionToCustomer({
   database = dbDefault,
   enqueue = enqueueOutgoingWhatsapp,
+  rephrase = rephraseTeamAnswerWithAI,
   userId,
   thread,
   text,
   authorJid = null,
-  windowMs = BRIDGE_WINDOW_MS,
 } = {}) {
-  const reply = String(text || '').trim();
-  if (!reply || !userId || !thread?.customer_sender) return { relayed: false };
+  const teamAnswer = String(text || '').trim();
+  if (!teamAnswer || !userId || !thread?.customer_sender) return { relayed: false };
   if (!database?.isConfigured?.()) return { relayed: false };
+
+  let reply = teamAnswer;
+  try {
+    reply = String(await rephrase({ userId, teamAnswer }) || '').trim() || teamAnswer;
+  } catch (_) {
+    reply = teamAnswer; // verbatim beats silence
+  }
 
   const providerMessageId = `bridge:${thread.id || 'x'}:${Date.now()}`;
   const inserted = await database.query(
@@ -89,7 +122,7 @@ async function relayResolutionToCustomer({
       thread.customer_sender,
       reply,
       providerMessageId,
-      JSON.stringify({ escalationBridge: true, relayedBy: authorJid, targetJid: thread.target_jid }),
+      JSON.stringify({ escalationBridge: true, relayedBy: authorJid, targetJid: thread.target_jid, teamAnswer }),
     ],
   );
   const replyMessageId = inserted.rows[0]?.id || null;
@@ -106,12 +139,18 @@ async function relayResolutionToCustomer({
     delay: 0,
   });
 
-  // The team member owns this conversation now — keep the AI quiet for the
-  // bridge window so they can go back and forth without interference.
+  // Close every open thread for this customer: forwarding stops here.
+  await database.query(
+    `UPDATE escalation_threads SET resolved_at = NOW()
+      WHERE user_id = $1 AND customer_sender = $2 AND resolved_at IS NULL`,
+    [userId, thread.customer_sender],
+  ).catch(() => {});
+
+  // Hand the conversation back to the AI immediately.
   if (thread.conversation_id) {
     await database.query(
-      `UPDATE conversations SET escalated_until = NOW() + ($2 * interval '1 millisecond') WHERE id = $1`,
-      [thread.conversation_id, windowMs],
+      `UPDATE conversations SET escalated_until = NULL WHERE id = $1`,
+      [thread.conversation_id],
     ).catch(() => {});
   }
 

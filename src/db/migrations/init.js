@@ -477,6 +477,10 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS escalation_threads_customer_idx
     ON escalation_threads (user_id, customer_sender, created_at DESC)`,
+
+  // ── Added 2026-06-12: a relayed team answer CLOSES the thread (hand-back
+  //    to the AI). NULL = still waiting for the team's quote-reply.
+  `ALTER TABLE escalation_threads ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`,
 ];
 
 async function migrate() {
