@@ -180,6 +180,16 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     return { skipped: true, reason: 'quota_empty' };
   }
 
+  if (await isReplyAlreadySent({ replyMessageId })) {
+    await updateJobStatus(job.id, {
+      status: 'completed',
+      finished_at: new Date(),
+      attempts: job.attemptsMade,
+      last_error: 'skipped: reply already delivered (idempotency guard)',
+    });
+    return { skipped: true, reason: 'already_sent' };
+  }
+
   await updateJobStatus(job.id, {
     status: 'processing',
     started_at: new Date(),
@@ -304,6 +314,15 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
       await cancelOutgoingForQuota(job, { replyMessageId });
       return { skipped: true, reason: 'quota_empty', lid: true };
     }
+    if (await isReplyAlreadySent({ replyMessageId })) {
+      await updateJobStatus(job.id, {
+        status: 'completed',
+        finished_at: new Date(),
+        attempts: job.attemptsMade,
+        last_error: 'skipped: reply already delivered (idempotency guard)',
+      });
+      return { skipped: true, reason: 'already_sent', lid: true };
+    }
     const bot = await waitForConnectedBot(loadedBot, {
       reason: `outgoing-lid:${job.id}`,
       timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
@@ -374,6 +393,27 @@ async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
 
 function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
   return bot?.sessionDesiredState === 'stopped' && !payload.escalation;
+}
+
+// Idempotency guard (owner report 2026-06-12: the same reply reached the
+// customer twice ~30min apart). Every restart resurrects <30min-old jobs whose
+// DB row never reached 'completed' — including jobs that DID send but the
+// process died before the status update. A reply whose message row is already
+// 'sent' (or carries a recorded WhatsApp id) must never ship again. Fail-open:
+// an unknown state must not block real replies.
+async function isReplyAlreadySent({ replyMessageId, database = db } = {}) {
+  if (!replyMessageId || !database?.isConfigured?.()) return false;
+  try {
+    const result = await database.query(
+      `SELECT status, whatsapp_message_id FROM messages WHERE id = $1 LIMIT 1`,
+      [replyMessageId],
+    );
+    const row = result.rows[0];
+    if (!row) return false;
+    return row.status === 'sent' || !!row.whatsapp_message_id;
+  } catch (_) {
+    return false;
+  }
 }
 
 // Hard quota stop at the universal send chokepoint. A customer-facing reply is
@@ -640,6 +680,7 @@ module.exports = {
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
   isConversationOwnerPaused,
+  isReplyAlreadySent,
   isSocketOpen,
   notifyOwnerOfLidFailure,
   outgoingStaleMaxAgeMs,

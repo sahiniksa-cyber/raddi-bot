@@ -350,6 +350,32 @@ class MessageIngestService {
     }
   }
 
+  /**
+   * Applies the owner-pause to a conversation by recipient jid — used both by
+   * the normal fromMe path and by media-only fromMe messages that carry no
+   * storable text. Returns true when a pause was set.
+   */
+  async pauseConversationForOwner({ userId, recipient }) {
+    const minutes = await this.resolveOwnerPauseMinutes(userId);
+    const expiry = ownerPauseExpiry(minutes, Date.now());
+    if (!expiry) return false;
+    const result = await this.db.query(
+      `INSERT INTO conversations (user_id, sender, last_message_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id, sender) DO UPDATE SET last_message_at = NOW()
+       RETURNING id`,
+      [userId, recipient],
+    );
+    const conversationId = result.rows[0]?.id;
+    if (!conversationId) return false;
+    await this.db.query(
+      `UPDATE conversations SET escalated_until = $2 WHERE id = $1`,
+      [conversationId, expiry],
+    );
+    this.logger.info?.('owner-pause', `paused bot on ${recipient} until ${expiry.toISOString()} (media-only owner reply)`);
+    return true;
+  }
+
   async ingestOutboundHumanMessage({ userId, msg, source = 'whatsapp-web.js' }) {
     if (!this.db.isConfigured()) {
       throw new Error('DATABASE_URL is required for message ingest');
@@ -363,8 +389,12 @@ class MessageIngestService {
     }
     const text = contentFromWhatsappMessage(msg);
     if (!text) {
-      // No body and no media-derived label — nothing useful to store.
-      return { accepted: false, statusCode: 200, reason: 'from_me_empty' };
+      // No body and no media-derived label — nothing useful to STORE, but the
+      // owner still SENT something (image/file/sticker) to this customer, so
+      // the 30-minute pause must apply anyway. Owner report 2026-06-12: the
+      // bot kept replying right after the owner sent a media-only message.
+      const paused = await this.pauseConversationForOwner({ userId, recipient }).catch(() => false);
+      return { accepted: false, statusCode: 200, reason: 'from_me_empty', paused };
     }
     const phoneNumber = phoneNumberFromWhatsappMessage(msg);
     const providerMessageId = messageIdFromWhatsappMessage(msg) || `${userId}:${recipient}:fromme:${Date.now()}`;
