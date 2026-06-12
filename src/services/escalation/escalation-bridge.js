@@ -221,6 +221,40 @@ async function buildThreadStatusReply({ database = dbDefault, userId, thread } =
   }
 }
 
+// Latest thread for a TARGET (group) regardless of customer — lets the owner
+// ask "وش صار" in the group without quoting (production 2026-06-12).
+async function findLatestThreadForTarget({
+  database = dbDefault,
+  userId,
+  targetJid,
+  windowMs = BRIDGE_WINDOW_MS,
+} = {}) {
+  if (!userId || !targetJid || !database?.isConfigured?.()) return null;
+  const result = await database.query(
+    `SELECT id, customer_sender, target_jid, conversation_id
+       FROM escalation_threads
+      WHERE user_id = $1 AND target_jid = $2
+        AND created_at > NOW() - ($3 * interval '1 millisecond')
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [userId, targetJid, windowMs],
+  );
+  return result.rows[0] || null;
+}
+
+// A suppressed escalation (anti-spam cooldown) must NOT mean silence — the
+// bot already told the customer "رسلت للإدارة" (production 2026-06-12 15:57:
+// the group got nothing while the customer was promised a transfer).
+function buildCustomerUpdateText({ customerSender, text } = {}) {
+  const digits = String(customerSender || '').replace(/@.*$/, '').replace(/[^\d]/g, '');
+  return [
+    `🔁 تحديث من العميل${digits ? ` (+${digits})` : ''}:`,
+    String(text || '').trim().slice(0, 300),
+    '',
+    'للرد عليه: رد على هذه الرسالة بالحل وسيصله مباشرة.',
+  ].join('\n');
+}
+
 function buildCustomerForwardText({ customerSender, text } = {}) {
   const digits = String(customerSender || '').replace(/@.*$/, '').replace(/[^\d]/g, '');
   return [
@@ -267,8 +301,10 @@ module.exports = {
   relayResolutionToCustomer,
   forwardCustomerReplyToTeam,
   buildCustomerForwardText,
+  buildCustomerUpdateText,
   buildRephraseInstruction,
   isThreadStatusQuery,
   buildThreadStatusReply,
+  findLatestThreadForTarget,
   BRIDGE_WINDOW_MS,
 };
