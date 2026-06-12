@@ -144,6 +144,12 @@ async function relayResolutionToCustomer({
     console.warn(`${new Date().toISOString()} [escalation-bridge] rephrase failed, sending verbatim: ${rephraseError}`);
   }
 
+  // Live E2E 2026-06-12 21:51: the validator (running inside the rephrase
+  // getReply) appended an [تحويل:] tag triggered by the INTERNAL instruction
+  // text — and the raw tag reached the customer. Internal markers must never
+  // ship, whatever their origin.
+  reply = reply.replace(/\s*\[تحويل:[^\]]*\]\s*/g, ' ').replace(/\s{2,}/g, ' ').trim() || teamAnswer;
+
   const providerMessageId = `bridge:${thread.id || 'x'}:${Date.now()}`;
   const inserted = await database.query(
     `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)

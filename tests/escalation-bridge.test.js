@@ -89,6 +89,24 @@ test('relay rephrases the team answer via AI, closes the thread, and hands back 
   assert.ok(unmute, 'AI must be UN-muted so it continues the conversation');
 });
 
+test('relay strips internal [تحويل:] markers before the customer ever sees them', async () => {
+  // Live E2E 2026-06-12 21:51: the validator (running inside the rephrase
+  // getReply) appended an escalation tag triggered by the INTERNAL instruction
+  // text — and the raw tag reached the customer.
+  const database = fakeDbCapture([{ re: /INSERT INTO messages/, rows: [{ id: 'reply-1' }] }]);
+  const enqueued = [];
+  const thread = { customer_sender: '9665@s.whatsapp.net', target_jid: '120363@g.us', conversation_id: 'c1' };
+  await relayResolutionToCustomer({
+    database,
+    enqueue: async (payload) => { enqueued.push(payload); },
+    rephrase: async () => 'ممكن ترسل لي الإيميل؟ [تحويل:محمد شاهيني|وصلتك رسالة داخلية من صاحب المتجر بخصوص]',
+    userId: 'u1',
+    thread,
+    text: 'قوله يعطينا ايميله',
+  });
+  assert.equal(enqueued[0].reply, 'ممكن ترسل لي الإيميل؟', 'internal markers must never reach the customer');
+});
+
 test('relay falls back to verbatim AND persists the rephrase error for diagnosis', async () => {
   const calls = [];
   const database = {
