@@ -158,6 +158,22 @@ class MessageIngestService {
         this.logger.warn?.('bridge', 'quoted team reply has no text — skipped (send text, not media)');
         return { accepted: false, statusCode: 200, reason: 'bridge_empty_text' };
       }
+
+      // A status QUESTION to the bot ("وش صار معاك") is answered back in the
+      // GROUP — never relayed to the customer (production 2026-06-12).
+      if (this.bridge.isThreadStatusQuery(text)) {
+        const statusText = await this.bridge.buildThreadStatusReply({ database: this.db, userId, thread });
+        await this.bridge.forwardCustomerReplyToTeam({
+          userId,
+          thread,
+          customerSender: thread.customer_sender,
+          text: statusText,
+          raw: true,
+        });
+        this.logger.info?.('bridge', `answered a status query in the group for ${thread.customer_sender}`);
+        return { accepted: true, statusCode: 200, bridged: true, statusQuery: true };
+      }
+
       const result = await this.bridge.relayResolutionToCustomer({
         database: this.db,
         userId,
