@@ -85,11 +85,28 @@ function buildRephraseInstruction(teamAnswer) {
 // facts. Lazy-requires runtime-bot to avoid a circular import (runtime-bot →
 // manager → ingest → bridge). Throws on failure — the caller falls back to
 // the verbatim answer, which always beats silence.
-async function rephraseTeamAnswerWithAI({ userId, teamAnswer }) {
-  const { resolveConfigForAI } = require('../bot/runtime-bot');
-  const AIClient = require('../../../lib/ai-client');
-  const config = await resolveConfigForAI(userId);
-  const ai = new AIClient(config, console);
+//
+// PRODUCTION POSTMORTEM 2026-06-12: AIClient was constructed WITHOUT the third
+// costTracker argument; ai-client called costTracker.record(...) after every
+// successful completion → instant TypeError → every rephrase fell back to
+// verbatim. The costTracker is now mandatory here and records usage like the
+// ai-worker does (best-effort).
+async function rephraseTeamAnswerWithAI({ userId, teamAnswer, deps = {} }) {
+  const resolveConfig = deps.resolveConfig || require('../bot/runtime-bot').resolveConfigForAI;
+  const AIClient = deps.AIClient || require('../../../lib/ai-client');
+  const database = deps.database || dbDefault;
+  const config = await resolveConfig(userId);
+  const ai = new AIClient(config, console, {
+    record: async (model, inputTokens, outputTokens) => {
+      try {
+        await database.query(
+          `INSERT INTO ai_usage (user_id, model, input_tokens, output_tokens, cost_usd)
+           VALUES ($1, $2, $3, $4, 0)`,
+          [userId, model, inputTokens || 0, outputTokens || 0],
+        );
+      } catch (_) { /* usage tracking is best-effort */ }
+    },
+  });
   const reply = String(
     await ai.getReply([{ role: 'user', content: buildRephraseInstruction(teamAnswer) }]) || '',
   ).trim();
@@ -303,6 +320,7 @@ module.exports = {
   buildCustomerForwardText,
   buildCustomerUpdateText,
   buildRephraseInstruction,
+  rephraseTeamAnswerWithAI,
   isThreadStatusQuery,
   buildThreadStatusReply,
   findLatestThreadForTarget,
