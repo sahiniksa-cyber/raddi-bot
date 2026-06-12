@@ -27,6 +27,7 @@ const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-l
 const { checkMessageQuota } = require('../services/billing/message-quota');
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
+const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const {
   OpenAIMediaAnalyzer,
   buildMediaAnalysisText,
@@ -800,15 +801,31 @@ async function processAiReply(job) {
         logger.info('escalation', 'explicit customer request — bypassing cooldown/min-gap');
       }
 
-      if (cooldown.rowCount > 0) {
-        console.warn(
-          `${new Date().toISOString()} [${WORKER_NAME}] skipping escalation — cooldown active for user=${userId} conversation=${conversation.id} target=${contactTarget}`,
-        );
-      } else if (overCap || tooSoon) {
+      if ((cooldown.rowCount > 0 || tooSoon) && !overCap) {
+        // Anti-spam guards used to swallow this silently while the customer
+        // was told "رسلت للإدارة" (production 2026-06-12 15:57). Send a light
+        // update to the SAME team target instead of a second full escalation.
+        logger.warn('escalation', 'suppressed full escalation — forwarding a customer UPDATE instead', {
+          conversationId: conversation.id,
+          reason: cooldown.rowCount > 0 ? 'cooldown_30m' : 'min_gap_10m',
+        });
+        await enqueueOutgoingWhatsapp({
+          userId,
+          conversationId: conversation.id,
+          sender: escalation.ownerMessage.sender,
+          reply: buildCustomerUpdateText({ customerSender: conversation.sender, text }),
+          escalation: true,
+          customerSender: conversation.sender,
+          customerPhoneNumber: conversation.phone_number,
+        }, {
+          jobKey: `esc-update-${replyMessageId}`,
+          delay: 0,
+        }).catch((err) => logger.warn('escalation', `update forward failed: ${err.message}`));
+      } else if (overCap) {
         logger.warn('escalation', 'escalation suppressed by per-conversation cap', {
           conversationId: conversation.id,
           count24h: escStats.count24h,
-          reason: overCap ? 'cap_24h_reached' : 'min_gap_not_elapsed',
+          reason: 'cap_24h_reached',
         });
       } else {
         await enqueueOutgoingWhatsapp({

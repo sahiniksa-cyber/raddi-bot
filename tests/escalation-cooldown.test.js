@@ -44,6 +44,10 @@ test('ai-worker records every escalation it actually enqueues', () => {
   );
 });
 
-test('ai-worker logs a warning when the cooldown skips an escalation', () => {
-  assert.match(aiWorkerSource, /skipping escalation — cooldown active/);
+test('ai-worker forwards a customer UPDATE instead of silently skipping on cooldown', () => {
+  // Behavior changed 2026-06-12: a suppressed escalation used to vanish while
+  // the bot told the customer "رسلت للإدارة" — now the group gets a light
+  // update message bound to the same thread target.
+  assert.match(aiWorkerSource, /suppressed full escalation — forwarding a customer UPDATE/);
+  assert.match(aiWorkerSource, /buildCustomerUpdateText\(\{ customerSender/);
 });

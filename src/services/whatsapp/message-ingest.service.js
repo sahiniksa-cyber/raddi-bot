@@ -142,6 +142,31 @@ class MessageIngestService {
   }
 
   /**
+   * Status question in a thread-target group WITHOUT a quote — answers about
+   * the group's most recent thread. Returns a result object or null.
+   */
+  async tryGroupStatusQuery({ userId, msg }) {
+    const text = textFromWhatsappMessage(msg);
+    if (!text || !this.bridge.isThreadStatusQuery(text)) return null;
+    const thread = await this.bridge.findLatestThreadForTarget({
+      database: this.db,
+      userId,
+      targetJid: msg.from,
+    });
+    if (!thread) return null;
+    const statusText = await this.bridge.buildThreadStatusReply({ database: this.db, userId, thread });
+    await this.bridge.forwardCustomerReplyToTeam({
+      userId,
+      thread,
+      customerSender: thread.customer_sender,
+      text: statusText,
+      raw: true,
+    });
+    this.logger.info?.('bridge', `answered a no-quote status query in ${msg.from}`);
+    return { accepted: true, statusCode: 200, bridged: true, statusQuery: true };
+  }
+
+  /**
    * Escalation bridge: a message (group or 1:1, even fromMe) that QUOTES one
    * of our team-bound escalation messages is the team's solution — relay it
    * to the mapped customer instead of treating it as customer input. Returns
@@ -217,6 +242,11 @@ class MessageIngestService {
     if (bridged) return bridged;
 
     if (String(msg?.from || '').includes('@g.us')) {
+      // No quote, but a status question inside a group that has recent
+      // escalation threads ("وش صار" بدون اقتباس) — answer about the latest
+      // thread instead of ignoring it (production 2026-06-12).
+      const noQuoteStatus = await this.tryGroupStatusQuery({ userId, msg }).catch(() => null);
+      if (noQuoteStatus) return noQuoteStatus;
       return { accepted: false, statusCode: 200, reason: 'ignored' };
     }
 
