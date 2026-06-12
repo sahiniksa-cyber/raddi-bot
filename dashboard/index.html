@@ -1931,6 +1931,9 @@ async function sendTestMsg(){
       appendTestMsg('bot',document.getElementById('welcomeMsg').value||'',`ترحيب · 🧠 ${d.historyLength} رسالة في الذاكرة`);
     }
     appendTestMsg('bot',d.reply,`${d.source==='keyword'?'⚡ كلمة مفتاحية':'🤖 AI'} · 🧠 ${d.historyLength} رسالة في الذاكرة`);
+    if(d.escalationPreview){
+      appendTestMsg('bot','📣 هنا سيُرسل تنبيه التصعيد إلى: '+(d.escalationPreview.target||'')+'\n(في الواتساب الحقيقي فقط — صفحة التجربة لا ترسل للقروب)','🔔 تصعيد');
+    }
   }catch(_){typingEl.remove();appendTestMsg('bot','❌ تعذر الاتصال','خطأ');}
   finally{btn.disabled=false;inp.disabled=false;inp.focus();}
 }
