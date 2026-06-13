@@ -13,6 +13,17 @@ function saveSession(req) {
   });
 }
 
+// Rotate the session id before establishing an authenticated session. Prevents
+// session fixation: an attacker who planted a known SID on the victim cannot
+// ride it once the victim logs in (the SID changes). Guarded so test stubs
+// without a real store (no regenerate fn) simply no-op.
+function regenerateSession(req) {
+  return new Promise((resolve, reject) => {
+    if (!req.session || typeof req.session.regenerate !== 'function') return resolve();
+    req.session.regenerate((err) => (err ? reject(err) : resolve()));
+  });
+}
+
 /**
  * Decide the role for a newly registered user.
  *
@@ -57,6 +68,7 @@ function createAuthController() {
         const ok = await bcrypt.compare(password, user.password_hash);
         if (!ok) return res.json({ success: false, message: 'بيانات الدخول غير صحيحة' });
 
+        await regenerateSession(req); // SEC-2: rotate SID on auth to stop fixation
         req.session.userId = user.id;
         req.session.userName = user.name;
         if (remember) req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
@@ -112,6 +124,7 @@ function createAuthController() {
           console.error('pre-activation consume failed:', preErr.message);
         }
 
+        await regenerateSession(req); // SEC-2: rotate SID on auth to stop fixation
         req.session.userId = id;
         req.session.userName = name;
         await saveSession(req);

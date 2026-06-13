@@ -583,15 +583,27 @@ class BaileysConnectionManager extends EventEmitter {
 
   handleMessages(event, socketGeneration = this._socketGeneration) {
     if (!this._running || !Array.isArray(event?.messages)) return;
-    if (event.type && event.type !== 'notify') {
-      this.log('info', 'message', `ignored Baileys ${event.type} message batch`);
-      return;
+    // Non-'notify' batches ('append') are device-sync / history. We must NOT
+    // replay synced/backlog CUSTOMER messages (that would re-answer old chats),
+    // but we MUST still process the owner's OWN replies that arrive this way:
+    // when the owner answers a customer from their phone, WhatsApp syncs that
+    // send to this linked device as an 'append'/fromMe message — and that is
+    // exactly what triggers the 30-minute owner-pause (escalated_until). The old
+    // code dropped the whole batch, so owner-pause NEVER fired for phone replies
+    // (only for dashboard sends, which write the pause directly).
+    const ownerSyncOnly = Boolean(event.type && event.type !== 'notify');
+    if (ownerSyncOnly) {
+      this.log('info', 'message', `Baileys ${event.type} batch — honoring fromMe (owner) messages only`);
     }
 
     const candidates = [];
     const distinctSenders = new Set();
     for (const message of event.messages) {
       const msg = toWhatsappWebMessage(message);
+      // In a sync/backlog batch, only the owner's own (fromMe) replies are
+      // honored; synced customer/history messages are ignored to avoid
+      // re-answering old conversations.
+      if (ownerSyncOnly && !msg.fromMe) continue;
       // LAYER 1 of the staleness guard: SLIDING cutoff relative to NOW (not a
       // frozen-at-startup field). Any message whose ORIGINAL WhatsApp send-time
       // is older than the policy (default 30 min) is dropped the instant it

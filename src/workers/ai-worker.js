@@ -375,6 +375,24 @@ async function markInboundMessagesAnswered({ database = db, messageIds = [] }) {
   );
 }
 
+// Retire every still-queued inbound message on a muted conversation so the bot
+// NEVER answers messages a customer sent while a human was handling the chat —
+// not even after the mute window expires. Without this the messages stay
+// 'queued_for_ai' and ai-recovery would re-enqueue + answer them once the pause
+// lifts (owner report 2026-06-13). Returns the number retired.
+async function markConversationMessagesMutedSkipped({ database = db, userId, conversationId }) {
+  if (!conversationId || !database.isConfigured?.()) return { retired: 0 };
+  const result = await database.query(
+    `UPDATE messages
+        SET status = 'skipped_escalation_muted',
+            raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $3::jsonb
+      WHERE user_id = $1 AND conversation_id = $2
+        AND direction = 'inbound' AND status = 'queued_for_ai'`,
+    [userId, conversationId, JSON.stringify({ mutedSkippedAt: new Date().toISOString() })],
+  );
+  return { retired: result.rowCount || 0 };
+}
+
 async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, database = db }) {
   // provider_message_id must be unique per reply (the UNIQUE constraint is on
   // (user_id, provider_message_id)). The jobId is shared across all replies for
@@ -540,8 +558,11 @@ async function processAiReply(job) {
 
     const config = await resolveConfigForAI(userId);
     // Phase-1 self-learning: attach Q→A pairs harvested from the owner's own
-    // manual replies. Fail-open ([]) — learning must never block a reply.
-    config.learnedReplies = await loadActiveLearnedReplies({ userId }).catch(() => []);
+    // manual replies. Per-merchant kill-switch (config.learningEnabled, default
+    // ON). Fail-open ([]) — learning must never block a reply.
+    config.learnedReplies = (config.learningEnabled === false)
+      ? []
+      : await loadActiveLearnedReplies({ userId }).catch(() => []);
     const conversation = await resolveConversation({
       userId,
       conversationId: payload.conversationId,
@@ -557,12 +578,19 @@ async function processAiReply(job) {
       logger.info('escalation', 'muted by escalation — skipping AI reply', {
         conversationId: conversation.id,
       });
+      // Retire the messages received during the human-handover window so they
+      // are NOT answered after the mute lifts (the human is handling them).
+      // Otherwise they linger as 'queued_for_ai' and ai-recovery re-answers them
+      // once the pause expires.
+      const retired = await markConversationMessagesMutedSkipped({
+        database: db, userId, conversationId: conversation.id,
+      }).catch((e) => { logger.warn('escalation', `failed to retire muted messages: ${e.message}`); return { retired: 0 }; });
       await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
         status: 'skipped_escalation_muted',
         finished_at: new Date(),
         attempts: job.attemptsMade + 1,
       });
-      return { skipped: true, reason: 'escalation_muted' };
+      return { skipped: true, reason: 'escalation_muted', retired: retired?.retired || 0 };
     }
 
     const fallbackText = await loadInboundMessage({
@@ -812,6 +840,18 @@ async function processAiReply(job) {
       delay: replyDelayMs,
     });
 
+    // CX-2: the customer reply is committed (enqueued above). Mark the inbound
+    // answered NOW — before the secondary escalation side-channel — so that if
+    // any escalation query fails, neither a BullMQ retry nor ai-recovery can
+    // regenerate a SECOND customer reply (a new replyMessageId would escape the
+    // per-replyMessageId dedup guard). Production duplicate-reply, 2026-06-12.
+    await markInboundMessagesAnswered({
+      messageIds: enrichedMessages.map(message => message.id),
+    });
+
+    // The escalation forwarding below is a best-effort SIDE CHANNEL — wrapped so
+    // a failure can never throw the job and trigger a customer re-send.
+    try {
     if (escalation.ownerMessage) {
       const contactTarget = escalation.ownerMessage.contactTarget || escalation.ownerMessage.sender;
       const cooldown = await db.query(
@@ -902,10 +942,12 @@ async function processAiReply(job) {
         }
       }
     }
-
-    await markInboundMessagesAnswered({
-      messageIds: enrichedMessages.map(message => message.id),
-    });
+    } catch (escErr) {
+      // CX-2: the customer reply was already enqueued and the inbound already
+      // marked answered above, so a failure in the escalation side-channel must
+      // NOT throw (a retry would re-send a SECOND customer reply).
+      logger.warn('escalation', `escalation side-channel failed (customer already answered): ${escErr.message}`);
+    }
 
     // Fire-and-forget profile extraction. Never awaited, never throws — the
     // helper schedules a setImmediate and swallows every error internally.
@@ -1095,6 +1137,7 @@ module.exports = {
   loadPendingInboundMessages,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
+  markConversationMessagesMutedSkipped,
   messagesCoveredByTriggers,
   markInboundMessagesQuotaExceeded,
   recentCustomerContext,

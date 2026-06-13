@@ -370,6 +370,27 @@ class MessageIngestService {
     return true;
   }
 
+  /**
+   * True when this WhatsApp message id was sent by the BOT itself (the outgoing
+   * worker records every send's Baileys key.id as whatsapp_message_id). Used to
+   * avoid mistaking the bot's own echoed message for an owner manual reply and
+   * self-pausing. Fail-open to false (treat as owner reply) on any error.
+   */
+  async isOwnBotSend({ userId, whatsappId }) {
+    if (!userId || !whatsappId) return false;
+    try {
+      const r = await this.db.query(
+        `SELECT 1 FROM messages
+          WHERE user_id = $1 AND whatsapp_message_id = $2 AND direction = 'outbound'
+          LIMIT 1`,
+        [userId, whatsappId],
+      );
+      return r.rows.length > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   async ingestOutboundHumanMessage({ userId, msg, source = 'whatsapp-web.js' }) {
     if (!this.db.isConfigured()) {
       throw new Error('DATABASE_URL is required for message ingest');
@@ -381,6 +402,18 @@ class MessageIngestService {
     if (!recipient) {
       return { accepted: false, statusCode: 200, reason: 'from_me_no_recipient' };
     }
+
+    // CRITICAL: tell the OWNER's manual reply (which MUST pause the bot) apart
+    // from the BOT's OWN outgoing message echoed back by WhatsApp as fromMe
+    // (which must NOT pause — otherwise the bot silences itself after every
+    // reply it sends). The outgoing worker records the Baileys key.id of every
+    // message it sends as whatsapp_message_id, so a fromMe whose id we already
+    // sent is our own echo, not a human reply.
+    const whatsappId = messageIdFromWhatsappMessage(msg);
+    if (whatsappId && (await this.isOwnBotSend({ userId, whatsappId }))) {
+      return { accepted: true, statusCode: 200, reason: 'own_bot_echo', fromMe: true };
+    }
+
     const text = contentFromWhatsappMessage(msg);
     if (!text) {
       // No body and no media-derived label — nothing useful to STORE, but the
@@ -391,7 +424,7 @@ class MessageIngestService {
       return { accepted: false, statusCode: 200, reason: 'from_me_empty', paused };
     }
     const phoneNumber = phoneNumberFromWhatsappMessage(msg);
-    const providerMessageId = messageIdFromWhatsappMessage(msg) || `${userId}:${recipient}:fromme:${Date.now()}`;
+    const providerMessageId = whatsappId || `${userId}:${recipient}:fromme:${Date.now()}`;
     const rawPayload = { source, fromMe: true, ...toSafeRawPayload(msg) };
 
     const saved = await this.db.transaction(async (client) => {

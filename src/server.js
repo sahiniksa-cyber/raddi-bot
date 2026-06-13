@@ -335,6 +335,10 @@ function createApp() {
     dashboardDir: path.join(process.cwd(), 'dashboard'),
     requireAuth,
     billingSettings,
+    // Async bot resolver for the admin per-merchant control panel. MUST be the
+    // async getUserBot (creates+loads on demand) — NOT syncBotLookup, which
+    // throws for any merchant not already in botCache.
+    getUserBot,
     storageStatus: {
       path: DATA_DIR,
       persistent: DATA_DIR !== process.cwd(),
