@@ -28,6 +28,7 @@ const { checkMessageQuota } = require('../services/billing/message-quota');
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
+const { isOriginalMessageStale } = require('../../lib/message-staleness');
 const {
   OpenAIMediaAnalyzer,
   buildMediaAnalysisText,
@@ -576,6 +577,35 @@ async function processAiReply(job) {
       fallbackMessageId: payload.messageId,
       fallbackText,
     });
+
+    // LAYER 2 of the staleness guard (independent of Layer 1 at ingest). Even
+    // if an old message slipped past ingest, re-validate the ORIGINAL WhatsApp
+    // send-time here — the DB `created_at` is the insert time and looks fresh,
+    // so we must check raw_payload.timestamp. If EVERY pending message is older
+    // than the policy, retire them and never reply (the customer has long since
+    // moved on). Fail-open: messages with no/invalid timestamp count as fresh.
+    if (pendingMessages.length > 0
+        && pendingMessages.every(m => isOriginalMessageStale(m?.raw_payload?.timestamp))) {
+      // Retire them as ai_failed (terminal — recovery only re-picks
+      // queued_for_ai) so they leave the stuck count and are never answered.
+      await db.query(
+        `UPDATE messages SET status = 'ai_failed',
+                raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb
+          WHERE id = ANY($1::uuid[])`,
+        [pendingMessages.map(m => m.id), JSON.stringify({ retiredAt: new Date().toISOString(), reason: 'stale_message' })],
+      ).catch(() => {});
+      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+        status: 'skipped_stale',
+        finished_at: new Date(),
+        attempts: job.attemptsMade + 1,
+        last_error: 'all pending messages older than the staleness policy',
+      });
+      logger.warn('staleness', 'skipped — every pending message is older than the policy (no reply to an old conversation)', {
+        conversationId: conversation.id,
+      });
+      return { skipped: true, reason: 'stale_message' };
+    }
+
     const mediaAnalyzer = new OpenAIMediaAnalyzer({
       apiKey: config.openaiApiKey || '',
       logger,

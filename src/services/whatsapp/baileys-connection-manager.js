@@ -16,6 +16,7 @@ const {
 const db = require('../../db/client');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
+const { isOriginalMessageStale } = require('../../../lib/message-staleness');
 const { usePostgresBaileysAuthState, BaileysPostgresAuthState } = require('./baileys-postgres-auth');
 
 // WebSocket readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED.
@@ -185,10 +186,12 @@ class BaileysConnectionManager extends EventEmitter {
     this.acceptMessagesAfterMs = this.computeAcceptMessagesAfterMs();
   }
 
+  // DEPRECATED — kept only so nothing that referenced it breaks. The acceptance
+  // cutoff is now a SLIDING check via the shared message-staleness policy
+  // (isOriginalMessageStale), evaluated per message at receive time. The old
+  // frozen-at-startup field caused hours-old re-delivered messages to be
+  // accepted on a long-running process (production incident 2026-06-12).
   computeAcceptMessagesAfterMs() {
-    // Default 30 minutes (was 60s). This widens the inbound acceptance window so we
-    // don't silently drop messages received while the bot was briefly disconnected.
-    // dedup is handled by provider_message_id, so a longer window cannot cause duplicates.
     return Date.now() - parseInt(process.env.WA_ACCEPT_MESSAGES_GRACE_MS || '1800000', 10);
   }
 
@@ -589,9 +592,13 @@ class BaileysConnectionManager extends EventEmitter {
     const distinctSenders = new Set();
     for (const message of event.messages) {
       const msg = toWhatsappWebMessage(message);
-      const messageTimeMs = timestampToMs(msg.timestamp);
-      if (messageTimeMs && messageTimeMs < this.acceptMessagesAfterMs) {
-        this.log('info', 'message', `ignored stale Baileys message ${msg.id?.id || 'unknown'}`);
+      // LAYER 1 of the staleness guard: SLIDING cutoff relative to NOW (not a
+      // frozen-at-startup field). Any message whose ORIGINAL WhatsApp send-time
+      // is older than the policy (default 30 min) is dropped the instant it
+      // arrives — this is what stops re-delivered/backlog messages from old
+      // conversations surfacing after a reconnect.
+      if (isOriginalMessageStale(msg.timestamp)) {
+        this.log('info', 'message', `ignored stale Baileys message ${msg.id?.id || 'unknown'} (original ts older than policy)`);
         continue;
       }
       candidates.push({ raw: message, msg });
