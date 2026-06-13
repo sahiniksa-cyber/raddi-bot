@@ -2,6 +2,18 @@
 
 const MARKER_RE = /\[تحويل:([^|\]\n]+)\|([^\]\n]+)\]/;
 
+// Defensive scrub: strip ANY [تحويل:...] residue — well-formed (WITH a pipe) or
+// MALFORMED (without one, e.g. "[تحويل:المالك]"). MARKER_RE only matches the
+// piped form, so a malformed marker would otherwise survive into the customer
+// reply and leak internal routing text to the customer (CX-1). The escalation
+// bridge already scrubs on its side; this guarantees the main path too.
+function stripEscalationMarkers(text) {
+  return String(text || '')
+    .replace(/\[تحويل:[^\]]*\]/g, '')   // bracketed marker, any inner content
+    .replace(/\[تحويل:[^\n]*$/m, '')    // unterminated marker (missing ]) to line end
+    .trim();
+}
+
 function cleanDigits(value) {
   return String(value || '').replace(/[^\d]/g, '');
 }
@@ -147,7 +159,9 @@ function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNu
   // Only escalate on the AI's explicit [تحويل:...] tag. A customer keyword match
   // alone is NOT enough — it caused the owner to be spammed for routine questions.
   const shouldSend = Boolean(explicit);
-  const customerReply = explicit?.customerReply || String(reply || '').trim();
+  // Always scrub: catches a malformed marker in the fallback path AND any second
+  // (malformed) marker left behind in explicit.customerReply (CX-1).
+  const customerReply = stripEscalationMarkers(explicit?.customerReply || reply);
 
   const contactTarget = contact?.target || contact?.jid || contact?.groupJid || contact?.phone;
   if (!shouldSend || !contactTarget) {
@@ -197,4 +211,5 @@ module.exports = {
   normalizeEscalationTarget,
   prepareEscalation,
   applyEscalationTemplate,
+  stripEscalationMarkers,
 };

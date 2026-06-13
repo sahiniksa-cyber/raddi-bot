@@ -129,6 +129,21 @@
         <tbody id="rows"><tr><td colspan="8" class="empty">جاري التحميل...</td></tr></tbody>
       </table>
     </section>
+
+    <h2 style="margin-top:32px;font-size:18px">🛠️ تحكم التاجر</h2>
+    <div class="sub" style="margin-bottom:10px">ابحث عن تاجر برقم الواتساب أو الإيميل أو الاسم، ثم تحكّم ببوته مباشرة.</div>
+    <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
+      <input id="mcSearch" type="search" placeholder="رقم / إيميل / اسم التاجر" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:260px" onkeydown="if(event.key==='Enter')mcSearchMerchants()">
+      <button onclick="mcSearchMerchants()" style="padding:10px 16px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">بحث</button>
+    </div>
+    <section class="panel" id="mcResultsPanel" style="margin-bottom:16px;display:none">
+      <table>
+        <thead><tr><th>التاجر</th><th>واتساب</th><th>الرصيد</th><th>اختيار</th></tr></thead>
+        <tbody id="mcResults"></tbody>
+      </table>
+    </section>
+    <section class="panel" id="mcCard" style="margin-bottom:32px;display:none;padding:16px"></section>
+
     <h2 style="margin-top:32px;font-size:18px">🎟️ الكوبونات</h2>
     <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
       <input id="cpCode" placeholder="كود الكوبون" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:140px">
@@ -188,6 +203,103 @@ function quotaLabel(c){
   return days!=null?`نشط · ${days} يوم متبقي`:'نشط';
 }
 function toast(msg,err=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show'+(err?' err':'');setTimeout(()=>t.className='toast',2600)}
+
+// ---- Merchant control panel ----
+function fmtDate(v){return v?new Date(v).toLocaleString('ar-SA'):'-'}
+async function mcSearchMerchants(){
+  const q=document.getElementById('mcSearch').value.trim();
+  if(!q){toast('اكتب رقم أو إيميل أو اسم',true);return}
+  try{
+    const r=await fetch('/api/admin/customers/search?q='+encodeURIComponent(q),{credentials:'same-origin'});
+    if(r.status===401){location.href='/login';return}
+    const d=await r.json();
+    const list=d.results||[];
+    const panel=document.getElementById('mcResultsPanel');
+    if(!list.length){document.getElementById('mcResults').innerHTML='<tr><td colspan="4" class="empty">لا توجد نتائج</td></tr>';panel.style.display='';return}
+    document.getElementById('mcResults').innerHTML=list.map(m=>`
+      <tr>
+        <td><b>${esc(m.name||'بدون اسم')}</b><div class="sub">${esc(m.email||'')} ${m.phone?'· '+esc(m.phone):''}</div></td>
+        <td>${chip(m.whatsappStatus)}</td>
+        <td>${(m.messagesRemaining??0).toLocaleString('ar-EG')}</td>
+        <td><button class="blue" onclick="mcLoadDiagnostics('${esc(m.userId)}')">عرض ▾</button></td>
+      </tr>`).join('');
+    panel.style.display='';
+  }catch(_){toast('تعذر البحث',true)}
+}
+async function mcLoadDiagnostics(userId){
+  const card=document.getElementById('mcCard');
+  card.style.display='';card.innerHTML='<div class="sub">جاري التحميل...</div>';
+  try{
+    const r=await fetch('/api/admin/customers/'+encodeURIComponent(userId)+'/diagnostics',{credentials:'same-origin'});
+    if(r.status===404){card.innerHTML='<div class="empty">التاجر غير موجود</div>';return}
+    const d=await r.json();
+    if(!d.success){card.innerHTML='<div class="empty">'+esc(d.message||'خطأ')+'</div>';return}
+    mcRenderCard(userId,d.diagnostics);
+  }catch(_){card.innerHTML='<div class="empty">تعذّر تحميل التشخيص</div>'}
+}
+function mcCell(lbl,val){return `<div><div class="sub">${esc(lbl)}</div><b>${esc(val)}</b></div>`}
+function mcRenderCard(userId,d){
+  const w=d.whatsapp||{},live=d.live||{},b=d.billing||{},c=d.messageCounts||{};
+  const backoff=live.inConnConflictBackoff?' <span class="sub">⏳ في انتظار 440</span>':'';
+  const safeId=esc(userId).replace(/'/g,"\\'");
+  document.getElementById('mcCard').innerHTML=`
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;align-items:center">
+      <div><b style="font-size:16px">${esc(d.identity?.name||'بدون اسم')}</b>
+        <div class="sub">${esc(d.identity?.email||'')} ${d.identity?.phone?'· '+esc(d.identity.phone):''}</div></div>
+      <div>${chip(live.status||w.status)}${backoff}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin-top:14px">
+      ${mcCell('الرصيد المتبقي',(b.messagesRemaining??0).toLocaleString('ar-EG'))}
+      ${mcCell('حالة الاتصال',label(live.status||w.status)+(live.statusAgeMs?` (${Math.round(live.statusAgeMs/1000)}ث)`:''))}
+      ${mcCell('المطلوب',label(w.desiredState||'-'))}
+      ${mcCell('آخر اتصال',fmtDate(w.lastConnectedAt))}
+      ${mcCell('آخر انفصال',fmtDate(w.lastDisconnectedAt))}
+      ${mcCell('إعادة الاتصال',w.reconnectCount??0)}
+      ${mcCell('رسائل عالقة (AI)',c.queued_for_ai||0)}
+      ${mcCell('رسائل فشلت',c.ai_failed||0)}
+      ${mcCell('آخر رد',fmtDate(d.lastReplyAt))}
+      ${mcCell('قفل الاتصال',w.leaseOwner?('محجوز: '+w.leaseOwner):'حر')}
+      ${mcCell('آخر خطأ',w.lastError||'-')}
+    </div>
+    <div class="actions" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="good" onclick="mcAction('${safeId}','restart','إعادة تشغيل')">🔄 إعادة تشغيل</button>
+      <button class="blue" onclick="mcShowQr('${safeId}')">📱 إعادة ربط (QR)</button>
+      <button onclick="mcAction('${safeId}','stop','إيقاف')">⏹ إيقاف</button>
+      <button class="blue" onclick="mcAction('${safeId}','release-lease','تحرير القفل')">🔓 تحرير القفل</button>
+      <button class="bad" onclick="mcClearSession('${safeId}')">🗑 مسح الجلسة</button>
+      <button onclick="mcLoadDiagnostics('${safeId}')">↻ تحديث</button>
+    </div>
+    <div id="mcQr" style="margin-top:12px"></div>`;
+}
+async function mcAction(userId,action,labelText){
+  try{
+    const r=await fetch('/api/admin/customers/'+encodeURIComponent(userId)+'/bot/'+action,{
+      method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:'{}'});
+    const d=await r.json();
+    if(d.success){toast(labelText+' ✓');setTimeout(()=>mcLoadDiagnostics(userId),800)}
+    else toast(d.message||(labelText+' فشل'),true);
+  }catch(_){toast(labelText+' فشل',true)}
+}
+async function mcClearSession(userId){
+  if(!confirm('مسح الجلسة يلغي ربط الواتساب نهائياً — التاجر سيحتاج يمسح QR من جديد. متأكد؟'))return;
+  try{
+    const r=await fetch('/api/admin/customers/'+encodeURIComponent(userId)+'/bot/clear-session',{
+      method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({confirm:true})});
+    const d=await r.json();
+    if(d.success){toast('مُسحت الجلسة ✓');setTimeout(()=>mcLoadDiagnostics(userId),800)}
+    else toast(d.message||'فشل المسح',true);
+  }catch(_){toast('فشل المسح',true)}
+}
+function mcShowQr(userId){
+  const box=document.getElementById('mcQr');
+  if(!box)return;
+  box.innerHTML='<div class="sub">جاري جلب الرمز... إن لم يظهر اضغط إعادة تشغيل أولاً.</div>';
+  const img=new Image();
+  img.style.cssText='width:220px;height:220px;border:1px solid var(--border);border-radius:8px;background:#fff;padding:6px';
+  img.onload=()=>{box.innerHTML='';box.appendChild(img)};
+  img.onerror=()=>{box.innerHTML='<div class="sub">لا يوجد رمز QR الآن — اضغط إعادة تشغيل ثم حاول بعد لحظات.</div>'};
+  img.src='/api/admin/customers/'+encodeURIComponent(userId)+'/bot/qr-image?t='+Date.now();
+}
 async function loadCustomers(){
   try{
     const r=await fetch('/api/admin/customers');

@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const db = require('../db/client');
@@ -28,6 +29,17 @@ const {
   listPreActivations,
   deletePreActivation,
 } = require('../services/admin/pre-activations');
+const { createAdminMerchantController } = require('../controllers/admin-merchant.controller');
+const { listAdminAuditLog } = require('../services/admin/admin-audit');
+
+// Constant-time string compare (SEC-3). Hash both sides to a fixed 32-byte
+// digest first so timingSafeEqual never throws on length mismatch and no length
+// information leaks via timing.
+function timingSafeEqualStr(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a || '')).digest();
+  const hb = crypto.createHash('sha256').update(String(b || '')).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
 
 function canOpenAdminConsole({ path: requestPath, user, settings }) {
   if (!settings?.adminSecretPath || requestPath !== settings.adminSecretPath) return false;
@@ -161,11 +173,26 @@ function createAdminRoutes(deps = {}) {
     }
     const { password } = req.body || {};
     const adminPassword = process.env.ADMIN_PASSWORD;
-    if (!adminPassword || password !== adminPassword) {
+    if (!adminPassword || !timingSafeEqualStr(password, adminPassword)) {
       return res.status(401).json({ success: false, message: 'كلمة مرور خاطئة' });
     }
+    // SEC-2: rotate the session id on privilege elevation (fixation defence)
+    // while preserving the already-authenticated user identity. Guarded for
+    // test stubs whose session has no regenerate().
+    const finish = () => res.json({ success: true, redirect: settings.adminSecretPath });
+    if (req.session && typeof req.session.regenerate === 'function') {
+      const uid = req.session.userId;
+      const uname = req.session.userName;
+      return req.session.regenerate((err) => {
+        if (err) return res.status(500).json({ success: false, message: 'session error' });
+        req.session.userId = uid;
+        req.session.userName = uname;
+        req.session.isAdmin = true;
+        return req.session.save(() => finish());
+      });
+    }
     req.session.isAdmin = true;
-    return res.json({ success: true, redirect: settings.adminSecretPath });
+    return finish();
   });
 
   router.get(settings.adminSecretPath, requireOwner, (req, res) => {
@@ -352,6 +379,44 @@ function createAdminRoutes(deps = {}) {
       next(err);
     }
   });
+
+  // ---- Per-merchant bot control panel (admin) ----
+  // Only mounted when a bot resolver is injected (server.js passes getUserBot).
+  // Kept additive: existing merchant routes/controllers are untouched.
+  if (typeof deps.getUserBot === 'function') {
+    const merchant = deps.adminMerchantController
+      || createAdminMerchantController({ getUserBot: deps.getUserBot, database: deps.database || db });
+
+    // Tight rate limit on the powerful/destructive bot actions (defense in
+    // depth on top of the global /api limiter) — caps a stuck button or an
+    // errant script from hammering restart/clear-session across merchants.
+    const botActionLimiter = rateLimitFactory({
+      windowMs: 60 * 1000,
+      max: 30,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { success: false, error: 'too_many_attempts', message: 'محاولات كثيرة، حاول لاحقاً' },
+    });
+
+    // Search must be registered before nothing shadows it (it doesn't collide
+    // with /:userId/* since there's no bare GET /:userId route).
+    router.get('/api/admin/customers/search', requireOwner, merchant.search);
+    router.get('/api/admin/customers/:userId/diagnostics', requireOwner, merchant.diagnostics);
+    router.get('/api/admin/customers/:userId/bot/qr-image', requireOwner, merchant.qrImage);
+    router.post('/api/admin/customers/:userId/bot/restart', requireOwner, botActionLimiter, merchant.restart);
+    router.post('/api/admin/customers/:userId/bot/stop', requireOwner, botActionLimiter, merchant.stop);
+    router.post('/api/admin/customers/:userId/bot/clear-session', requireOwner, botActionLimiter, merchant.clearSession);
+    router.post('/api/admin/customers/:userId/bot/release-lease', requireOwner, botActionLimiter, merchant.releaseLease);
+
+    router.get('/api/admin/customers/:userId/audit-log', requireOwner, async (req, res, next) => {
+      try {
+        const items = await listAdminAuditLog({ targetUserId: req.params.userId, limit: req.query.limit }, { db });
+        res.json({ success: true, items });
+      } catch (err) {
+        next(err);
+      }
+    });
+  }
 
   return router;
 }

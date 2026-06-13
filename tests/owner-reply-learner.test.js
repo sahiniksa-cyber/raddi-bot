@@ -191,7 +191,7 @@ test('server registers learned-replies routes and starts the learning loop', () 
 
 // ── runLearningPass orchestration
 
-test('runLearningPass walks users with recent owner replies and saves filtered pairs', async () => {
+test('runLearningPass saves a pair ONLY when its question is frequent (>=3 distinct customers)', async () => {
   const calls = [];
   const database = {
     calls,
@@ -199,6 +199,14 @@ test('runLearningPass walks users with recent owner replies and saves filtered p
     query: async (sql, params) => {
       calls.push({ sql, params });
       if (/DISTINCT user_id/i.test(sql)) return { rows: [{ user_id: 'u1' }] };
+      // frequency scan: the SAME question asked by 3 DISTINCT conversations → frequent
+      if (/content IS NOT NULL/i.test(sql)) {
+        return { rows: [
+          { conversation_id: 'c1', content: 'كم يستغرق الشحن للرياض؟' },
+          { conversation_id: 'c2', content: 'كم يستغرق الشحن للرياض؟' },
+          { conversation_id: 'c3', content: 'كم يستغرق الشحن للرياض؟' },
+        ] };
+      }
       if (/LATERAL/i.test(sql)) {
         return { rows: [{
           owner_message_id: 'om1', conversation_id: 'c1',
@@ -213,4 +221,42 @@ test('runLearningPass walks users with recent owner replies and saves filtered p
   const result = await runLearningPass({ database });
   assert.equal(result.users, 1);
   assert.equal(result.learned, 1);
+});
+
+test('runLearningPass does NOT save a one-off question (not frequent)', async () => {
+  const database = {
+    isConfigured: () => true,
+    query: async (sql) => {
+      if (/DISTINCT user_id/i.test(sql)) return { rows: [{ user_id: 'u1' }] };
+      // frequency scan returns the question from only ONE conversation → not frequent
+      if (/content IS NOT NULL/i.test(sql)) return { rows: [{ conversation_id: 'c1', content: 'كم يستغرق الشحن للرياض؟' }] };
+      if (/LATERAL/i.test(sql)) {
+        return { rows: [{
+          owner_message_id: 'om1', conversation_id: 'c1',
+          answer: 'الشحن يومين عمل وبرسوم 25 ريال',
+          question_message_id: 'im1', question: 'كم يستغرق الشحن للرياض؟',
+        }] };
+      }
+      if (/SELECT COUNT/i.test(sql)) return { rows: [{ n: '0' }] };
+      return { rows: [] };
+    },
+  };
+  const result = await runLearningPass({ database });
+  assert.equal(result.learned, 0);
+});
+
+test('runLearningPass skips a user who turned self-learning OFF (config.learningEnabled=false)', async () => {
+  let sawLateral = false;
+  const database = {
+    isConfigured: () => true,
+    query: async (sql) => {
+      if (/DISTINCT user_id/i.test(sql)) return { rows: [{ user_id: 'u1' }] };
+      if (/config->>'learningEnabled'/.test(sql)) return { rows: [{ v: 'false' }] };
+      if (/LATERAL/i.test(sql)) { sawLateral = true; return { rows: [] }; }
+      return { rows: [] };
+    },
+  };
+  const result = await runLearningPass({ database });
+  assert.equal(result.learned, 0);
+  assert.equal(sawLateral, false, 'must not even extract pairs for a disabled user');
 });

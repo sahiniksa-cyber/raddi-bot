@@ -174,6 +174,22 @@ const statements = [
     expire TIMESTAMPTZ NOT NULL
   )`,
 
+  // Audit trail for powerful admin actions on a specific merchant's bot
+  // (restart/stop/clear-session/release-lease/top-up). admin_user_id and
+  // target_user_id are SET NULL on user delete so the audit row survives.
+  `CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    admin_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    action TEXT NOT NULL,
+    target_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    result TEXT NOT NULL DEFAULT 'ok',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_admin_audit_log_target_created
+    ON admin_audit_log(target_user_id, created_at DESC)`,
+
   `CREATE INDEX IF NOT EXISTS idx_bot_configs_user_id
     ON bot_configs(user_id)`,
 

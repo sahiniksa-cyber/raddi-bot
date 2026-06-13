@@ -1359,6 +1359,20 @@ body{background-attachment:scroll}
     <button onclick="resetTraining()" style="width:100%;margin-top:10px;padding:11px;border-radius:11px;border:1px solid var(--border);background:#fff;color:var(--text-soft);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer">↩ إعادة التدريب</button>
   </div>
 
+  <!-- ═══ SELF-LEARNING ON/OFF (per-merchant) ═══ -->
+  <div class="panel" id="learningTogglePanel" style="margin-top:26px;text-align:right">
+    <div class="phdr"><span>⚙️ التعلّم الذاتي</span></div>
+    <div class="pbdy">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:800;font-size:14px">
+        <input type="checkbox" id="learningEnabled" onchange="saveLearningEnabled()" checked style="width:18px;height:18px;cursor:pointer">
+        <span>تفعيل تعلّم البوت من ردودك تلقائياً</span>
+      </label>
+      <p class="hint" style="margin:9px 0 0;color:var(--text-soft);font-size:12.5px;line-height:1.7">
+        لما يكون مفعّلاً، يحفظ البوت إجاباتك على الأسئلة <b>المتكررة</b> (سأَلها ٣ عملاء مختلفين فأكثر) ويستخدمها لاحقاً. عطّله لو ما تبي البوت يتعلّم تلقائياً.
+      </p>
+    </div>
+  </div>
+
   <!-- ═══ LEARNED REPLIES — separate section of the Train page ═══ -->
   <div class="panel" id="learnedPanel" style="display:none;margin-top:26px;text-align:right">
     <div class="phdr"><span>🧠 ردود تعلّمها البوت منك</span></div>
@@ -1852,6 +1866,7 @@ function fillForm(c){
   document.getElementById('respLang').value=c.responseLanguage||'العربية الفصحى السهلة';
   document.getElementById('maxLen').value=c.maxResponseLength||300;
   document.getElementById('ownerPauseMinutes').value=c.ownerPauseMinutes??30;
+  {const _le=document.getElementById('learningEnabled');if(_le)_le.checked=c.learningEnabled!==false;}
   document.getElementById('errorMessage').value=c.errorMessage||'';
   setModel(c.model||'google/gemini-2.0-flash');
   // Reply style
@@ -2830,6 +2845,17 @@ async function resumeAll(){
 async function resumeChat(sender){
   await fetch('/api/paused-chats/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender})});
   loadPausedChats();toast('✅ تم استئناف البوت على +'+sender);
+}
+
+// ── SELF-LEARNING on/off toggle (per-merchant config.learningEnabled) ──
+// POSTs only the flag; the /api/config merge preserves all other fields.
+async function saveLearningEnabled(){
+  const enabled=document.getElementById('learningEnabled').checked;
+  try{
+    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({learningEnabled:enabled})});
+    if(!r.ok)throw new Error('save failed');
+    toast(enabled?'✅ تم تفعيل التعلّم الذاتي':'⏸ تم تعطيل التعلّم الذاتي');
+  }catch(_){toast('تعذّر حفظ الإعداد',true);document.getElementById('learningEnabled').checked=!enabled;}
 }
 
 // ── LEARNED REPLIES (phase-1 self-learning) ──

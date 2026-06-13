@@ -28,9 +28,62 @@ const PAIR_WINDOW_HOURS = 6;
 const MIN_QUESTION_LEN = 8;
 const MIN_ANSWER_LEN = 8;
 const MAX_TEXT_LEN = 500;
+// A question is only learned if it was asked by at least this many DISTINCT
+// customers (conversations) within the lookback — so the bot learns the
+// FREQUENTLY-asked questions, not one-off/random ones. Owner request 2026-06-13.
+const MIN_DISTINCT_CUSTOMERS = parseInt(process.env.LEARNING_MIN_DISTINCT_CUSTOMERS || '3', 10);
+const FREQ_SCAN_LIMIT = parseInt(process.env.LEARNING_FREQ_SCAN_LIMIT || '5000', 10);
 
+// Global master switch (ops kill-switch). Per-merchant control is config.learningEnabled.
 function learningEnabled() {
   return process.env.LEARNED_REPLIES_ENABLED !== 'false';
+}
+
+// Per-merchant switch: config.learningEnabled (default ON). Lets a merchant turn
+// self-learning off from the dashboard without affecting other merchants.
+async function userLearningEnabled({ database = db, userId } = {}) {
+  if (!userId || !database?.isConfigured?.()) return true;
+  try {
+    const r = await database.query(
+      `SELECT (config->>'learningEnabled') AS v FROM bot_configs WHERE user_id = $1`,
+      [userId],
+    );
+    return r.rows?.[0]?.v !== 'false'; // default enabled when unset
+  } catch (_) {
+    return true;
+  }
+}
+
+// Returns the set of normalized questions that were asked by >= minDistinct
+// DISTINCT conversations (customers) in the lookback window. Used to keep only
+// frequently-asked questions when harvesting learned replies.
+async function computeFrequentQuestionKeys({
+  database = db, userId, lookbackMs = LOOKBACK_MS, minDistinct = MIN_DISTINCT_CUSTOMERS,
+} = {}) {
+  if (!userId || !database?.isConfigured?.()) return new Set();
+  const result = await database.query(
+    `SELECT conversation_id, content
+       FROM messages
+      WHERE user_id = $1 AND direction = 'inbound'
+        AND content IS NOT NULL
+        AND created_at > NOW() - ($2 * interval '1 millisecond')
+      ORDER BY created_at DESC
+      LIMIT $3`,
+    [userId, lookbackMs, FREQ_SCAN_LIMIT],
+  );
+  const byKey = new Map(); // normalized question -> Set(conversationId)
+  for (const row of result.rows || []) {
+    if (!looksLikeQuestion(row.content)) continue;
+    const key = normalizeQuestion(row.content);
+    if (!key) continue;
+    if (!byKey.has(key)) byKey.set(key, new Set());
+    byKey.get(key).add(row.conversation_id);
+  }
+  const frequent = new Set();
+  for (const [key, convs] of byKey) {
+    if (convs.size >= minDistinct) frequent.add(key);
+  }
+  return frequent;
 }
 
 // Any leading bracket means an ingest-generated placeholder ("[صورة من
@@ -244,8 +297,14 @@ async function runLearningPass({ database = db, lookbackMs = LOOKBACK_MS } = {})
   for (const row of usersResult.rows || []) {
     users++;
     try {
+      // Per-merchant kill-switch: skip users who turned self-learning off.
+      if (!(await userLearningEnabled({ database, userId: row.user_id }))) continue;
+      // Only learn questions asked by >= MIN_DISTINCT_CUSTOMERS distinct
+      // customers (frequently-asked), not one-off/random ones.
+      const frequent = await computeFrequentQuestionKeys({ database, userId: row.user_id, lookbackMs });
       const pairs = (await extractLearnablePairs({ database, userId: row.user_id, lookbackMs }))
-        .filter((p) => isLearnablePair(p.question, p.answer));
+        .filter((p) => isLearnablePair(p.question, p.answer))
+        .filter((p) => frequent.has(normalizeQuestion(p.question)));
       if (!pairs.length) continue;
       const result = await saveLearnedReplies({ database, userId: row.user_id, pairs });
       learned += result.saved || 0;
@@ -267,4 +326,7 @@ module.exports = {
   setLearnedReplyStatus,
   updateLearnedReply,
   runLearningPass,
+  userLearningEnabled,
+  computeFrequentQuestionKeys,
+  MIN_DISTINCT_CUSTOMERS,
 };
