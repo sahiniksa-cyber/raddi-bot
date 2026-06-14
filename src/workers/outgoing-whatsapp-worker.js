@@ -198,7 +198,12 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
 
   const bot = await waitForConnectedBot(loadedBot, {
     reason: `outgoing:${job.id}`,
-    timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
+    // C-step1: cap the inline wait at 10s (was 45s). The outgoing worker is
+    // single-concurrency, so a disconnected merchant's job used to FREEZE every
+    // other merchant's sends for up to 45s. At 10s a dead/disconnected bot frees
+    // the worker ~4.5x faster; the job is re-queued (BullMQ retry) and delivered
+    // once that bot reconnects — no message loss. Tunable via env for live ops.
+    timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '10000', 10),
   });
 
   // Bail out before sending if the underlying socket is not open. Baileys may report
