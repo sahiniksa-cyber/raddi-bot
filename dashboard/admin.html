@@ -131,10 +131,12 @@
     </section>
 
     <h2 style="margin-top:32px;font-size:18px">🛠️ تحكم التاجر</h2>
-    <div class="sub" style="margin-bottom:10px">ابحث عن تاجر برقم الواتساب أو الإيميل أو الاسم، ثم تحكّم ببوته مباشرة.</div>
-    <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
-      <input id="mcSearch" type="search" placeholder="رقم / إيميل / اسم التاجر" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:260px" onkeydown="if(event.key==='Enter')mcSearchMerchants()">
-      <button onclick="mcSearchMerchants()" style="padding:10px 16px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">بحث</button>
+    <div class="sub" style="margin-bottom:8px">كل الحسابات تظهر تحت — 🟢 متصل · 🔴 مفصول · 🟡 يحتاج ربط. اضغط أي حساب للتحكم به.</div>
+    <div id="mcSummary" style="margin-bottom:8px;font-weight:800;font-size:13px"></div>
+    <div id="mcAllMerchants" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:8px;margin-bottom:16px"><div class="sub">جاري التحميل...</div></div>
+    <div style="display:flex;gap:8px;margin:6px 0 12px;flex-wrap:wrap;align-items:center">
+      <input id="mcSearch" type="search" placeholder="بحث اختياري: رقم / إيميل / اسم" style="padding:9px;border:1px solid var(--border);border-radius:8px;min-width:240px" onkeydown="if(event.key==='Enter')mcSearchMerchants()">
+      <button onclick="mcSearchMerchants()" style="padding:9px 14px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">بحث</button>
     </div>
     <section class="panel" id="mcResultsPanel" style="margin-bottom:16px;display:none">
       <table>
@@ -206,6 +208,30 @@ function toast(msg,err=false){const t=document.getElementById('toast');t.textCon
 
 // ---- Merchant control panel ----
 function fmtDate(v){return v?new Date(v).toLocaleString('ar-SA'):'-'}
+
+// Compact grid of ALL merchants with their WhatsApp status (reuses the already
+// loaded `customers` list). Click a merchant to open its live controls.
+function mcStatusStyle(s){
+  if(s==='connected')return {bg:'#e7f7ee',br:'#0f9f6e',dot:'#0f9f6e',rank:2};
+  if(['waiting_qr','qr_ready','reconnecting','connecting'].includes(s))return {bg:'#fff7e6',br:'#d98a00',dot:'#e0a100',rank:1};
+  return {bg:'#fdeaea',br:'#d64545',dot:'#d64545',rank:0}; // stopped/disconnected/error
+}
+function mcRenderAllMerchants(){
+  const box=document.getElementById('mcAllMerchants');if(!box)return;
+  const sum=document.getElementById('mcSummary');
+  if(!customers||!customers.length){box.innerHTML='<div class="sub">لا توجد حسابات</div>';if(sum)sum.textContent='';return;}
+  const conn=customers.filter(c=>c.whatsappStatus==='connected').length;
+  const off=customers.length-conn;
+  if(sum)sum.innerHTML=`🟢 متصل: ${conn} &nbsp;·&nbsp; 🔴 غير متصل: ${off} &nbsp;·&nbsp; الإجمالي: ${customers.length}`;
+  // disconnected first so problems are obvious at a glance
+  const list=[...customers].sort((a,b)=>mcStatusStyle(a.whatsappStatus).rank-mcStatusStyle(b.whatsappStatus).rank);
+  box.innerHTML=list.map(c=>{const st=mcStatusStyle(c.whatsappStatus);
+    return `<button onclick="mcLoadDiagnostics('${esc(c.userId)}')" title="${esc(c.email||'')}" style="display:flex;align-items:center;gap:7px;text-align:right;padding:8px 10px;border:1px solid ${st.br};background:${st.bg};border-radius:9px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--text)">
+      <span style="width:9px;height:9px;border-radius:50%;background:${st.dot};flex:none"></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(c.name||c.whatsappPhone||c.email||'تاجر')}</span>
+      <span class="sub" style="font-size:10.5px;flex:none">${esc(label(c.whatsappStatus))}</span>
+    </button>`;}).join('');
+}
 async function mcSearchMerchants(){
   const q=document.getElementById('mcSearch').value.trim();
   if(!q){toast('اكتب رقم أو إيميل أو اسم',true);return}
@@ -305,7 +331,7 @@ async function loadCustomers(){
     const r=await fetch('/api/admin/customers');
     if(r.status===401){location.href='/login';return}
     if(!r.ok){document.getElementById('rows').innerHTML='<tr><td colspan="8" class="empty">غير مصرح</td></tr>';return}
-    const d=await r.json();customers=d.customers||[];render();
+    const d=await r.json();customers=d.customers||[];render();mcRenderAllMerchants();
   }catch(_){toast('تعذر تحميل العملاء',true)}
 }
 function render(){
