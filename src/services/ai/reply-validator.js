@@ -102,11 +102,23 @@ function botSignalsTransfer(reply) {
   return BOT_TRANSFER_RE.test(text) || BOT_TRANSFER_CLAIM_RE.test(text) || BOT_FIX_PROMISE_RE.test(text);
 }
 
+// الرد يطلب من العميل معلومة (إيميل/رقم طلب/بيانات) = البوت يعالج بنفسه،
+// فالتصعيد التلقائي في نفس الرسالة يناقضه. (طلب العميل الصريح لموظف يتجاوز هذا.)
+const ASK_CUSTOMER_INFO_RE = /(الإيميل|الايميل|البريد|رقم الطلب|رقم الجوال|رقمك|بياناتك|بيانات حسابك|رقم العملية|اسم المستخدم|المبلغ المحوّل|رقم الحساب)/;
+function replyAsksCustomerForInfo(reply) {
+  const t = String(reply || '');
+  return ASK_CUSTOMER_INFO_RE.test(t) && /[؟?]/.test(t);
+}
+
 function enforceEscalationTag(reply, config = {}, customerText = '') {
   const text = String(reply || '');
   if (/\[تحويل:/.test(text)) return text;            // النموذج وضعها
+  const explicit = detectEscalationIntent(customerText);
   // صعّد إذا طلب العميل صراحةً موظفاً، أو إذا قال البوت نفسه إنه يحوّل للفريق.
-  if (!detectEscalationIntent(customerText) && !botSignalsTransfer(text)) return text;
+  if (!explicit && !botSignalsTransfer(text)) return text;
+  // لا تصعيد تلقائي بينما البوت يجمع معلومة من العميل (تناقض «اطلب الإيميل» + «نحوّل للمختص»).
+  // طلب العميل الصريح لموظف يبقى يُصعّد.
+  if (!explicit && replyAsksCustomerForInfo(text)) return text;
   const contacts = config.escalationContacts || [];
   if (!contacts.length) return text;                 // لا جهة تصعيد مضبوطة
   const name = contacts[0].name || 'المالك';

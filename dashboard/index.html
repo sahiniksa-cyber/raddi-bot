@@ -1882,7 +1882,7 @@ function fillForm(c){
   document.getElementById('rsAllowPeriods').checked = r.allowSentencePeriods !== false;
   document.getElementById('rsLength').value=r.replyLength||'medium';
   renderChips('greetingChips',r.greetingPhrases||['أهلاً وسهلاً 🌹','هلا والله','حياك الله']);
-  renderChips('closingChips',r.closingPhrases||['تأمر شي ثاني؟','في خدمتك']);
+  renderChips('closingChips',r.closingPhrases||[]);
   renderChips('avoidChips',r.avoidWords||[]);
   renderChips('avoidPhrasesChips',r.avoidPhrases||[]);
 

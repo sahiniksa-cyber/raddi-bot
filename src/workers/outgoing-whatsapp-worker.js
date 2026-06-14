@@ -159,7 +159,7 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
     return { skipped: true, reason: 'bot_stopped_by_owner' };
   }
 
-  if (!payload.escalation && await isConversationOwnerPaused({ userId, sender })) {
+  if (!payload.escalation && await isConversationOwnerPaused({ userId, sender, replyMessageId })) {
     const message = 'outgoing reply canceled because owner replied (escalated_until active)';
     await markReplyMessage(replyMessageId, 'canceled', {
       sentBy: WORKER_NAME,
@@ -448,7 +448,7 @@ async function cancelOutgoingForQuota(job, { replyMessageId }) {
 // in (humanization delay 50-75s) would still fire after their message and
 // "interrupt" the conversation. Cancel it here. Fail-open on every edge so a
 // missing column / DB hiccup can never block customer replies.
-async function isConversationOwnerPaused({ userId, sender, database = db }) {
+async function isConversationOwnerPaused({ userId, sender, replyMessageId = null, database = db }) {
   if (!userId || !sender || !database?.isConfigured?.()) return false;
   try {
     const result = await database.query(
@@ -458,7 +458,30 @@ async function isConversationOwnerPaused({ userId, sender, database = db }) {
       [userId, sender],
     );
     const until = result.rows[0]?.escalated_until;
-    return !!until && new Date(until).getTime() > Date.now();
+    if (until && new Date(until).getTime() > Date.now()) return true;
+
+    // Fact-based signal (not just the time window): if an actual OWNER/human
+    // reply landed AFTER this AI reply was generated, the owner has stepped in —
+    // cancel the pending AI reply even if escalated_until was never set
+    // (ownerPauseMinutes=0, a silent failure, etc.). Distinguishes a human reply
+    // (phone 'sent_by_human' or dashboard manual 'sent' with source=manual_send)
+    // from the bot's own AI sends so we don't self-cancel.
+    if (replyMessageId) {
+      const human = await database.query(
+        `SELECT 1
+           FROM messages ai
+           JOIN messages hum ON hum.conversation_id = ai.conversation_id
+          WHERE ai.id = $1
+            AND hum.direction = 'outbound'
+            AND hum.created_at > ai.created_at
+            AND (hum.status = 'sent_by_human'
+                 OR (hum.status = 'sent' AND hum.raw_payload->>'source' = 'manual_send'))
+          LIMIT 1`,
+        [replyMessageId],
+      );
+      if (human.rows.length > 0) return true;
+    }
+    return false;
   } catch (_) {
     return false;
   }
