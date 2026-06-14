@@ -19,6 +19,16 @@ const { MessageIngestService } = require('./message-ingest.service');
 const { isOriginalMessageStale } = require('../../../lib/message-staleness');
 const { usePostgresBaileysAuthState, BaileysPostgresAuthState } = require('./baileys-postgres-auth');
 
+// WhatsApp-reconnect backoff — SEPARATE from the shared RETRY.DELAYS_MS (which
+// also drives process-restart in start-all). The first retry is ~1s so a normal
+// drop reconnects almost immediately, then it escalates to protect against a
+// reconnect storm (rapid reconnects trigger WhatsApp 440 / Bad MAC churn). Not
+// sub-second on purpose: reconnecting before the old socket is closed server-side
+// is exactly what causes a 440 conflict. Tunable via env (comma-separated ms).
+const RECONNECT_DELAYS_MS = (process.env.WA_RECONNECT_DELAYS_MS
+  ? process.env.WA_RECONNECT_DELAYS_MS.split(',').map(n => parseInt(n.trim(), 10)).filter(Number.isFinite)
+  : null) || [1000, 2000, 5000, 12000, 20000, 40000, 60000];
+
 // WebSocket readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED.
 // The passive heartbeat must treat ONLY explicit CLOSING/CLOSED as dead.
 // `undefined`/`null` means this Baileys build doesn't expose `ws.readyState`
@@ -419,8 +429,8 @@ class BaileysConnectionManager extends EventEmitter {
       return;
     }
     this._effectiveRetryCount = Math.max(this._effectiveRetryCount, retryCount) + 1;
-    const retryIndex = Math.min(this._effectiveRetryCount - 1, RETRY.DELAYS_MS.length - 1);
-    const delay = RETRY.DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
+    const retryIndex = Math.min(this._effectiveRetryCount - 1, RECONNECT_DELAYS_MS.length - 1);
+    const delay = RECONNECT_DELAYS_MS[retryIndex] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
     this.reconnectCount++;
     this.ready = false;
     this.qr = null;
@@ -497,7 +507,7 @@ class BaileysConnectionManager extends EventEmitter {
       this.emit('ready', this.state());
 
       clearTimeout(this._stableTimer);
-      const stableMs = parseInt(process.env.WA_STABLE_RESET_MS || '20000', 10);
+      const stableMs = parseInt(process.env.WA_STABLE_RESET_MS || '12000', 10);
       this._stableTimer = setTimeout(() => {
         if (this.ready && this._socketGeneration === socketGeneration) {
           this._effectiveRetryCount = 0;
