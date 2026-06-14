@@ -874,7 +874,11 @@ async function processAiReply(job) {
       });
       const tenMinAgo = Date.now() - 10 * 60 * 1000;
       const lastSentMs = escStats.lastSentAt ? escStats.lastSentAt.getTime() : 0;
-      const overCap = escStats.count24h >= 3;
+      // Re-escalation cap is per-merchant configurable (0 = unlimited). The bot
+      // can escalate AGAIN on a new issue, not just once.
+      const maxEsc = parseInt(config.maxEscalationsPerConversation, 10);
+      const effectiveMaxEsc = Number.isFinite(maxEsc) ? maxEsc : 5;
+      const overCap = effectiveMaxEsc > 0 && escStats.count24h >= effectiveMaxEsc;
       let tooSoon = escStats.count24h >= 1 && lastSentMs > tenMinAgo;
 
       // The customer EXPLICITLY asked to reach the team ("ارسل للادارة مرة
@@ -931,18 +935,23 @@ async function processAiReply(job) {
           [userId, conversation.id, contactTarget],
         );
 
-        // Mute the bot for 30 minutes so the human operator can take over
-        // without the AI talking on top. Failures here are non-fatal — we
-        // already enqueued the escalation, the mute is a nicety.
-        try {
-          await db.query(
-            `UPDATE conversations
-                SET escalated_until = NOW() + INTERVAL '30 minutes'
-              WHERE id = $1`,
-            [conversation.id],
-          );
-        } catch (muteErr) {
-          logger.warn('escalation', `failed to set escalated_until: ${muteErr.message}`);
+        // Pause the bot after escalation ONLY if the merchant enabled it
+        // (default OFF). Default behavior now: the bot KEEPS HELPING after an
+        // escalation so the customer is never stranded when no human picks up.
+        // When enabled, the pause duration is configurable (default 5 min).
+        if (config.escalationPausesBot === true) {
+          const pm = parseInt(config.escalationPauseMinutes, 10);
+          const pauseMin = Number.isFinite(pm) && pm > 0 ? pm : 5;
+          try {
+            await db.query(
+              `UPDATE conversations
+                  SET escalated_until = NOW() + ($2 * INTERVAL '1 minute')
+                WHERE id = $1`,
+              [conversation.id, pauseMin],
+            );
+          } catch (muteErr) {
+            logger.warn('escalation', `failed to set escalated_until: ${muteErr.message}`);
+          }
         }
       }
     }

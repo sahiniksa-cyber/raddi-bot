@@ -1196,6 +1196,38 @@ body{background-attachment:scroll}
     </div>
   </div>
 
+  <!-- ═══ ADVANCED ESCALATION SETTINGS ═══ -->
+  <div class="panel">
+    <div class="phdr"><span>⚙️ إعدادات التصعيد المتقدمة</span></div>
+    <div class="pbdy">
+      <label>متى يصعّد البوت؟ (إضافةً لعدم معرفته الجواب — تظهر للبوت في تعليماته)</label>
+      <textarea id="escConditions" rows="3" placeholder="مثال: لو العميل غاضب، أو طلب استرجاع، أو سأل عن طلب متأخر، أو طلب موظف بشري"></textarea>
+
+      <label style="display:block;margin-top:14px">أقصى عدد تصعيدات لكل محادثة خلال ٢٤ ساعة (٠ = بدون حد)</label>
+      <input type="number" id="maxEscalations" min="0" placeholder="5" style="width:120px">
+      <div class="hint">يسمح للبوت يصعّد أكثر من مرة لو طرأت مشكلة جديدة.</div>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-top:16px;cursor:pointer;font-weight:600">
+        <input type="checkbox" id="escPausesBot" onchange="document.getElementById('escPauseMinWrap').style.display=this.checked?'block':'none'"> أوقف البوت بعد التصعيد (لينتظر تدخّلك)
+      </label>
+      <div class="hint">افتراضياً مُعطّل — البوت يكمل يساعد العميل بعد التصعيد عشان ما يُهجَر لو ما رديت.</div>
+      <div id="escPauseMinWrap" style="display:none;margin-top:8px">
+        <label style="display:block">مدة التوقف بعد التصعيد (دقائق)</label>
+        <input type="number" id="escPauseMinutes" min="1" placeholder="5" style="width:120px">
+      </div>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-top:18px;cursor:pointer;font-weight:600">
+        <input type="checkbox" id="ownerPausePhraseMode" onchange="document.getElementById('ownerPausePhrasesWrap').style.display=this.checked?'block':'none'"> أوقف البوت عند ردّي من جوالي فقط لو احتوى عبارات معيّنة
+      </label>
+      <div class="hint">افتراضياً مُعطّل — أي ردّ منك يوقف البوت ٣٠ دقيقة. فعّله لو تبي ردودك العادية ما توقف البوت.</div>
+      <div id="ownerPausePhrasesWrap" style="display:none;margin-top:8px">
+        <label style="display:block">عبارات التوقيف (افصل بينها بفاصلة)</label>
+        <textarea id="ownerPausePhrases" rows="2" placeholder="خليني أرد، أنا بكمل، تواصل واتساب"></textarea>
+        <div class="hint">ردّك يوقف البوت فقط لو احتوى إحدى هالعبارات؛ غير كذا يكمل يرد.</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══ OWNER PAUSE STATUS ═══ -->
   <div class="panel" id="pausedPanel" style="display:none">
     <div class="phdr">
@@ -1897,6 +1929,14 @@ function fillForm(c){
   renderKW(c.autoReplyKeywords||{});
   renderProd(c.products||[]);
   renderEscContacts(c.escalationContacts||[]);
+  // Advanced escalation settings
+  {const e=id=>document.getElementById(id);
+   if(e('escConditions'))e('escConditions').value=c.escalationConditions||'';
+   if(e('maxEscalations'))e('maxEscalations').value=c.maxEscalationsPerConversation??5;
+   if(e('escPausesBot')){e('escPausesBot').checked=c.escalationPausesBot===true;e('escPauseMinWrap').style.display=e('escPausesBot').checked?'block':'none';}
+   if(e('escPauseMinutes'))e('escPauseMinutes').value=c.escalationPauseMinutes??5;
+   if(e('ownerPausePhraseMode')){e('ownerPausePhraseMode').checked=c.ownerPausePhraseMode===true;e('ownerPausePhrasesWrap').style.display=e('ownerPausePhraseMode').checked?'block':'none';}
+   if(e('ownerPausePhrases'))e('ownerPausePhrases').value=(Array.isArray(c.ownerPausePhrases)?c.ownerPausePhrases:[]).join('، ');}
 
   // Training: remember previously saved answers and show the review panel.
   savedTrainAnswers=Array.isArray(c.trainAnswers)?c.trainAnswers:[];
@@ -2544,6 +2584,12 @@ async function saveConf(){
     welcomeMode,
     autoReplyKeywords:kws,products:prods,
     escalationContacts:escContacts,
+    escalationConditions:(document.getElementById('escConditions')?.value||'').trim(),
+    maxEscalationsPerConversation:(()=>{const v=parseInt(document.getElementById('maxEscalations')?.value,10);return Number.isFinite(v)&&v>=0?v:5;})(),
+    escalationPausesBot:!!document.getElementById('escPausesBot')?.checked,
+    escalationPauseMinutes:(()=>{const v=parseInt(document.getElementById('escPauseMinutes')?.value,10);return Number.isFinite(v)&&v>0?v:5;})(),
+    ownerPausePhraseMode:!!document.getElementById('ownerPausePhraseMode')?.checked,
+    ownerPausePhrases:(document.getElementById('ownerPausePhrases')?.value||'').split(/[،,\n]/).map(s=>s.trim()).filter(Boolean),
   };
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(nc)});
