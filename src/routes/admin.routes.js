@@ -196,6 +196,9 @@ function createAdminRoutes(deps = {}) {
   });
 
   router.get(settings.adminSecretPath, requireOwner, (req, res) => {
+    // No-store so a redeploy's admin.html shows up immediately — the page was
+    // being served from the browser cache, which made updates look "not applied".
+    res.set('Cache-Control', 'no-store, must-revalidate');
     res.sendFile(path.join(dashboardDir, 'admin.html'));
   });
 
