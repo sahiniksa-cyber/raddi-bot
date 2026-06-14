@@ -1110,9 +1110,19 @@ body{background-attachment:scroll}
       <!-- Owner pause window -->
       <div class="g2">
         <div>
-          <label>إيقاف البوت عند ردّك يدوياً (دقيقة)</label>
-          <input type="number" id="ownerPauseMinutes" placeholder="30" min="0">
-          <small style="display:block;color:#888">لما ترد على العميل بنفسك، يسكت البوت عن المحادثة هذه المدة. 0 = لا يتوقف.</small>
+          <label>إيقاف البوت عند ردّك يدوياً</label>
+          <select id="ownerPauseMinutes">
+            <option value="0">لا يتوقف</option>
+            <option value="3">٣ دقائق</option>
+            <option value="5">٥ دقائق</option>
+            <option value="10">١٠ دقائق</option>
+            <option value="15">١٥ دقيقة</option>
+            <option value="30">٣٠ دقيقة</option>
+            <option value="45">٤٥ دقيقة</option>
+            <option value="60">ساعة</option>
+            <option value="120">ساعتين</option>
+          </select>
+          <small style="display:block;color:#888">لما ترد على العميل بنفسك، يسكت البوت عن المحادثة هذه المدة.</small>
         </div>
       </div>
 
@@ -1207,19 +1217,29 @@ body{background-attachment:scroll}
       <input type="number" id="maxEscalations" min="0" placeholder="5" style="width:120px">
       <div class="hint">يسمح للبوت يصعّد أكثر من مرة لو طرأت مشكلة جديدة.</div>
 
-      <label style="display:flex;align-items:center;gap:8px;margin-top:16px;cursor:pointer;font-weight:600">
-        <input type="checkbox" id="escPausesBot" onchange="document.getElementById('escPauseMinWrap').style.display=this.checked?'block':'none'"> أوقف البوت بعد التصعيد (لينتظر تدخّلك)
+      <label style="display:flex;align-items:center;gap:8px;margin-top:16px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text);text-transform:none;letter-spacing:0">
+        <input type="checkbox" id="escPausesBot" style="flex:none;width:18px;height:18px;margin:0" onchange="document.getElementById('escPauseMinWrap').style.display=this.checked?'block':'none'">
+        <span style="flex:1">أوقف البوت بعد التصعيد (لينتظر تدخّلك)</span>
       </label>
       <div class="hint">افتراضياً مُعطّل — البوت يكمل يساعد العميل بعد التصعيد عشان ما يُهجَر لو ما رديت.</div>
       <div id="escPauseMinWrap" style="display:none;margin-top:8px">
-        <label style="display:block">مدة التوقف بعد التصعيد (دقائق)</label>
-        <input type="number" id="escPauseMinutes" min="1" placeholder="5" style="width:120px">
+        <label style="display:block">مدة التوقف بعد التصعيد</label>
+        <select id="escPauseMinutes" style="width:auto">
+          <option value="3">٣ دقائق</option>
+          <option value="5">٥ دقائق</option>
+          <option value="10">١٠ دقائق</option>
+          <option value="15">١٥ دقيقة</option>
+          <option value="30">٣٠ دقيقة</option>
+          <option value="45">٤٥ دقيقة</option>
+          <option value="60">ساعة</option>
+        </select>
       </div>
 
-      <label style="display:flex;align-items:center;gap:8px;margin-top:18px;cursor:pointer;font-weight:600">
-        <input type="checkbox" id="ownerPausePhraseMode" onchange="document.getElementById('ownerPausePhrasesWrap').style.display=this.checked?'block':'none'"> أوقف البوت عند ردّي من جوالي فقط لو احتوى عبارات معيّنة
+      <label style="display:flex;align-items:center;gap:8px;margin-top:18px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text);text-transform:none;letter-spacing:0">
+        <input type="checkbox" id="ownerPausePhraseMode" style="flex:none;width:18px;height:18px;margin:0" onchange="document.getElementById('ownerPausePhrasesWrap').style.display=this.checked?'block':'none'">
+        <span style="flex:1">أوقف البوت عند ردّي من جوالي فقط لو احتوى عبارات معيّنة</span>
       </label>
-      <div class="hint">افتراضياً مُعطّل — أي ردّ منك يوقف البوت ٣٠ دقيقة. فعّله لو تبي ردودك العادية ما توقف البوت.</div>
+      <div class="hint">افتراضياً مُعطّل — أي ردّ منك يوقف البوت (بالمدة المحددة في "مدة الكتم" فوق). فعّله لو تبي ردودك العادية ما توقف البوت.</div>
       <div id="ownerPausePhrasesWrap" style="display:none;margin-top:8px">
         <label style="display:block">عبارات التوقيف (افصل بينها بفاصلة)</label>
         <textarea id="ownerPausePhrases" rows="2" placeholder="خليني أرد، أنا بكمل، تواصل واتساب"></textarea>
