@@ -40,6 +40,7 @@
     <div>
       <h1>لوحة الإدارة الخاصة</h1>
       <div class="sub">إدارة العملاء، الدفع، الإيقاف، والتفعيل اليدوي</div>
+      <div class="sub" id="adminVersion" style="margin-top:4px;font-size:11px;opacity:.7">النسخة: …</div>
     </div>
     <button onclick="location.href='/'">فتح المنصة</button>
   </header>
@@ -593,6 +594,13 @@ loadCustomers();
 loadCoupons();
 loadPreActivations();
 loadHealth();
+(async function loadVersion(){
+  try{
+    const d=await fetch('/api/admin/version',{credentials:'same-origin'}).then(r=>r.json());
+    const el=document.getElementById('adminVersion');
+    if(el&&d&&d.success){el.textContent='النسخة: '+d.commit+' · بدأ التشغيل: '+new Date(d.startedAt).toLocaleString('ar-SA');}
+  }catch(_){}
+})();
 setInterval(loadHealth,30000);
 </script>
 <script>

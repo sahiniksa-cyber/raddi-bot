@@ -32,6 +32,14 @@ const {
 const { createAdminMerchantController } = require('../controllers/admin-merchant.controller');
 const { listAdminAuditLog } = require('../services/admin/admin-audit');
 
+// Set when the server process boots (module load ≈ deploy start). Lets the admin
+// page show WHICH build is live so a stale browser cache / non-applied deploy is
+// obvious at a glance.
+const SERVER_BOOT_TIME = new Date().toISOString();
+const DEPLOY_COMMIT = String(
+  process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT || process.env.SOURCE_VERSION || 'local',
+).slice(0, 7);
+
 // Constant-time string compare (SEC-3). Hash both sides to a fixed 32-byte
 // digest first so timingSafeEqual never throws on length mismatch and no length
 // information leaks via timing.
@@ -200,6 +208,13 @@ function createAdminRoutes(deps = {}) {
     // being served from the browser cache, which made updates look "not applied".
     res.set('Cache-Control', 'no-store, must-revalidate');
     res.sendFile(path.join(dashboardDir, 'admin.html'));
+  });
+
+  // Which build is live + when it started — so a stale cache / non-applied
+  // deploy is obvious from the admin page.
+  router.get('/api/admin/version', requireOwner, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, commit: DEPLOY_COMMIT, startedAt: SERVER_BOOT_TIME, node: process.version });
   });
 
   // Platform health snapshot + recent incidents for the 24/7 monitoring console.
