@@ -345,6 +345,35 @@ class MessageIngestService {
   }
 
   /**
+   * Decides whether THIS owner reply should pause the bot.
+   * - ownerPausePhraseMode=false (default): ANY owner reply pauses.
+   * - ownerPausePhraseMode=true: only replies CONTAINING a configured trigger
+   *   phrase pause; casual messages let the bot keep chatting.
+   * Never throws — fail-open to true (pause), the safer default.
+   */
+  async shouldOwnerReplyPause(userId, text) {
+    try {
+      const result = await this.db.query(
+        `SELECT (config->>'ownerPausePhraseMode') AS mode, (config->'ownerPausePhrases') AS phrases
+           FROM bot_configs WHERE user_id = $1`,
+        [userId],
+      );
+      const row = result?.rows?.[0] || {};
+      if (String(row.mode) !== 'true') return true; // mode off → any reply pauses
+      let phrases = [];
+      try { phrases = Array.isArray(row.phrases) ? row.phrases : JSON.parse(row.phrases || '[]'); } catch (_) { phrases = []; }
+      const norm = (s) => String(s || '')
+        .replace(/[إأآا]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+        .replace(/\s+/g, ' ').trim().toLowerCase();
+      const t = norm(text);
+      if (!t || !phrases.length) return false; // mode on but nothing to match → don't pause
+      return phrases.some((p) => { const np = norm(p); return np && t.includes(np); });
+    } catch (_e) {
+      return true;
+    }
+  }
+
+  /**
    * Applies the owner-pause to a conversation by recipient jid — used both by
    * the normal fromMe path and by media-only fromMe messages that carry no
    * storable text. Returns true when a pause was set.
@@ -420,7 +449,9 @@ class MessageIngestService {
       // owner still SENT something (image/file/sticker) to this customer, so
       // the 30-minute pause must apply anyway. Owner report 2026-06-12: the
       // bot kept replying right after the owner sent a media-only message.
-      const paused = await this.pauseConversationForOwner({ userId, recipient }).catch(() => false);
+      const paused = (await this.shouldOwnerReplyPause(userId, ''))
+        ? await this.pauseConversationForOwner({ userId, recipient }).catch(() => false)
+        : false;
       return { accepted: false, statusCode: 200, reason: 'from_me_empty', paused };
     }
     const phoneNumber = phoneNumberFromWhatsappMessage(msg);
@@ -452,7 +483,9 @@ class MessageIngestService {
     // muted conversations, so no worker change is needed. Wrapped in try/catch
     // so a failure here never breaks recording the owner's reply.
     try {
-      const minutes = await this.resolveOwnerPauseMinutes(userId);
+      // Only pause if this reply qualifies (phrase-mode aware).
+      const shouldPause = await this.shouldOwnerReplyPause(userId, text);
+      const minutes = shouldPause ? await this.resolveOwnerPauseMinutes(userId) : 0;
       const expiry = ownerPauseExpiry(minutes, Date.now());
       if (expiry && saved?.conversationId) {
         await this.db.query(
