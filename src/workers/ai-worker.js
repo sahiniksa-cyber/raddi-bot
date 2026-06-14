@@ -323,7 +323,7 @@ function buildCombinedInboundText(messages = []) {
 
   if (parts.length <= 1) return parts[0] || '';
   return [
-    'رسائل العميل المتتالية. أجب عليها كلها في رد واحد واضح:',
+    'هذه رسائل متتالية من نفس العميل تعبّر غالباً عن نية واحدة. افهم نيته الكاملة منها مجتمعةً، وردّ برد واحد متماسك يعالج ما يحتاجه فعلاً — لا ترد على كل سطر على حدة، ولا تجمع عدة مسارات في رد واحد:',
     ...parts.map((text, index) => `${index + 1}. ${text}`),
   ].join('\n');
 }
@@ -540,6 +540,9 @@ async function sendInstantAutoReply({
 async function processAiReply(job) {
   const payload = job.data || {};
   const logger = createLogger(job.id);
+  // Tracks whether a real customer reply was already enqueued — guards the
+  // final-attempt fallback from sending "لحظات من فضلك" ON TOP of a real reply.
+  let outgoingEnqueued = false;
   try {
     if (!db.isConfigured()) {
       throw new Error('DATABASE_URL is required for AI worker');
@@ -825,6 +828,15 @@ async function processAiReply(job) {
     });
     const replyDelayMs = resolveReplyDelayMs(config);
 
+    // B1 (anti-duplicate): mark the inbound answered BEFORE enqueue. If the
+    // worker is killed (deploy/SIGTERM), loses its BullMQ lock, or the enqueue
+    // throws, the inbound must NOT stay 'queued_for_ai' — otherwise a retry or
+    // ai-recovery regenerates a SECOND reply with a fresh replyMessageId that
+    // escapes the per-replyMessageId dedup guard (the production duplicate).
+    await markInboundMessagesAnswered({
+      messageIds: enrichedMessages.map(message => message.id),
+    });
+
     await enqueueOutgoingWhatsapp({
       userId,
       conversationId: conversation.id,
@@ -839,15 +851,7 @@ async function processAiReply(job) {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,
     });
-
-    // CX-2: the customer reply is committed (enqueued above). Mark the inbound
-    // answered NOW — before the secondary escalation side-channel — so that if
-    // any escalation query fails, neither a BullMQ retry nor ai-recovery can
-    // regenerate a SECOND customer reply (a new replyMessageId would escape the
-    // per-replyMessageId dedup guard). Production duplicate-reply, 2026-06-12.
-    await markInboundMessagesAnswered({
-      messageIds: enrichedMessages.map(message => message.id),
-    });
+    outgoingEnqueued = true;
 
     // The escalation forwarding below is a best-effort SIDE CHANNEL — wrapped so
     // a failure can never throw the job and trigger a customer re-send.
@@ -977,7 +981,9 @@ async function processAiReply(job) {
     // retry — and the deterministic jobKey makes the enqueue idempotent.
     const attempts = Number(job?.attemptsMade) || 0;
     const isFinalAttempt = attempts >= 2;
-    if (isFinalAttempt) {
+    // Anti-duplicate (Path 3): never send the fallback ON TOP of a real reply
+    // that was already enqueued this run — that produced "real reply + لحظات من فضلك".
+    if (isFinalAttempt && !outgoingEnqueued) {
       try {
         const config = await resolveConfigForAI(payload.userId).catch(() => ({}));
         const fallbackText =
