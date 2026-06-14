@@ -367,10 +367,11 @@ function createAdminRoutes(deps = {}) {
   // customer signs up with that email their account is auto-activated.
   router.post('/api/admin/pre-activations', requireOwner, async (req, res) => {
     try {
-      const { email, durationDays, note } = req.body || {};
+      const { email, durationDays, messages, note } = req.body || {};
       const row = await createPreActivation({
         email,
-        durationDays: Number(durationDays),
+        durationDays, // empty/0 => permanent (handled in createPreActivation)
+        messages,
         note,
         createdByAdmin: req.session?.userId || null,
       });

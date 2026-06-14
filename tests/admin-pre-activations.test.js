@@ -27,11 +27,12 @@ function dispatch(sql, params = []) {
 
   // INSERT new row (used inside createPreActivation transaction)
   if (text.startsWith('INSERT INTO pre_activations')) {
-    const [email, duration_days, note, created_by_admin] = params;
+    const [email, duration_days, messages, note, created_by_admin] = params;
     const row = {
       id: nextId++,
       email,
       duration_days,
+      messages: messages || 0,
       note: note || null,
       created_by_admin: created_by_admin || null,
       created_at: new Date(),
@@ -59,7 +60,7 @@ function dispatch(sql, params = []) {
   }
 
   // SELECT list
-  if (text.startsWith('SELECT id, email, duration_days, note, created_by_admin')) {
+  if (text.startsWith('SELECT id, email, duration_days, messages, note, created_by_admin')) {
     const includeUsed = !text.includes('WHERE used_at IS NULL');
     let out = rows.slice();
     if (!includeUsed) out = out.filter(r => r.used_at == null);
@@ -78,7 +79,7 @@ function dispatch(sql, params = []) {
     if (!pick) return { rows: [], rowCount: 0 };
     pick.used_at = new Date();
     pick.used_by_user_id = userId;
-    return { rows: [{ id: pick.id, duration_days: pick.duration_days }], rowCount: 1 };
+    return { rows: [{ id: pick.id, duration_days: pick.duration_days, messages: pick.messages || 0 }], rowCount: 1 };
   }
 
   throw new Error('Unexpected query in test stub: ' + text);
@@ -123,20 +124,27 @@ test('createPreActivation rejects missing email', async () => {
   );
 });
 
-test('createPreActivation rejects non-positive durationDays', async () => {
+test('createPreActivation treats missing/0/invalid duration as PERMANENT (duration_days null) + stores messages', async () => {
   resetState();
-  await assert.rejects(
-    () => createPreActivation({ email: 'a@b.com', durationDays: 0 }),
-    /durationDays/,
-  );
-  await assert.rejects(
-    () => createPreActivation({ email: 'a@b.com', durationDays: -5 }),
-    /durationDays/,
-  );
-  await assert.rejects(
-    () => createPreActivation({ email: 'a@b.com', durationDays: 'abc' }),
-    /durationDays/,
-  );
+  const a = await createPreActivation({ email: 'p0@b.com', durationDays: 0, messages: 100 });
+  assert.equal(a.duration_days, null);          // permanent
+  assert.equal(a.messages, 100);                // quota stored
+  const b = await createPreActivation({ email: 'pn@b.com', durationDays: '' });
+  assert.equal(b.duration_days, null);
+  const c = await createPreActivation({ email: 'pa@b.com', durationDays: 'abc' });
+  assert.equal(c.duration_days, null);
+  const d = await createPreActivation({ email: 'pd@b.com', durationDays: 14, messages: 3000 });
+  assert.equal(d.duration_days, 14);            // explicit days kept
+  assert.equal(d.messages, 3000);
+});
+
+test('consumePreActivationForUser returns both duration and messages', async () => {
+  resetState();
+  await createPreActivation({ email: 'q@x.com', durationDays: 0, messages: 500 });
+  const result = await consumePreActivationForUser({ email: 'q@x.com', userId: 'u1' });
+  assert.ok(result);
+  assert.equal(result.durationDays, null);       // permanent
+  assert.equal(result.messages, 500);
 });
 
 test('createPreActivation stores a normalized email and returns the row', async () => {

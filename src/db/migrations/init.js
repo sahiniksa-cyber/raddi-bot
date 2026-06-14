@@ -378,6 +378,12 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS pre_activations_created_at_idx
     ON pre_activations (created_at DESC)`,
 
+  // Pre-activation upgrades (2026-06-14): grant a real message quota on signup,
+  // and allow PERMANENT activation (duration_days NULL = no time limit).
+  `ALTER TABLE pre_activations ADD COLUMN IF NOT EXISTS messages INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE pre_activations DROP CONSTRAINT IF EXISTS pre_activations_duration_days_check`,
+  `ALTER TABLE pre_activations ALTER COLUMN duration_days DROP NOT NULL`,
+
   // ── Added 2026-05-28: escalation mute window + admin key encryption fields
   //    + billing webhook verification fields. Needed by Agents 2 and 4.
   `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS escalated_until TIMESTAMPTZ`,
