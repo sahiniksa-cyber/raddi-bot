@@ -170,6 +170,7 @@
     <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
       <input id="paEmail" type="email" placeholder="بريد العميل" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:220px">
       <select id="paDays" style="padding:10px;border:1px solid var(--border);border-radius:8px">
+        <option value="permanent">دائم (بدون مدة)</option>
         <option value="3">3 أيام</option>
         <option value="7">7 أيام</option>
         <option value="14">14 يوم</option>
@@ -179,15 +180,25 @@
         <option value="custom">مخصص…</option>
       </select>
       <input id="paDaysCustom" type="number" min="1" placeholder="أيام مخصصة" style="display:none;width:120px;padding:10px;border:1px solid var(--border);border-radius:8px">
+      <input id="paMessages" type="number" min="0" placeholder="عدد الرسائل (مثلاً 3000)" style="width:170px;padding:10px;border:1px solid var(--border);border-radius:8px">
       <input id="paNote" placeholder="ملاحظة (اختياري)" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:180px">
       <button onclick="createPreActivation()" style="padding:10px 16px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">تفعيل</button>
     </div>
     <section class="panel" style="margin-bottom:32px">
       <table>
-        <thead><tr><th>البريد</th><th>المدة (أيام)</th><th>ملاحظة</th><th>أُنشئ في</th><th>إجراء</th></tr></thead>
+        <thead><tr><th>البريد</th><th>المدة</th><th>الرسائل</th><th>ملاحظة</th><th>أُنشئ في</th><th>إجراء</th></tr></thead>
         <tbody id="preActivationRows"><tr><td colspan="5" class="empty">جاري التحميل...</td></tr></tbody>
       </table>
     </section>
+
+    <h2 style="margin-top:32px;font-size:18px">🔁 نقل إعدادات حساب</h2>
+    <div class="sub" style="margin-bottom:10px">إذا غيّر التاجر حساب المنصة (تسجيل دخول جديد)، انقل كل إعداداته (المنتجات، المعرفة، الموديل، الأسلوب، الردود المتعلمة، المفاتيح) من الحساب القديم إلى الجديد بإيميل كل حساب. الحساب الجديد يُستبدل بالكامل بإعدادات القديم.</div>
+    <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
+      <input id="cmcSrc" type="email" placeholder="إيميل الحساب القديم (المصدر)" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:240px">
+      <span style="font-weight:700">←</span>
+      <input id="cmcDst" type="email" placeholder="إيميل الحساب الجديد (الوجهة)" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:240px">
+      <button onclick="copyMerchantConfig()" style="padding:10px 16px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">نقل الإعدادات</button>
+    </div>
   </main>
   <div class="toast" id="toast"></div>
 
@@ -500,10 +511,11 @@ async function loadPreActivations(){
 }
 function renderPreActivations(){
   const tbody=document.getElementById('preActivationRows');
-  if(!preActivations.length){tbody.innerHTML='<tr><td colspan="5" class="empty">لا توجد تفعيلات مسبقة</td></tr>';return}
+  if(!preActivations.length){tbody.innerHTML='<tr><td colspan="6" class="empty">لا توجد تفعيلات مسبقة</td></tr>';return}
   tbody.innerHTML=preActivations.map(p=>`<tr>
     <td><b>${esc(p.email)}</b></td>
-    <td>${esc(String(p.duration_days))}</td>
+    <td>${p.duration_days==null?'دائم':esc(String(p.duration_days))+' يوم'}</td>
+    <td>${(p.messages||0).toLocaleString('ar-EG')}</td>
     <td>${esc(p.note||'')}</td>
     <td>${p.created_at?new Date(p.created_at).toLocaleString('ar-SA'):'—'}</td>
     <td><button class="bad" onclick="deletePreActivation(${p.id})">حذف</button></td>
@@ -513,14 +525,18 @@ async function createPreActivation(){
   const email=(document.getElementById('paEmail').value||'').trim();
   if(!email){toast('أدخل البريد',true);return}
   const sel=document.getElementById('paDays').value;
-  const durationDays=sel==='custom'?parseInt(document.getElementById('paDaysCustom').value||'0',10):parseInt(sel,10);
-  if(!durationDays||durationDays<=0){toast('أدخل عدد الأيام',true);return}
+  // 'permanent' => no time limit (empty durationDays). 'custom' => the custom field.
+  let durationDays='';
+  if(sel==='custom'){durationDays=parseInt(document.getElementById('paDaysCustom').value||'0',10)||'';}
+  else if(sel!=='permanent'){durationDays=parseInt(sel,10);}
+  const messages=parseInt(document.getElementById('paMessages').value||'0',10)||0;
   const note=document.getElementById('paNote').value||'';
   try{
-    const r=await fetch('/api/admin/pre-activations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,durationDays,note})});
+    const r=await fetch('/api/admin/pre-activations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,durationDays,messages,note})});
     const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
     toast('تم تسجيل التفعيل المسبق');
     document.getElementById('paEmail').value='';
+    document.getElementById('paMessages').value='';
     document.getElementById('paNote').value='';
     loadPreActivations();
   }catch(e){toast(e.message,true)}
@@ -531,6 +547,20 @@ async function deletePreActivation(id){
     const r=await fetch('/api/admin/pre-activations/'+id,{method:'DELETE'});
     const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
     toast('تم الحذف');loadPreActivations();
+  }catch(e){toast(e.message,true)}
+}
+async function copyMerchantConfig(){
+  const srcEmail=(document.getElementById('cmcSrc').value||'').trim();
+  const dstEmail=(document.getElementById('cmcDst').value||'').trim();
+  if(!srcEmail||!dstEmail){toast('أدخل إيميل الحسابين',true);return}
+  if(srcEmail.toLowerCase()===dstEmail.toLowerCase()){toast('الحسابان متطابقان',true);return}
+  if(!confirm('سيتم استبدال كل إعدادات الحساب الجديد ('+dstEmail+') بإعدادات الحساب القديم ('+srcEmail+'). متابعة؟'))return;
+  try{
+    const r=await fetch('/api/admin/copy-merchant-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({srcEmail,dstEmail})});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم النقل: '+(d.apiKeysCopied||0)+' مفتاح، '+(d.learnedRepliesCopied||0)+' رد متعلّم');
+    document.getElementById('cmcSrc').value='';
+    document.getElementById('cmcDst').value='';
   }catch(e){toast(e.message,true)}
 }
 let currentCustomerKeyUserId=null;

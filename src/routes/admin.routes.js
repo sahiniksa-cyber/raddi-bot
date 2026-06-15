@@ -30,7 +30,8 @@ const {
   deletePreActivation,
 } = require('../services/admin/pre-activations');
 const { createAdminMerchantController } = require('../controllers/admin-merchant.controller');
-const { listAdminAuditLog } = require('../services/admin/admin-audit');
+const { listAdminAuditLog, logAdminAction } = require('../services/admin/admin-audit');
+const { copyMerchantConfigByEmail } = require('../services/admin/copy-merchant-config');
 
 // Set when the server process boots (module load ≈ deploy start). Lets the admin
 // page show WHICH build is live so a stale browser cache / non-applied deploy is
@@ -367,10 +368,11 @@ function createAdminRoutes(deps = {}) {
   // customer signs up with that email their account is auto-activated.
   router.post('/api/admin/pre-activations', requireOwner, async (req, res) => {
     try {
-      const { email, durationDays, note } = req.body || {};
+      const { email, durationDays, messages, note } = req.body || {};
       const row = await createPreActivation({
         email,
-        durationDays: Number(durationDays),
+        durationDays, // empty/0 => permanent (handled in createPreActivation)
+        messages,
         note,
         createdByAdmin: req.session?.userId || null,
       });
@@ -395,6 +397,34 @@ function createAdminRoutes(deps = {}) {
       res.json({ success: true, deleted: result.deleted });
     } catch (err) {
       next(err);
+    }
+  });
+
+  // Account migration: copy ALL settings (config + per-customer API keys +
+  // learned replies) from one platform account to another, by email. For a
+  // merchant who changed her dashboard login and started with an empty account.
+  router.post('/api/admin/copy-merchant-config', requireOwner, async (req, res) => {
+    const { srcEmail, dstEmail } = req.body || {};
+    const adminUserId = req.session?.userId || null;
+    try {
+      const result = await copyMerchantConfigByEmail(srcEmail, dstEmail, { adminUserId });
+      await logAdminAction({
+        adminUserId,
+        action: 'copy_merchant_config',
+        targetUserId: result.dstUserId,
+        detail: { srcUserId: result.srcUserId, ...result },
+      });
+      res.json({ success: true, ...result });
+    } catch (err) {
+      try {
+        await logAdminAction({
+          adminUserId,
+          action: 'copy_merchant_config',
+          detail: { srcEmail, dstEmail, error: err.message },
+          result: 'error',
+        });
+      } catch (_) { /* audit best-effort */ }
+      res.status(400).json({ success: false, message: err.message });
     }
   });
 

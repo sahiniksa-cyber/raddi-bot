@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/client');
 const { consumePreActivationForUser } = require('../services/admin/pre-activations');
 const { setAccess, setAccessExpiry } = require('../services/billing/billing-service');
+const { addMessagesToQuota } = require('../services/billing/message-quota');
 
 function saveSession(req) {
   return new Promise((resolve, reject) => {
@@ -115,9 +116,18 @@ function createAuthController() {
         // Failures here must not block signup — the user is already created.
         try {
           const preActivation = await consumePreActivationForUser({ email, userId: id });
-          if (preActivation && preActivation.durationDays > 0) {
+          if (preActivation) {
+            // Access: always active; time-limited if a duration was set, else permanent.
             await setAccess(id, 'active', 'pre_activation', `pre-activation #${preActivation.id}`);
-            await setAccessExpiry(id, preActivation.durationDays, `pre-activation #${preActivation.id}`);
+            if (preActivation.durationDays && preActivation.durationDays > 0) {
+              await setAccessExpiry(id, preActivation.durationDays, `pre-activation #${preActivation.id}`);
+            }
+            // Message quota (separate from access duration) — THIS is what lets the
+            // bot actually reply. expireResetsQuota:false → deplete by use, no time expiry.
+            if (preActivation.messages > 0) {
+              const qDays = preActivation.durationDays && preActivation.durationDays > 0 ? preActivation.durationDays : 3650;
+              await addMessagesToQuota(id, { messages: preActivation.messages, days: qDays, expireResetsQuota: false });
+            }
           }
         } catch (preErr) {
           // Swallow — pre-activation is best-effort. Log via console only.
