@@ -982,17 +982,17 @@ body{background-attachment:scroll}
     <div class="pbdy">
 
       <div class="models-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">
-          <div class="mc sel" data-model="google/gemini-2.0-flash" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">⚡ Flash 2.0</div><div class="md">سريع ومتوازن</div><span class="mp ch">رخيص</span>
+          <div class="mc sel" data-model="gpt-4o" data-prov="openai" onclick="selModel(this)">
+            <div class="mcheck">✓</div><div class="mn">🤖 GPT-4o</div><div class="md">OpenAI · الأقوى</div><span class="mp md2">موصى به</span>
           </div>
           <div class="mc" data-model="anthropic/claude-sonnet-4-5" data-prov="openrouter" onclick="selModel(this)">
             <div class="mcheck">✓</div><div class="mn">🎵 Sonnet 4.5</div><div class="md">توازن مثالي</div><span class="mp md2">موصى به</span>
           </div>
-          <div class="mc" data-model="openai/gpt-4o" data-prov="openrouter" onclick="selModel(this)">
-            <div class="mcheck">✓</div><div class="mn">🤖 GPT-4o</div><div class="md">عبر OpenRouter</div><span class="mp md2">قوي</span>
+          <div class="mc" data-model="google/gemini-2.0-flash" data-prov="openrouter" onclick="selModel(this)">
+            <div class="mcheck">✓</div><div class="mn">⚡ Flash 2.0</div><div class="md">سريع ومتوازن</div><span class="mp ch">رخيص</span>
           </div>
       </div>
-      <input type="hidden" id="mdlSel" value="google/gemini-2.0-flash">
+      <input type="hidden" id="mdlSel" value="gpt-4o">
 
       <!-- API keys managed by Jawab team — no input needed -->
       <div class="key-area">
@@ -1761,6 +1761,7 @@ function selModel(card){
 }
 
 function setModel(m){
+  if(m==='openai/gpt-4o')m='gpt-4o';   // alias قديم → يطابق بطاقة gpt-4o
   document.getElementById('mdlSel').value=m;
   document.querySelectorAll('.mc').forEach(c=>{
     if(c.dataset.model===m){c.classList.add('sel');selModel(c);}
@@ -1920,7 +1921,7 @@ function fillForm(c){
   document.getElementById('ownerPauseMinutes').value=c.ownerPauseMinutes??30;
   {const _le=document.getElementById('learningEnabled');if(_le)_le.checked=c.learningEnabled!==false;}
   document.getElementById('errorMessage').value=c.errorMessage||'';
-  setModel(c.model||'google/gemini-2.0-flash');
+  setModel(c.model||'gpt-4o');
   // Reply style
   const r=c.replyStyle||{};
   document.getElementById('rsEmployeeName').value=r.employeeName||'';
