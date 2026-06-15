@@ -33,7 +33,7 @@ function describeLanguage(config = {}) {
   return r.dialect || 'السعودية الخفيفة';
 }
 
-function describeEmoji(level = 'medium') {
+function describeEmoji(level = 'none') {
   return {
     none: 'بدون إيموجي نهائياً',
     light: 'إيموجي قليل جداً، عند الحاجة فقط',
@@ -66,7 +66,7 @@ function buildPlatformPromptBlock(config = {}, {
   const employeeName = r.employeeName || 'موظف خدمة العملاء';
   const tone = r.tone || 'ودي ومحترم';
   const language = describeLanguage(config);
-  const emoji = describeEmoji(r.emojiLevel || 'medium');
+  const emoji = describeEmoji(r.emojiLevel || 'none');
   const replyLength = describeReplyLength(config);
   const greetings = listOrFallback(r.greetingPhrases, 'رحّب بشكل طبيعي بدون تكرار أو مبالغة');
   const closings = listOrFallback(r.closingPhrases, 'اختم فقط إذا كان مناسباً ولا تكرر الخاتمة في كل رد');
