@@ -190,6 +190,15 @@
         <tbody id="preActivationRows"><tr><td colspan="5" class="empty">جاري التحميل...</td></tr></tbody>
       </table>
     </section>
+
+    <h2 style="margin-top:32px;font-size:18px">🔁 نقل إعدادات حساب</h2>
+    <div class="sub" style="margin-bottom:10px">إذا غيّر التاجر حساب المنصة (تسجيل دخول جديد)، انقل كل إعداداته (المنتجات، المعرفة، الموديل، الأسلوب، الردود المتعلمة، المفاتيح) من الحساب القديم إلى الجديد بإيميل كل حساب. الحساب الجديد يُستبدل بالكامل بإعدادات القديم.</div>
+    <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;align-items:center">
+      <input id="cmcSrc" type="email" placeholder="إيميل الحساب القديم (المصدر)" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:240px">
+      <span style="font-weight:700">←</span>
+      <input id="cmcDst" type="email" placeholder="إيميل الحساب الجديد (الوجهة)" style="padding:10px;border:1px solid var(--border);border-radius:8px;min-width:240px">
+      <button onclick="copyMerchantConfig()" style="padding:10px 16px;background:var(--green);color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer">نقل الإعدادات</button>
+    </div>
   </main>
   <div class="toast" id="toast"></div>
 
@@ -538,6 +547,20 @@ async function deletePreActivation(id){
     const r=await fetch('/api/admin/pre-activations/'+id,{method:'DELETE'});
     const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
     toast('تم الحذف');loadPreActivations();
+  }catch(e){toast(e.message,true)}
+}
+async function copyMerchantConfig(){
+  const srcEmail=(document.getElementById('cmcSrc').value||'').trim();
+  const dstEmail=(document.getElementById('cmcDst').value||'').trim();
+  if(!srcEmail||!dstEmail){toast('أدخل إيميل الحسابين',true);return}
+  if(srcEmail.toLowerCase()===dstEmail.toLowerCase()){toast('الحسابان متطابقان',true);return}
+  if(!confirm('سيتم استبدال كل إعدادات الحساب الجديد ('+dstEmail+') بإعدادات الحساب القديم ('+srcEmail+'). متابعة؟'))return;
+  try{
+    const r=await fetch('/api/admin/copy-merchant-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({srcEmail,dstEmail})});
+    const d=await r.json();if(!d.success)throw new Error(d.message||'فشل');
+    toast('تم النقل: '+(d.apiKeysCopied||0)+' مفتاح، '+(d.learnedRepliesCopied||0)+' رد متعلّم');
+    document.getElementById('cmcSrc').value='';
+    document.getElementById('cmcDst').value='';
   }catch(e){toast(e.message,true)}
 }
 let currentCustomerKeyUserId=null;
