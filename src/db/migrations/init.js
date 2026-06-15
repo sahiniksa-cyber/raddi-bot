@@ -503,6 +503,18 @@ const statements = [
   // ── Added 2026-06-12: a relayed team answer CLOSES the thread (hand-back
   //    to the AI). NULL = still waiting for the team's quote-reply.
   `ALTER TABLE escalation_threads ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`,
+
+  // ── Added 2026-06-15: the platform key is OpenAI and the model picker is
+  //    admin-only, so legacy accounts saved on Gemini (the old default) gave
+  //    erratic replies and merchants couldn't change them. Move every account
+  //    still on Gemini (or with no model) to gpt-4o. Idempotent: after the
+  //    first run no rows match, and explicit non-Gemini models are left alone.
+  `UPDATE bot_configs
+      SET config = jsonb_set(config, '{model}', '"gpt-4o"'::jsonb),
+          updated_at = NOW()
+    WHERE COALESCE(config->>'model', '') = ''
+       OR config->>'model' LIKE 'google/%'
+       OR config->>'model' LIKE 'gemini%'`,
 ];
 
 async function migrate() {
