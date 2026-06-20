@@ -263,8 +263,11 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
 
   // Send-only path: quota is decremented only when sendWhatsappReply resolves
   // without throwing. If the send throws (including socket_not_open above), this
-  // line is skipped and BullMQ re-queues the job.
-  const dec = await decrementMessageQuota(userId);
+  // line is skipped and BullMQ re-queues the job. System notices (quota-stop)
+  // are NOT billable — the balance is already 0 — so they never decrement.
+  const dec = payload.systemNotice
+    ? { success: true, remaining: 0 }
+    : await decrementMessageQuota(userId);
   if (!dec.success) {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] sent ${replyMessageId} but quota already empty for ${userId}`);
   }
@@ -338,8 +341,11 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     await recordWhatsappMessageId(userId, replyMessageId, lidResult?.key?.id);
     // Same rule as the main path: a successful send consumes one quota unit.
     // Without this, @lid customers (the majority on privacy-masked numbers)
-    // were never metered and the dashboard counter froze.
-    const dec = await decrementMessageQuota(userId);
+    // were never metered and the dashboard counter froze. System notices
+    // (quota-stop) are NOT billable, so they never decrement.
+    const dec = payload.systemNotice
+      ? { success: true, remaining: 0 }
+      : await decrementMessageQuota(userId);
     if (!dec.success) {
       console.warn(`${new Date().toISOString()} [${WORKER_NAME}] lid-sent ${replyMessageId} but quota already empty for ${userId}`);
     }
@@ -428,6 +434,10 @@ async function isReplyAlreadySent({ replyMessageId, database = db } = {}) {
 // group + customer-reply forwards, payload.escalation=true) is exempt so the
 // merchant still learns a customer needs help while their balance is empty.
 function shouldBlockOutgoingForQuota(payload = {}, quota = {}) {
+  // System notices (e.g. the platform quota-stop message) are sent precisely
+  // BECAUSE the balance is empty — they must bypass the quota gate, just like
+  // team-facing escalation alerts. They are not billable and never decrement.
+  if (payload.systemNotice) return false;
   if (payload.escalation) return false;
   return quota.canReply === false;
 }

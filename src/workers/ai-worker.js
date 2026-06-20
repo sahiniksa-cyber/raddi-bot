@@ -25,6 +25,7 @@ const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('..
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
 const { checkMessageQuota } = require('../services/billing/message-quota');
+const { getPlatformSetting } = require('../services/platform/platform-settings');
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
@@ -436,6 +437,42 @@ async function markInboundMessagesQuotaExceeded({ database = db, messageIds = []
   );
 }
 
+// Once-per-conversation guard for the platform quota-stop notice. Looks for an
+// outbound row in THIS conversation already tagged raw_payload.kind = 'quota_stop'.
+async function quotaStopNoticeAlreadySent({ database = db, userId, conversationId }) {
+  if (!conversationId || !database.isConfigured?.()) return false;
+  const r = await database.query(
+    `SELECT 1 FROM messages
+      WHERE user_id = $1 AND conversation_id = $2
+        AND direction = 'outbound'
+        AND raw_payload->>'kind' = 'quota_stop'
+      LIMIT 1`,
+    [userId, conversationId],
+  );
+  return (r.rowCount || 0) > 0;
+}
+
+// Persist a quota-stop system notice, tagged kind=quota_stop so the
+// once-per-conversation guard above can detect it. Mirrors storeAssistantMessage
+// but writes the system-notice tag instead of the normal source payload.
+async function storeQuotaStopNotice({ database = db, userId, conversationId, sender, text, jobId }) {
+  const providerMessageId = `ai-worker:quota_stop:${jobId}:${crypto.randomUUID()}`;
+  const result = await database.query(
+    `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+     VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
+     RETURNING id`,
+    [
+      conversationId,
+      userId,
+      sender,
+      text,
+      providerMessageId,
+      JSON.stringify({ source: WORKER_NAME, jobId, kind: 'quota_stop', systemNotice: true }),
+    ],
+  );
+  return result.rows[0].id;
+}
+
 async function markInboundMessageFailed({ database = db, messageId, error }) {
   if (!messageId || !database.isConfigured()) return;
   await database.query(
@@ -692,6 +729,49 @@ async function processAiReply(job) {
         attempts: job.attemptsMade + 1,
         last_error: `quota ${quota.reason}`,
       });
+      // Platform quota-stop notice: when the admin has enabled a stop message,
+      // tell the customer ONCE per conversation that auto-replies are paused,
+      // then stay silent. Wrapped so any failure here can NEVER break the
+      // existing silent path. The text comes ONLY from the platform setting.
+      try {
+        const stop = await getPlatformSetting('quotaStopMessage', { database: db });
+        const stopText = String(stop?.text || '').trim();
+        if (stop?.enabled && stopText) {
+          const already = await quotaStopNoticeAlreadySent({
+            database: db, userId, conversationId: conversation.id,
+          });
+          if (!already) {
+            const noticeId = await storeQuotaStopNotice({
+              database: db,
+              userId,
+              conversationId: conversation.id,
+              sender: conversation.sender,
+              text: stopText,
+              jobId: job.id,
+            });
+            await enqueueOutgoingWhatsapp({
+              userId,
+              conversationId: conversation.id,
+              messageId: payload.messageId,
+              providerMessageId: payload.providerMessageId,
+              replyMessageId: noticeId,
+              sender: conversation.sender,
+              reply: stopText,
+              // Exempts this notice from the outgoing quota gate AND from the
+              // quota decrement (balance is 0; this is a system notice, not a
+              // billable reply). Owner-pause still applies.
+              systemNotice: true,
+              kind: 'quota_stop',
+            }, {
+              jobKey: String(noticeId),
+            });
+            logger.warn('quota', `quota-stop notice enqueued once: ${userId} conv=${conversation.id}`);
+          }
+        }
+      } catch (noticeErr) {
+        logger.warn('quota', `quota-stop notice failed (silent path preserved): ${noticeErr.message}`);
+      }
+
       logger.warn('quota', `silent: ${userId} (${quota.reason}, ${quota.remaining} remaining)`);
       return { skipped: true, reason: quota.reason };
     }
