@@ -108,6 +108,29 @@
       </div>
     </section>
 
+    <section id="adminQuotaStopMessageSection" class="panel" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
+        <div>
+          <b style="font-size:16px">🚫 رسالة توقف البوت عند نفاد رصيد الرسائل</b>
+          <div class="sub">هذي الرسالة تُرسل مرة واحدة للعميل تلقائياً عندما ينتهي رصيد الرسائل عند التاجر.</div>
+        </div>
+      </div>
+      <div style="padding:16px;display:flex;flex-direction:column;gap:14px;max-width:600px">
+        <label style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;cursor:pointer">
+          <input type="checkbox" id="quotaStopMessageEnabled" style="width:16px;height:16px;cursor:pointer">
+          تفعيل إرسال الرسالة
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700">
+          نص الرسالة
+          <textarea id="quotaStopMessageText" rows="3" placeholder="نعتذر، خدمة الردّ الآلي متوقفة مؤقتاً. سيتم الرد عليك في أقرب وقت 🙏" style="width:100%;resize:vertical;border:1px solid var(--border);border-radius:7px;padding:9px 11px;font-family:inherit;font-size:13px;height:76px"></textarea>
+        </label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button type="button" onclick="saveQuotaStopMessage()" style="padding:7px 18px;border:1px solid var(--border);background:#fff;border-radius:7px;cursor:pointer;font-weight:700;font-size:12px;color:var(--green)">حفظ</button>
+          <span class="sub" id="quotaStopMessageStatus" style="flex:1"></span>
+        </div>
+      </div>
+    </section>
+
     <div class="toolbar">
       <input id="search" type="search" placeholder="بحث بالاسم أو البريد" oninput="render()">
       <button onclick="loadCustomers()">تحديث</button>
@@ -620,10 +643,41 @@ async function saveCustomerKey(provider){
     await loadCustomerKeys(currentCustomerKeyUserId);
   }catch(e){toast('خطأ: '+e.message,true)}
 }
+async function loadQuotaStopMessage(){
+  try{
+    const r=await fetch('/api/admin/quota-stop-message',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    if(!d.success)return;
+    const s=d.setting||{};
+    const cb=document.getElementById('quotaStopMessageEnabled');
+    const ta=document.getElementById('quotaStopMessageText');
+    if(cb)cb.checked=!!s.enabled;
+    if(ta)ta.value=s.text||'';
+  }catch(_){}
+}
+async function saveQuotaStopMessage(){
+  const cb=document.getElementById('quotaStopMessageEnabled');
+  const ta=document.getElementById('quotaStopMessageText');
+  const st=document.getElementById('quotaStopMessageStatus');
+  try{
+    const r=await fetch('/api/admin/quota-stop-message',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify({enabled:cb?cb.checked:false,text:ta?ta.value:''})
+    });
+    const d=await r.json();
+    if(!d.success)throw new Error(d.message||'فشل الحفظ');
+    toast('تم حفظ رسالة التوقف ✓');
+    if(st)st.textContent='';
+  }catch(e){toast('خطأ: '+e.message,true)}
+}
 loadCustomers();
 loadCoupons();
 loadPreActivations();
 loadHealth();
+loadQuotaStopMessage();
 (async function loadVersion(){
   try{
     const d=await fetch('/api/admin/version',{credentials:'same-origin'}).then(r=>r.json());
