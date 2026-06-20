@@ -515,6 +515,15 @@ const statements = [
     WHERE COALESCE(config->>'model', '') = ''
        OR config->>'model' LIKE 'google/%'
        OR config->>'model' LIKE 'gemini%'`,
+
+  // ── Added 2026-06-20: platform-wide admin-controlled settings store.
+  //    Generic key-value table; values are JSONB so any JSON-serialisable
+  //    shape can be stored without schema changes.
+  `CREATE TABLE IF NOT EXISTS platform_settings (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
 ];
 
 async function migrate() {
