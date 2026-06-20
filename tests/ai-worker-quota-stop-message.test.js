@@ -29,6 +29,11 @@ function stub(modulePath, exports) {
 const outgoingCalls = [];
 const insertedMessages = [];
 
+// Emulates the partial unique index uniq_quota_stop_notice_per_conversation:
+// tracks which (user_id, conversation_id) pairs already hold a quota_stop row so
+// a second INSERT ... ON CONFLICT DO NOTHING returns no id (rows: []).
+const quotaStopRowKeys = new Set();
+
 // Controls per-test: whether a prior quota_stop notice already exists, and what
 // the platform setting returns.
 let priorNoticeExists = false;
@@ -70,11 +75,30 @@ const dbMock = {
         rowCount: 1,
       };
     }
-    // Prior quota-stop notice detection (once-per-conversation guard)
-    if (s.includes('quota_stop')) {
+    // Prior quota-stop notice detection (once-per-conversation guard SELECT).
+    // Must be matched BEFORE the generic INSERT routing below, but must NOT
+    // intercept the storeQuotaStopNotice INSERT (which also mentions quota_stop
+    // in its ON CONFLICT predicate) — hence the explicit SELECT/INSERT guard.
+    if (s.includes('quota_stop') && s.includes('SELECT') && !s.includes('INSERT INTO')) {
       return { rows: priorNoticeExists ? [{ id: 'prior-notice-1' }] : [], rowCount: priorNoticeExists ? 1 : 0 };
     }
-    // storeAssistantMessage / any INSERT ... RETURNING id
+    // storeQuotaStopNotice INSERT ... ON CONFLICT DO NOTHING. Emulate the
+    // partial unique index: the FIRST insert for a (user_id, conversation_id)
+    // pair succeeds and returns an id; a SECOND insert for the same pair
+    // conflicts → DO NOTHING → no row returned (rows: []), so the caller gets
+    // null and must NOT enqueue. This is the atomic guard under test.
+    if (s.includes('INSERT INTO messages') && s.includes('quota_stop') && s.includes('ON CONFLICT')) {
+      const userId = params && params[1];
+      const conversationId = params && params[0];
+      const key = `${userId}::${conversationId}`;
+      insertedMessages.push({ content: params ? params[3] : null, rawPayload: params ? params[5] : null });
+      if (quotaStopRowKeys.has(key)) {
+        return { rows: [], rowCount: 0 };
+      }
+      quotaStopRowKeys.add(key);
+      return { rows: [{ id: `msg-${insertedMessages.length}` }], rowCount: 1 };
+    }
+    // storeAssistantMessage / any other INSERT ... RETURNING id
     if (s.includes('INSERT INTO messages') && s.includes('RETURNING id')) {
       insertedMessages.push({ content: params ? params[3] : null, rawPayload: params ? params[5] : null });
       return { rows: [{ id: `msg-${insertedMessages.length}` }], rowCount: 1 };
@@ -159,6 +183,7 @@ function makeJob() {
 function reset() {
   outgoingCalls.length = 0;
   insertedMessages.length = 0;
+  quotaStopRowKeys.clear();
   priorNoticeExists = false;
   platformQuotaStopSetting = null;
 }
@@ -210,4 +235,27 @@ test('(c) quota empty + setting disabled/null → stays silent (current behavior
   const result2 = await processAiReply(makeJob());
   assert.equal(result2.skipped, true);
   assert.equal(outgoingCalls.length, 0, 'missing setting must not enqueue anything');
+});
+
+test('(d) two concurrent jobs, same conversation → atomic insert lets only ONE enqueue (no double-send)', async () => {
+  reset();
+  platformQuotaStopSetting = { enabled: true, text: 'رسالة التوقف' };
+  // priorNoticeExists stays FALSE: this simulates the race where BOTH jobs pass
+  // the cheap SELECT fast-path (no prior notice visible yet) and both reach the
+  // INSERT. The partial-unique-index emulation makes the SECOND insert conflict
+  // → returns no id → that job must NOT enqueue. The atomic guard, not the
+  // racy SELECT, is what prevents the double-send.
+  const r1 = await processAiReply(makeJob());
+  const r2 = await processAiReply(makeJob());
+
+  assert.equal(r1.skipped, true);
+  assert.equal(r2.skipped, true);
+
+  // Both jobs attempted an insert (both passed the SELECT), but only the first
+  // won the row → exactly ONE outgoing enqueue. If the code enqueued on a null
+  // id this would be 2 and the test fails — pinning the atomic guard.
+  assert.equal(outgoingCalls.length, 1, `expected exactly ONE enqueue across two concurrent jobs, got ${outgoingCalls.length}`);
+  const sent = outgoingCalls[0].payload;
+  assert.equal(sent.reply, 'رسالة التوقف');
+  assert.equal(sent.kind, 'quota_stop');
 });

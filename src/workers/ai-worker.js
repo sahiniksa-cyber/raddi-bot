@@ -455,11 +455,20 @@ async function quotaStopNoticeAlreadySent({ database = db, userId, conversationI
 // Persist a quota-stop system notice, tagged kind=quota_stop so the
 // once-per-conversation guard above can detect it. Mirrors storeAssistantMessage
 // but writes the system-notice tag instead of the normal source payload.
+//
+// The INSERT uses the partial unique index uniq_quota_stop_notice_per_conversation
+// as a conflict arbiter (ON CONFLICT DO NOTHING). This makes "at most one
+// quota_stop per (user, conversation)" an ATOMIC DB guarantee — two concurrent
+// ai-jobs (recovery re-enqueue / BullMQ retry) cannot both insert. Returns the
+// new id when this call won the insert, or null when a row already existed
+// (conflict → no row returned). The caller enqueues the outgoing notice ONLY
+// when a non-null id is returned, so the DB decides who sends.
 async function storeQuotaStopNotice({ database = db, userId, conversationId, sender, text, jobId }) {
   const providerMessageId = `ai-worker:quota_stop:${jobId}:${crypto.randomUUID()}`;
   const result = await database.query(
     `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
      VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
+     ON CONFLICT (user_id, conversation_id) WHERE (raw_payload->>'kind') = 'quota_stop' DO NOTHING
      RETURNING id`,
     [
       conversationId,
@@ -470,7 +479,7 @@ async function storeQuotaStopNotice({ database = db, userId, conversationId, sen
       JSON.stringify({ source: WORKER_NAME, jobId, kind: 'quota_stop', systemNotice: true }),
     ],
   );
-  return result.rows[0].id;
+  return result.rows[0]?.id ?? null;
 }
 
 async function markInboundMessageFailed({ database = db, messageId, error }) {
@@ -737,6 +746,10 @@ async function processAiReply(job) {
         const stop = await getPlatformSetting('quotaStopMessage', { database: db });
         const stopText = String(stop?.text || '').trim();
         if (stop?.enabled && stopText) {
+          // Fast-path: skip the insert attempt if a notice is already visible.
+          // This is only an optimization — the ON CONFLICT inside
+          // storeQuotaStopNotice is the REAL atomic guard, so two concurrent
+          // jobs that both pass this SELECT still cannot double-insert.
           const already = await quotaStopNoticeAlreadySent({
             database: db, userId, conversationId: conversation.id,
           });
@@ -749,23 +762,28 @@ async function processAiReply(job) {
               text: stopText,
               jobId: job.id,
             });
-            await enqueueOutgoingWhatsapp({
-              userId,
-              conversationId: conversation.id,
-              messageId: payload.messageId,
-              providerMessageId: payload.providerMessageId,
-              replyMessageId: noticeId,
-              sender: conversation.sender,
-              reply: stopText,
-              // Exempts this notice from the outgoing quota gate AND from the
-              // quota decrement (balance is 0; this is a system notice, not a
-              // billable reply). Owner-pause still applies.
-              systemNotice: true,
-              kind: 'quota_stop',
-            }, {
-              jobKey: String(noticeId),
-            });
-            logger.warn('quota', `quota-stop notice enqueued once: ${userId} conv=${conversation.id}`);
+            // Enqueue ONLY when WE won the atomic insert (non-null id). On a
+            // conflict the row already existed (another job sent it) and
+            // noticeId is null → stay silent, no double-send.
+            if (noticeId) {
+              await enqueueOutgoingWhatsapp({
+                userId,
+                conversationId: conversation.id,
+                messageId: payload.messageId,
+                providerMessageId: payload.providerMessageId,
+                replyMessageId: noticeId,
+                sender: conversation.sender,
+                reply: stopText,
+                // Exempts this notice from the outgoing quota gate AND from the
+                // quota decrement (balance is 0; this is a system notice, not a
+                // billable reply). Owner-pause still applies.
+                systemNotice: true,
+                kind: 'quota_stop',
+              }, {
+                jobKey: String(noticeId),
+              });
+              logger.warn('quota', `quota-stop notice enqueued once: ${userId} conv=${conversation.id}`);
+            }
           }
         }
       } catch (noticeErr) {
