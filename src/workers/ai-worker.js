@@ -18,7 +18,7 @@ const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
-const { findDuplicateRecentReply } = require('./reply-deduplication');
+const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
 const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('../services/bot/platform-features');
@@ -769,9 +769,13 @@ async function processAiReply(job) {
     }
 
     // Reply de-duplication: if the candidate reply is near-identical to one of
-    // the last few assistant replies, regenerate once with higher penalties
-    // and an extra system instruction. If the retry fails we still send the
-    // original to avoid leaving the customer hanging.
+    // the last few assistant replies, regenerate once with higher penalties and
+    // an extra system instruction. If the regenerated reply is STILL a
+    // near-duplicate (or the retry failed), we SUPPRESS it rather than sending a
+    // second, differently-worded copy of the same answer — that is the Issue-1
+    // duplicate the customer used to see. The inbound is still marked answered so
+    // neither the follow-up nor ai-recovery regenerates yet another duplicate.
+    let suppressDuplicate = false;
     try {
       const dup = await findDuplicateRecentReply({
         db,
@@ -798,6 +802,7 @@ async function processAiReply(job) {
           instantAnswered: combinePrefix,
         }).catch(() => '');
         const retry = String(retryRaw || '').trim();
+        let regenerated = null;
         if (retry) {
           const retryEscalation = prepareEscalation({
             reply: retry,
@@ -811,12 +816,39 @@ async function processAiReply(job) {
             if (combinePrefix) {
               retryCustomer = combineCannedAndAi(combinePrefix, retryCustomer);
             }
-            customerReply = retryCustomer;
+            regenerated = retryCustomer;
           }
+        }
+
+        // Re-check the OUTCOME against the matched reply. If regeneration
+        // produced a genuinely different reply, send it. Otherwise (retry empty
+        // OR still ≥ threshold similar to the duplicate) suppress entirely.
+        const candidateAfterRetry = regenerated || customerReply;
+        const stillDuplicate = replySimilarity(candidateAfterRetry, dup.content) >= 0.85;
+        if (regenerated && !stillDuplicate) {
+          customerReply = regenerated;
+        } else {
+          suppressDuplicate = true;
         }
       }
     } catch (dedupErr) {
       logger.warn('dedup', `dedup check failed: ${dedupErr.message}`);
+    }
+
+    if (suppressDuplicate) {
+      // Mark the inbound answered so the just-sent earlier reply stands and no
+      // retry/recovery/follow-up regenerates another near-duplicate. No outbound
+      // is enqueued; the completed-handler skips follow-up on a skipped result.
+      await markInboundMessagesAnswered({
+        messageIds: enrichedMessages.map(message => message.id),
+      });
+      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+        status: 'skipped_duplicate',
+        finished_at: new Date(),
+        attempts: job.attemptsMade + 1,
+      });
+      logger.warn('dedup', 'near-duplicate reply suppressed (not sent) after failed regeneration');
+      return { skipped: true, reason: 'duplicate_suppressed' };
     }
 
     const replyMessageId = await storeAssistantMessage({
