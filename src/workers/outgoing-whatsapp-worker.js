@@ -265,7 +265,9 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   // without throwing. If the send throws (including socket_not_open above), this
   // line is skipped and BullMQ re-queues the job. System notices (quota-stop)
   // are NOT billable — the balance is already 0 — so they never decrement.
-  const dec = payload.systemNotice
+  // Team-facing escalation alerts are internal notifications, not customer
+  // replies, so they are also non-billable and must not decrement the quota.
+  const dec = (payload.systemNotice || payload.escalation)
     ? { success: true, remaining: 0 }
     : await decrementMessageQuota(userId);
   if (!dec.success) {
@@ -342,8 +344,9 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     // Same rule as the main path: a successful send consumes one quota unit.
     // Without this, @lid customers (the majority on privacy-masked numbers)
     // were never metered and the dashboard counter froze. System notices
-    // (quota-stop) are NOT billable, so they never decrement.
-    const dec = payload.systemNotice
+    // (quota-stop) are NOT billable, so they never decrement. Team-facing
+    // escalation alerts are internal notifications and also non-billable.
+    const dec = (payload.systemNotice || payload.escalation)
       ? { success: true, remaining: 0 }
       : await decrementMessageQuota(userId);
     if (!dec.success) {
