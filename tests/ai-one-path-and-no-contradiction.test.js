@@ -42,11 +42,20 @@ const aiClientSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ai-client
 const aiWorkerSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'workers', 'ai-worker.js'), 'utf8');
 
 test('A1: runtime prompt enforces understand-intent-first + single path', () => {
+  // (a) model must understand full intent first before replying
   assert.match(aiClientSrc, /افهم نية العميل من رسالته كاملة أولاً/);
-  assert.match(aiClientSrc, /ممنوع أن تجمع في رسالة واحدة بين طلب معلومة من العميل ووعدٍ بالتحويل/);
+  // (b) self-contradiction: cannot ask the customer for info AND promise escalation for the same matter
+  assert.match(aiClientSrc, /لا تجمع لنفس الطلب بين طلب معلومة من العميل ووعدٍ بالتحويل/);
 });
 
-test('A4: batched-messages directive no longer says "answer them all" and asks for one coherent reply', () => {
-  assert.doesNotMatch(aiWorkerSrc, /أجب عليها كلها في رد واحد واضح/);
-  assert.match(aiWorkerSrc, /تعبّر غالباً عن نية واحدة/);
+test('A4: batched-messages directive asks for ONE coherent reply that answers everything', () => {
+  // NEW intentional behaviour: batched messages must be answered all in one coherent reply
+  // (the old directive "تعبّر غالباً عن نية واحدة" was replaced intentionally)
+  assert.match(aiWorkerSrc, /رسائل متتالية من نفس العميل/);
+  // must produce a single coherent reply
+  assert.match(aiWorkerSrc, /ردّ?\s*واحد متماسك/);
+  // must not leave any question unanswered
+  assert.match(aiWorkerSrc, /بدون أن تترك أي سؤال/);
+  // must NOT spam per-line replies
+  assert.doesNotMatch(aiWorkerSrc, /لا ترد على كل سطر على حدة/);
 });

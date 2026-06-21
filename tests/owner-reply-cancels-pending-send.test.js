@@ -44,7 +44,8 @@ test('the human-reply query targets human-origin rows only (not the bot own AI s
   await isConversationOwnerPaused({ userId: 'u1', sender: 's@c.us', replyMessageId: 'r1', database: d });
   assert.match(humSql, /sent_by_human/);
   assert.match(humSql, /source' = 'manual_send'/);
-  assert.match(humSql, /hum\.created_at > ai\.created_at/);
+  // `>=` (not strict `>`) so a FAST same-tick owner reply is still caught.
+  assert.match(humSql, /hum\.created_at >= ai\.created_at/);
 });
 
 test('no replyMessageId → only the time-window query runs (back-compat)', async () => {

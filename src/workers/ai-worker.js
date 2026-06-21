@@ -18,13 +18,14 @@ const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
-const { findDuplicateRecentReply } = require('./reply-deduplication');
+const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
 const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('../services/bot/platform-features');
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
 const { checkMessageQuota } = require('../services/billing/message-quota');
+const { getPlatformSetting } = require('../services/platform/platform-settings');
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
@@ -323,7 +324,7 @@ function buildCombinedInboundText(messages = []) {
 
   if (parts.length <= 1) return parts[0] || '';
   return [
-    'هذه رسائل متتالية من نفس العميل تعبّر غالباً عن نية واحدة. افهم نيته الكاملة منها مجتمعةً، وردّ برد واحد متماسك يعالج ما يحتاجه فعلاً — لا ترد على كل سطر على حدة، ولا تجمع عدة مسارات في رد واحد:',
+    'هذه رسائل متتالية من نفس العميل. افهم نيته الكاملة منها مجتمعةً وردّ برد واحد متماسك يجاوب على كل ما سأل عنه بدون أن تترك أي سؤال، دون أن تكرر أو تتناقض:',
     ...parts.map((text, index) => `${index + 1}. ${text}`),
   ].join('\n');
 }
@@ -434,6 +435,51 @@ async function markInboundMessagesQuotaExceeded({ database = db, messageIds = []
      WHERE id = ANY($1::uuid[])`,
     [ids, JSON.stringify({ quotaExceededAt: new Date().toISOString(), reason })],
   );
+}
+
+// Once-per-conversation guard for the platform quota-stop notice. Looks for an
+// outbound row in THIS conversation already tagged raw_payload.kind = 'quota_stop'.
+async function quotaStopNoticeAlreadySent({ database = db, userId, conversationId }) {
+  if (!conversationId || !database.isConfigured?.()) return false;
+  const r = await database.query(
+    `SELECT 1 FROM messages
+      WHERE user_id = $1 AND conversation_id = $2
+        AND direction = 'outbound'
+        AND raw_payload->>'kind' = 'quota_stop'
+      LIMIT 1`,
+    [userId, conversationId],
+  );
+  return (r.rowCount || 0) > 0;
+}
+
+// Persist a quota-stop system notice, tagged kind=quota_stop so the
+// once-per-conversation guard above can detect it. Mirrors storeAssistantMessage
+// but writes the system-notice tag instead of the normal source payload.
+//
+// The INSERT uses the partial unique index uniq_quota_stop_notice_per_conversation
+// as a conflict arbiter (ON CONFLICT DO NOTHING). This makes "at most one
+// quota_stop per (user, conversation)" an ATOMIC DB guarantee — two concurrent
+// ai-jobs (recovery re-enqueue / BullMQ retry) cannot both insert. Returns the
+// new id when this call won the insert, or null when a row already existed
+// (conflict → no row returned). The caller enqueues the outgoing notice ONLY
+// when a non-null id is returned, so the DB decides who sends.
+async function storeQuotaStopNotice({ database = db, userId, conversationId, sender, text, jobId }) {
+  const providerMessageId = `ai-worker:quota_stop:${jobId}:${crypto.randomUUID()}`;
+  const result = await database.query(
+    `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+     VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
+     ON CONFLICT (user_id, conversation_id) WHERE (raw_payload->>'kind') = 'quota_stop' DO NOTHING
+     RETURNING id`,
+    [
+      conversationId,
+      userId,
+      sender,
+      text,
+      providerMessageId,
+      JSON.stringify({ source: WORKER_NAME, jobId, kind: 'quota_stop', systemNotice: true }),
+    ],
+  );
+  return result.rows[0]?.id ?? null;
 }
 
 async function markInboundMessageFailed({ database = db, messageId, error }) {
@@ -692,6 +738,58 @@ async function processAiReply(job) {
         attempts: job.attemptsMade + 1,
         last_error: `quota ${quota.reason}`,
       });
+      // Platform quota-stop notice: when the admin has enabled a stop message,
+      // tell the customer ONCE per conversation that auto-replies are paused,
+      // then stay silent. Wrapped so any failure here can NEVER break the
+      // existing silent path. The text comes ONLY from the platform setting.
+      try {
+        const stop = await getPlatformSetting('quotaStopMessage', { database: db });
+        const stopText = String(stop?.text || '').trim();
+        if (stop?.enabled && stopText) {
+          // Fast-path: skip the insert attempt if a notice is already visible.
+          // This is only an optimization — the ON CONFLICT inside
+          // storeQuotaStopNotice is the REAL atomic guard, so two concurrent
+          // jobs that both pass this SELECT still cannot double-insert.
+          const already = await quotaStopNoticeAlreadySent({
+            database: db, userId, conversationId: conversation.id,
+          });
+          if (!already) {
+            const noticeId = await storeQuotaStopNotice({
+              database: db,
+              userId,
+              conversationId: conversation.id,
+              sender: conversation.sender,
+              text: stopText,
+              jobId: job.id,
+            });
+            // Enqueue ONLY when WE won the atomic insert (non-null id). On a
+            // conflict the row already existed (another job sent it) and
+            // noticeId is null → stay silent, no double-send.
+            if (noticeId) {
+              await enqueueOutgoingWhatsapp({
+                userId,
+                conversationId: conversation.id,
+                messageId: payload.messageId,
+                providerMessageId: payload.providerMessageId,
+                replyMessageId: noticeId,
+                sender: conversation.sender,
+                reply: stopText,
+                // Exempts this notice from the outgoing quota gate AND from the
+                // quota decrement (balance is 0; this is a system notice, not a
+                // billable reply). Owner-pause still applies.
+                systemNotice: true,
+                kind: 'quota_stop',
+              }, {
+                jobKey: String(noticeId),
+              });
+              logger.warn('quota', `quota-stop notice enqueued once: ${userId} conv=${conversation.id}`);
+            }
+          }
+        }
+      } catch (noticeErr) {
+        logger.warn('quota', `quota-stop notice failed (silent path preserved): ${noticeErr.message}`);
+      }
+
       logger.warn('quota', `silent: ${userId} (${quota.reason}, ${quota.remaining} remaining)`);
       return { skipped: true, reason: quota.reason };
     }
@@ -769,9 +867,13 @@ async function processAiReply(job) {
     }
 
     // Reply de-duplication: if the candidate reply is near-identical to one of
-    // the last few assistant replies, regenerate once with higher penalties
-    // and an extra system instruction. If the retry fails we still send the
-    // original to avoid leaving the customer hanging.
+    // the last few assistant replies, regenerate once with higher penalties and
+    // an extra system instruction. If the regenerated reply is STILL a
+    // near-duplicate (or the retry failed), we SUPPRESS it rather than sending a
+    // second, differently-worded copy of the same answer — that is the Issue-1
+    // duplicate the customer used to see. The inbound is still marked answered so
+    // neither the follow-up nor ai-recovery regenerates yet another duplicate.
+    let suppressDuplicate = false;
     try {
       const dup = await findDuplicateRecentReply({
         db,
@@ -798,6 +900,7 @@ async function processAiReply(job) {
           instantAnswered: combinePrefix,
         }).catch(() => '');
         const retry = String(retryRaw || '').trim();
+        let regenerated = null;
         if (retry) {
           const retryEscalation = prepareEscalation({
             reply: retry,
@@ -811,12 +914,39 @@ async function processAiReply(job) {
             if (combinePrefix) {
               retryCustomer = combineCannedAndAi(combinePrefix, retryCustomer);
             }
-            customerReply = retryCustomer;
+            regenerated = retryCustomer;
           }
+        }
+
+        // Re-check the OUTCOME against the matched reply. If regeneration
+        // produced a genuinely different reply, send it. Otherwise (retry empty
+        // OR still ≥ threshold similar to the duplicate) suppress entirely.
+        const candidateAfterRetry = regenerated || customerReply;
+        const stillDuplicate = replySimilarity(candidateAfterRetry, dup.content) >= 0.85;
+        if (regenerated && !stillDuplicate) {
+          customerReply = regenerated;
+        } else {
+          suppressDuplicate = true;
         }
       }
     } catch (dedupErr) {
       logger.warn('dedup', `dedup check failed: ${dedupErr.message}`);
+    }
+
+    if (suppressDuplicate) {
+      // Mark the inbound answered so the just-sent earlier reply stands and no
+      // retry/recovery/follow-up regenerates another near-duplicate. No outbound
+      // is enqueued; the completed-handler skips follow-up on a skipped result.
+      await markInboundMessagesAnswered({
+        messageIds: enrichedMessages.map(message => message.id),
+      });
+      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+        status: 'skipped_duplicate',
+        finished_at: new Date(),
+        attempts: job.attemptsMade + 1,
+      });
+      logger.warn('dedup', 'near-duplicate reply suppressed (not sent) after failed regeneration');
+      return { skipped: true, reason: 'duplicate_suppressed' };
     }
 
     const replyMessageId = await storeAssistantMessage({

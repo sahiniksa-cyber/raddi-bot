@@ -263,8 +263,13 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
 
   // Send-only path: quota is decremented only when sendWhatsappReply resolves
   // without throwing. If the send throws (including socket_not_open above), this
-  // line is skipped and BullMQ re-queues the job.
-  const dec = await decrementMessageQuota(userId);
+  // line is skipped and BullMQ re-queues the job. System notices (quota-stop)
+  // are NOT billable — the balance is already 0 — so they never decrement.
+  // Team-facing escalation alerts are internal notifications, not customer
+  // replies, so they are also non-billable and must not decrement the quota.
+  const dec = (payload.systemNotice || payload.escalation)
+    ? { success: true, remaining: 0 }
+    : await decrementMessageQuota(userId);
   if (!dec.success) {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] sent ${replyMessageId} but quota already empty for ${userId}`);
   }
@@ -338,8 +343,12 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     await recordWhatsappMessageId(userId, replyMessageId, lidResult?.key?.id);
     // Same rule as the main path: a successful send consumes one quota unit.
     // Without this, @lid customers (the majority on privacy-masked numbers)
-    // were never metered and the dashboard counter froze.
-    const dec = await decrementMessageQuota(userId);
+    // were never metered and the dashboard counter froze. System notices
+    // (quota-stop) are NOT billable, so they never decrement. Team-facing
+    // escalation alerts are internal notifications and also non-billable.
+    const dec = (payload.systemNotice || payload.escalation)
+      ? { success: true, remaining: 0 }
+      : await decrementMessageQuota(userId);
     if (!dec.success) {
       console.warn(`${new Date().toISOString()} [${WORKER_NAME}] lid-sent ${replyMessageId} but quota already empty for ${userId}`);
     }
@@ -428,6 +437,10 @@ async function isReplyAlreadySent({ replyMessageId, database = db } = {}) {
 // group + customer-reply forwards, payload.escalation=true) is exempt so the
 // merchant still learns a customer needs help while their balance is empty.
 function shouldBlockOutgoingForQuota(payload = {}, quota = {}) {
+  // System notices (e.g. the platform quota-stop message) are sent precisely
+  // BECAUSE the balance is empty — they must bypass the quota gate, just like
+  // team-facing escalation alerts. They are not billable and never decrement.
+  if (payload.systemNotice) return false;
   if (payload.escalation) return false;
   return quota.canReply === false;
 }
@@ -466,19 +479,23 @@ async function isConversationOwnerPaused({ userId, sender, replyMessageId = null
     if (until && new Date(until).getTime() > Date.now()) return true;
 
     // Fact-based signal (not just the time window): if an actual OWNER/human
-    // reply landed AFTER this AI reply was generated, the owner has stepped in —
-    // cancel the pending AI reply even if escalated_until was never set
-    // (ownerPauseMinutes=0, a silent failure, etc.). Distinguishes a human reply
-    // (phone 'sent_by_human' or dashboard manual 'sent' with source=manual_send)
-    // from the bot's own AI sends so we don't self-cancel.
+    // reply landed AT OR AFTER this AI reply was generated, the owner has stepped
+    // in — cancel the pending AI reply even if escalated_until was never set
+    // (ownerPauseMinutes=0, a silent failure, etc.). Uses `>=` (not `>`) so a FAST
+    // owner reply that lands in the same millisecond / NOW() tick as the AI row's
+    // insert time is still caught — that race was the in-flight double-reply bug.
+    // The `hum.id <> ai.id` guard + the status filter (phone 'sent_by_human' or
+    // dashboard manual 'sent' with source=manual_send) keep the bot from
+    // self-cancelling on its own AI sends.
     if (replyMessageId) {
       const human = await database.query(
         `SELECT 1
            FROM messages ai
            JOIN messages hum ON hum.conversation_id = ai.conversation_id
           WHERE ai.id = $1
+            AND hum.id <> ai.id
             AND hum.direction = 'outbound'
-            AND hum.created_at > ai.created_at
+            AND hum.created_at >= ai.created_at
             AND (hum.status = 'sent_by_human'
                  OR (hum.status = 'sent' AND hum.raw_payload->>'source' = 'manual_send'))
           LIMIT 1`,

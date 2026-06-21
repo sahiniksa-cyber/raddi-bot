@@ -515,6 +515,26 @@ const statements = [
     WHERE COALESCE(config->>'model', '') = ''
        OR config->>'model' LIKE 'google/%'
        OR config->>'model' LIKE 'gemini%'`,
+
+  // ── Added 2026-06-20: platform-wide admin-controlled settings store.
+  //    Generic key-value table; values are JSONB so any JSON-serialisable
+  //    shape can be stored without schema changes.
+  `CREATE TABLE IF NOT EXISTS platform_settings (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── Added 2026-06-20: atomic once-per-conversation guard for the platform
+  //    quota-stop notice. A plain SELECT-then-INSERT in ai-worker races under
+  //    concurrency (recovery re-enqueue / BullMQ retry) and double-sends the
+  //    stop message. This partial unique index lets the INSERT use
+  //    ON CONFLICT DO NOTHING so the DB — not a racy SELECT — guarantees at most
+  //    one quota_stop row per (user, conversation). Safe to add: a brand-new
+  //    feature, so no existing quota_stop rows can violate it.
+  `CREATE UNIQUE INDEX IF NOT EXISTS uniq_quota_stop_notice_per_conversation
+    ON messages (user_id, conversation_id)
+    WHERE (raw_payload->>'kind') = 'quota_stop'`,
 ];
 
 async function migrate() {

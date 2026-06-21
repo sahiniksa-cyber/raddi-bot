@@ -117,10 +117,11 @@ test('buildCombinedInboundText combines rapid customer messages into one prompt'
     { content: 'وهل فيه ضمان؟' },
   ]);
 
-  // A4: directive now asks for ONE coherent intent-based reply (not "answer them all")
-  assert.match(text, /رسائل متتالية/);
-  assert.match(text, /نية واحدة/);
-  assert.doesNotMatch(text, /أجب عليها كلها/);
+  // A4: directive now asks for ONE coherent reply that answers ALL questions
+  // (old wording "نية واحدة" was replaced intentionally — new wording is more inclusive)
+  assert.match(text, /رسائل متتالية من نفس العميل/);
+  assert.match(text, /ردّ?\s*واحد متماسك/);
+  assert.match(text, /بدون أن تترك أي سؤال/);
   assert.match(text, /1\. السلام عليكم/);
   assert.match(text, /3\. وهل فيه ضمان؟/);
 });
