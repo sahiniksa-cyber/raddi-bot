@@ -56,6 +56,32 @@ test('resolveDebounceMs honours AI_REPLY_DEBOUNCE_MS when set', () => {
   }
 });
 
+// Source-level assertion: ai-worker.js must NOT contain '|| \'9000\'' near a
+// debounce constant, and the enqueueFollowupIfPending default must use
+// resolveDebounceMs() so both initial and follow-up enqueues share the same
+// 20 s window.
+test('ai-worker.js follow-up path uses resolveDebounceMs() — no stale 9000 default', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(
+    path.resolve(__dirname, '../src/workers/ai-worker.js'),
+    'utf8',
+  );
+
+  assert.ok(
+    !src.includes("|| '9000'"),
+    "ai-worker.js must not contain the stale 9000 ms debounce default (|| '9000')",
+  );
+  assert.ok(
+    src.includes('debounceMs = resolveDebounceMs()'),
+    "enqueueFollowupIfPending must default debounceMs to resolveDebounceMs()",
+  );
+  assert.ok(
+    src.includes('resolveDebounceMs') && src.includes("require('../queues/message-queue')"),
+    "resolveDebounceMs must be imported from message-queue",
+  );
+});
+
 test('buildAiReplyQueueOptions uses 20000 as default delay for debounced jobs', () => {
   const saved = process.env.AI_REPLY_DEBOUNCE_MS;
   delete process.env.AI_REPLY_DEBOUNCE_MS;

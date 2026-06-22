@@ -12,7 +12,7 @@ const { Worker } = require('bullmq');
 
 const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
-const { QUEUE_NAMES, enqueueOutgoingWhatsapp, enqueueAiReply } = require('../queues/message-queue');
+const { QUEUE_NAMES, enqueueOutgoingWhatsapp, enqueueAiReply, resolveDebounceMs } = require('../queues/message-queue');
 const { buildEscalationJobKey } = require('../queues/outgoing-job-key');
 const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
@@ -41,7 +41,6 @@ const RATE_LIMIT_MAX = parseInt(process.env.AI_WORKER_RATE_LIMIT_MAX || '15', 10
 const RATE_LIMIT_DURATION_MS = parseInt(process.env.AI_WORKER_RATE_LIMIT_DURATION_MS || '60000', 10);
 const DB_READY_TIMEOUT_MS = parseInt(process.env.AI_WORKER_DB_READY_TIMEOUT_MS || '120000', 10);
 const DB_READY_INTERVAL_MS = parseInt(process.env.AI_WORKER_DB_READY_INTERVAL_MS || '2000', 10);
-const AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '9000', 10);
 // Must outlive the worst-case ai-client retry chain (30s timeout × 3 attempts
 // + 429 backoff waits ≈ 150s). message-queue.js derives its stale-active
 // cleanup threshold from the same env var (×2) — keep the defaults in sync.
@@ -261,7 +260,7 @@ async function enqueueFollowupIfPending({
   userId,
   conversationId,
   enqueue = enqueueAiReply,
-  debounceMs = AI_REPLY_DEBOUNCE_MS,
+  debounceMs = resolveDebounceMs(),
 } = {}) {
   if (!userId || !conversationId || !database?.isConfigured?.()) {
     return { enqueued: false, pending: 0 };
