@@ -1124,6 +1124,20 @@ body{background-attachment:scroll}
           </select>
           <small style="display:block;color:#888">لما ترد على العميل بنفسك، يسكت البوت عن المحادثة هذه المدة.</small>
         </div>
+        <div>
+          <label>مدة تجميع رسائل العميل</label>
+          <select id="messageGroupingSeconds">
+            <option value="5">٥ ثوانٍ</option>
+            <option value="10">١٠ ثوانٍ</option>
+            <option value="15">١٥ ثانية</option>
+            <option value="20" selected>٢٠ ثانية</option>
+            <option value="25">٢٥ ثانية</option>
+            <option value="30">٣٠ ثانية</option>
+            <option value="45">٤٥ ثانية</option>
+            <option value="60">٦٠ ثانية</option>
+          </select>
+          <small style="display:block;color:#888">ينتظر البوت هذه المدة لتجميع رسائل العميل المتتالية في رد واحد.</small>
+        </div>
       </div>
 
       <!-- Greetings -->
@@ -1919,6 +1933,7 @@ function fillForm(c){
   document.getElementById('respLang').value=c.responseLanguage||'العربية الفصحى السهلة';
   document.getElementById('maxLen').value=c.maxResponseLength||300;
   document.getElementById('ownerPauseMinutes').value=c.ownerPauseMinutes??30;
+  document.getElementById('messageGroupingSeconds').value=c.messageGroupingSeconds??20;
   {const _le=document.getElementById('learningEnabled');if(_le)_le.checked=c.learningEnabled!==false;}
   document.getElementById('errorMessage').value=c.errorMessage||'';
   setModel(c.model||'gpt-4o');
@@ -2598,6 +2613,7 @@ async function saveConf(){
     responseLanguage:document.getElementById('respLang').value.trim(),
     maxResponseLength:parseInt(document.getElementById('maxLen').value)||300,
     ownerPauseMinutes:(()=>{const v=parseInt(document.getElementById('ownerPauseMinutes').value,10);return Number.isFinite(v)&&v>=0?v:30;})(),
+    messageGroupingSeconds:(()=>{const v=parseInt(document.getElementById('messageGroupingSeconds').value,10);return Number.isFinite(v)&&v>=5&&v<=60?v:20;})(),
     errorMessage:document.getElementById('errorMessage').value.trim(),
     replyStyle,
     replyDelayPreset,
