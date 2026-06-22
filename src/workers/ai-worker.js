@@ -1221,9 +1221,14 @@ async function main() {
     if (returnvalue && returnvalue.skipped) return;
     try {
       const data = job?.data || {};
+      // Use the SAME per-merchant grouping window for the follow-up re-enqueue
+      // as the initial ingest. Load the config cheaply with fail-open: a missing
+      // config falls back to the global default debounce.
+      const followupCfg = await resolveConfigForAI(data.userId).catch(() => ({}));
       const result = await enqueueFollowupIfPending({
         userId: data.userId,
         conversationId: data.conversationId,
+        debounceMs: resolveDebounceMs(followupCfg),
       });
       if (result.enqueued) {
         console.log(

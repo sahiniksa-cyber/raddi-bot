@@ -1101,6 +1101,11 @@ body{background-attachment:scroll}
         <small style="display:block;color:#888">ألغِ الاختيار لمنعها نهائياً في كل ردود البوت.</small>
       </div>
 
+      <div class="form-group">
+        <label><input type="checkbox" id="multilineFormat"> توزيع الرد على عدة أسطر (يبدو بشري، لا نسخ-لصق)</label>
+        <small style="display:block;color:#888">عند التفعيل يوزّع البوت الرد على عدة أسطر قصيرة ويفصل بين الأفكار بسطر جديد بدل كتلة واحدة متصلة.</small>
+      </div>
+
       <!-- Reply max length -->
       <div class="g2">
         <div><label>أقصى طول الرد (حرف)</label><input type="number" id="maxLen" placeholder="300"></div>
@@ -1123,6 +1128,20 @@ body{background-attachment:scroll}
             <option value="120">ساعتين</option>
           </select>
           <small style="display:block;color:#888">لما ترد على العميل بنفسك، يسكت البوت عن المحادثة هذه المدة.</small>
+        </div>
+        <div>
+          <label>مدة تجميع رسائل العميل</label>
+          <select id="messageGroupingSeconds">
+            <option value="5">٥ ثوانٍ</option>
+            <option value="10">١٠ ثوانٍ</option>
+            <option value="15">١٥ ثانية</option>
+            <option value="20" selected>٢٠ ثانية</option>
+            <option value="25">٢٥ ثانية</option>
+            <option value="30">٣٠ ثانية</option>
+            <option value="45">٤٥ ثانية</option>
+            <option value="60">٦٠ ثانية</option>
+          </select>
+          <small style="display:block;color:#888">ينتظر البوت هذه المدة لتجميع رسائل العميل المتتالية في رد واحد.</small>
         </div>
       </div>
 
@@ -1919,6 +1938,7 @@ function fillForm(c){
   document.getElementById('respLang').value=c.responseLanguage||'العربية الفصحى السهلة';
   document.getElementById('maxLen').value=c.maxResponseLength||300;
   document.getElementById('ownerPauseMinutes').value=c.ownerPauseMinutes??30;
+  document.getElementById('messageGroupingSeconds').value=c.messageGroupingSeconds??20;
   {const _le=document.getElementById('learningEnabled');if(_le)_le.checked=c.learningEnabled!==false;}
   document.getElementById('errorMessage').value=c.errorMessage||'';
   setModel(c.model||'gpt-4o');
@@ -1933,6 +1953,7 @@ function fillForm(c){
   document.getElementById('rsEmoji').value=r.emojiLevel||'none';
   document.getElementById('rsAllowExclamation').checked = r.allowExclamation !== false;
   document.getElementById('rsAllowPeriods').checked = r.allowSentencePeriods !== false;
+  document.getElementById('multilineFormat').checked = r.multilineFormat === true;
   document.getElementById('rsLength').value=r.replyLength||'medium';
   renderChips('greetingChips',r.greetingPhrases||['أهلاً وسهلاً 🌹','هلا والله','حياك الله']);
   renderChips('closingChips',r.closingPhrases||[]);
@@ -2572,6 +2593,7 @@ async function saveConf(){
     emojiLevel:document.getElementById('rsEmoji').value,
     allowExclamation:document.getElementById('rsAllowExclamation').checked,
     allowSentencePeriods:document.getElementById('rsAllowPeriods').checked,
+    multilineFormat:document.getElementById('multilineFormat').checked,
     replyLength:document.getElementById('rsLength').value,
     useShortReplies:document.getElementById('rsLength').value==='short',
     greetingPhrases:getChips('greetingChips'),
@@ -2598,6 +2620,7 @@ async function saveConf(){
     responseLanguage:document.getElementById('respLang').value.trim(),
     maxResponseLength:parseInt(document.getElementById('maxLen').value)||300,
     ownerPauseMinutes:(()=>{const v=parseInt(document.getElementById('ownerPauseMinutes').value,10);return Number.isFinite(v)&&v>=0?v:30;})(),
+    messageGroupingSeconds:(()=>{const v=parseInt(document.getElementById('messageGroupingSeconds').value,10);return Number.isFinite(v)&&v>=5&&v<=60?v:20;})(),
     errorMessage:document.getElementById('errorMessage').value.trim(),
     replyStyle,
     replyDelayPreset,
