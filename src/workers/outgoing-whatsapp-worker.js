@@ -320,6 +320,25 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     if (shouldCancelOutgoingForStoppedBot(loadedBot, payload)) {
       throw new Error('bot_stopped_by_owner');
     }
+    // Owner-interrupt guard — MUST mirror the main path (line ~162). Without it,
+    // the @lid branch (which is the VAST majority of customers on privacy-masked
+    // numbers) sent the AI reply even after the owner had replied manually, so
+    // "stop when I step in" silently never worked for ~98% of conversations.
+    if (!payload.escalation && await isConversationOwnerPaused({ userId, sender, replyMessageId })) {
+      const message = 'outgoing reply canceled because owner replied (escalated_until active)';
+      await markReplyMessage(replyMessageId, 'canceled', {
+        sentBy: WORKER_NAME,
+        canceledAt: new Date().toISOString(),
+        error: message,
+      });
+      await updateJobStatus(job.id, {
+        status: 'canceled',
+        finished_at: new Date(),
+        attempts: job.attemptsMade,
+        last_error: message,
+      });
+      return { skipped: true, reason: 'owner_paused', lid: true };
+    }
     if (shouldBlockOutgoingForQuota(payload, await checkMessageQuota(userId))) {
       await cancelOutgoingForQuota(job, { replyMessageId });
       return { skipped: true, reason: 'quota_empty', lid: true };
