@@ -189,6 +189,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._version = null;
     this._socketGeneration = 0;
     this._authFlush = null;
+    this._authStore = null;
     this.startupTime = Date.now();
     this._hasEverConnected = false;
     this._stableTimer = null;
@@ -253,8 +254,9 @@ class BaileysConnectionManager extends EventEmitter {
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
     try {
-      const { state, saveCreds, flush } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
+      const { state, saveCreds, flush, store } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
       this._authFlush = flush || null;
+      this._authStore = store || null;
       if (!this._version) {
         const { version } = await fetchLatestBaileysVersion();
         this._version = version;
@@ -680,8 +682,19 @@ class BaileysConnectionManager extends EventEmitter {
 
   async clearAuthCache(reason) {
     try {
-      const store = new BaileysPostgresAuthState({ db: this.db, userId: this.userId });
-      await store.clear();
+      if (this._authStore) {
+        // Dispose the LIVE store FIRST so the dying socket's pending debounce
+        // timer and any late set()/saveCreds can no longer write — then clear()
+        // wipes the DB and cannot be clobbered. clear()'s persist() is NOT
+        // guarded by disposed, so the wipe still runs, and the writeQueue chain
+        // makes it the LAST write even if a persist was already in flight.
+        this._authStore.dispose();
+        await this._authStore.clear();
+        this._authStore = null;
+      } else {
+        const store = new BaileysPostgresAuthState({ db: this.db, userId: this.userId });
+        await store.clear();
+      }
       this.log('warn', 'auth', `cleared Baileys auth session: ${reason}`);
     } catch (err) {
       this.log('warn', 'auth', `failed to clear Baileys auth session: ${err.message}`);
