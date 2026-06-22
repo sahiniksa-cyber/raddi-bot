@@ -279,6 +279,14 @@ class BaileysConnectionManager extends EventEmitter {
         keepAliveIntervalMs: parseInt(process.env.WA_KEEPALIVE_INTERVAL_MS || '20000', 10),
         connectTimeoutMs: parseInt(process.env.WA_CONNECT_TIMEOUT_MS || '60000', 10),
         retryRequestDelayMs: parseInt(process.env.WA_RETRY_REQUEST_DELAY_MS || '350', 10),
+        // QR lifetime. Baileys defaults to 60s for the FIRST qr but only 20s for
+        // every subsequent rotation, then emits 408 "QR refs attempts ended" once
+        // the refs run out — a ~20s scan window per rotation is too tight for a
+        // merchant to unlock the phone, open WhatsApp and scan, producing an
+        // "Invalid QR code" / reconnect loop (reconnect_count climbing into the
+        // dozens). Pin every QR (first AND subsequent) to a generous window so
+        // the displayed code stays valid long enough to scan. Env-tunable.
+        qrTimeout: parseInt(process.env.WA_QR_TIMEOUT_MS || '60000', 10),
         // Retry-receipt handler: when a peer fails to decrypt one of our sent
         // replies, WhatsApp asks us to re-encrypt and resend. Without this
         // callback Baileys returns undefined → peer rebuilds its Signal session
