@@ -879,7 +879,7 @@ async function processAiReply(job) {
         db,
         conversationId: conversation.id,
         candidate: customerReply,
-        lookback: 3,
+        lookback: 6,
         threshold: 0.85,
         userId,
       });
