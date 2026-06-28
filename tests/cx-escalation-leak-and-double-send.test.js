@@ -71,10 +71,12 @@ test('CX-2: the escalation side-channel is wrapped best-effort (does not rethrow
   );
 });
 
-test('CX-2: markInboundMessagesAnswered is invoked exactly once on the success path', () => {
-  // Was previously called once (after escalation). The fix MOVES it (still one
-  // call) — it must not be duplicated, which would be harmless but signals a
-  // bad merge.
+test('CX-2: markInboundMessagesAnswered is invoked on exactly the two known paths', () => {
+  // There are exactly TWO legitimate, mutually-exclusive call sites:
+  //   1) the near-duplicate suppression early-return (commit d14a1c7), and
+  //   2) the normal success path right before the outgoing enqueue.
+  // Only one runs per job (the suppress path returns early). The guard's intent
+  // is unchanged: catch an ACCIDENTAL extra call from a bad merge.
   const matches = aiWorkerSource.match(/await markInboundMessagesAnswered\(\{/g) || [];
-  assert.equal(matches.length, 1, `expected exactly 1 markInboundMessagesAnswered call, found ${matches.length}`);
+  assert.equal(matches.length, 2, `expected exactly 2 markInboundMessagesAnswered call sites, found ${matches.length}`);
 });
