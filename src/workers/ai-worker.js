@@ -178,6 +178,38 @@ async function getConversationEscalationStats({ database = db, conversationId })
   };
 }
 
+/**
+ * Does this conversation have an escalation that was sent to the team but the
+ * team has NOT answered yet (escalation_threads.resolved_at IS NULL)? When true,
+ * the customer's request is already on record "awaiting the team", so the AI must
+ * stop re-registering it ("بسجل طلبك / بيتواصل معك الفريق") on every follow-up —
+ * the production bug where the bot looped the same escalation promise for days
+ * because nothing ever told it the escalation already happened. The thread is
+ * cleared (resolved_at set) the moment the team's answer is relayed back, so the
+ * bot resumes normal handling automatically. A 7-day window keeps an ancient,
+ * never-resolved thread from silencing the bot on a genuinely new issue.
+ */
+async function getPendingEscalation({ database = db, conversationId }) {
+  if (!conversationId || !database?.isConfigured?.()) {
+    return { pending: false, since: null };
+  }
+  const result = await database.query(
+    `SELECT created_at
+       FROM escalation_threads
+      WHERE conversation_id = $1
+        AND resolved_at IS NULL
+        AND created_at > NOW() - INTERVAL '7 days'
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [conversationId],
+  );
+  const row = result.rows[0];
+  return {
+    pending: Boolean(row),
+    since: row?.created_at ? new Date(row.created_at) : null,
+  };
+}
+
 async function loadInboundMessage({ userId, messageId, text }) {
   if (text) return text;
   if (!messageId) return '';
@@ -826,6 +858,17 @@ async function processAiReply(job) {
       logger.warn('profile', `getProfile failed: ${profileErr.message}`);
     }
 
+    // Escalation state (best-effort). When the team was already notified and
+    // hasn't answered yet, tell the model so it stops re-registering the request
+    // on every follow-up ("بسجل طلبك / بيتواصل معك الفريق").
+    let escalationPending = false;
+    try {
+      const pending = await getPendingEscalation({ database: db, conversationId: conversation.id });
+      escalationPending = pending.pending;
+    } catch (pendingErr) {
+      logger.warn('escalation', `pending-escalation check failed: ${pendingErr.message}`);
+    }
+
     const ai = new AIClient(config, logger, {
       record: async (model, inputTokens, outputTokens) => {
         await recordAiUsage({ userId, model, inputTokens, outputTokens }).catch(() => {});
@@ -834,7 +877,7 @@ async function processAiReply(job) {
 
     let reply;
     try {
-      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix }) || '').trim();
+      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix, escalationPending }) || '').trim();
     } catch (aiErr) {
       if (combinePrefix) {
         // Send the canned part now, but ONLY mark the trigger messages as
@@ -897,6 +940,7 @@ async function processAiReply(job) {
           frequencyPenalty: 0.6,
           customerProfile,
           instantAnswered: combinePrefix,
+          escalationPending,
         }).catch(() => '');
         const retry = String(retryRaw || '').trim();
         let regenerated = null;
@@ -1281,6 +1325,7 @@ module.exports = {
   enrichInboundMessagesWithMedia,
   sendInstantAutoReply,
   getConversationEscalationStats,
+  getPendingEscalation,
   isConversationEscalationMuted,
   isTransientDatabaseError,
   loadPendingInboundMessages,
