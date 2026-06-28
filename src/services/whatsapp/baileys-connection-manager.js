@@ -189,6 +189,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._version = null;
     this._socketGeneration = 0;
     this._authFlush = null;
+    this._authStore = null;
     this.startupTime = Date.now();
     this._hasEverConnected = false;
     this._stableTimer = null;
@@ -253,8 +254,9 @@ class BaileysConnectionManager extends EventEmitter {
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
     try {
-      const { state, saveCreds, flush } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
+      const { state, saveCreds, flush, store } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
       this._authFlush = flush || null;
+      this._authStore = store || null;
       if (!this._version) {
         const { version } = await fetchLatestBaileysVersion();
         this._version = version;
@@ -277,6 +279,14 @@ class BaileysConnectionManager extends EventEmitter {
         keepAliveIntervalMs: parseInt(process.env.WA_KEEPALIVE_INTERVAL_MS || '20000', 10),
         connectTimeoutMs: parseInt(process.env.WA_CONNECT_TIMEOUT_MS || '60000', 10),
         retryRequestDelayMs: parseInt(process.env.WA_RETRY_REQUEST_DELAY_MS || '350', 10),
+        // QR lifetime. Baileys defaults to 60s for the FIRST qr but only 20s for
+        // every subsequent rotation, then emits 408 "QR refs attempts ended" once
+        // the refs run out — a ~20s scan window per rotation is too tight for a
+        // merchant to unlock the phone, open WhatsApp and scan, producing an
+        // "Invalid QR code" / reconnect loop (reconnect_count climbing into the
+        // dozens). Pin every QR (first AND subsequent) to a generous window so
+        // the displayed code stays valid long enough to scan. Env-tunable.
+        qrTimeout: parseInt(process.env.WA_QR_TIMEOUT_MS || '60000', 10),
         // Retry-receipt handler: when a peer fails to decrypt one of our sent
         // replies, WhatsApp asks us to re-encrypt and resend. Without this
         // callback Baileys returns undefined → peer rebuilds its Signal session
@@ -680,8 +690,19 @@ class BaileysConnectionManager extends EventEmitter {
 
   async clearAuthCache(reason) {
     try {
-      const store = new BaileysPostgresAuthState({ db: this.db, userId: this.userId });
-      await store.clear();
+      if (this._authStore) {
+        // Dispose the LIVE store FIRST so the dying socket's pending debounce
+        // timer and any late set()/saveCreds can no longer write — then clear()
+        // wipes the DB and cannot be clobbered. clear()'s persist() is NOT
+        // guarded by disposed, so the wipe still runs, and the writeQueue chain
+        // makes it the LAST write even if a persist was already in flight.
+        this._authStore.dispose();
+        await this._authStore.clear();
+        this._authStore = null;
+      } else {
+        const store = new BaileysPostgresAuthState({ db: this.db, userId: this.userId });
+        await store.clear();
+      }
       this.log('warn', 'auth', `cleared Baileys auth session: ${reason}`);
     } catch (err) {
       this.log('warn', 'auth', `failed to clear Baileys auth session: ${err.message}`);

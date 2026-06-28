@@ -1,8 +1,15 @@
 'use strict';
 
 const db = require('../../db/client');
-const { enqueueAiReply } = require('../../queues/message-queue');
+const { enqueueAiReply, resolveDebounceMs } = require('../../queues/message-queue');
 const escalationBridge = require('../escalation/escalation-bridge');
+
+// Lazy require to avoid a load-order circular dependency: runtime-bot transitively
+// pulls in this service, so destructuring resolveConfigForAI at module load time
+// can yield `undefined` when runtime-bot is required first. Resolve it at call time.
+function defaultConfigLoader(userId) {
+  return require('../bot/runtime-bot').resolveConfigForAI(userId);
+}
 
 function messageIdFromWhatsappMessage(msg) {
   return msg?.id?._serialized || msg?.id?.id || null;
@@ -134,11 +141,12 @@ function ownerPauseExpiry(minutes, nowMs) {
 }
 
 class MessageIngestService {
-  constructor({ logger = console, queue = { enqueueAiReply }, database = db, bridge = escalationBridge } = {}) {
+  constructor({ logger = console, queue = { enqueueAiReply }, database = db, bridge = escalationBridge, configLoader = defaultConfigLoader } = {}) {
     this.logger = logger;
     this.queue = queue;
     this.db = database;
     this.bridge = bridge;
+    this.configLoader = configLoader;
   }
 
   /**
@@ -288,6 +296,16 @@ class MessageIngestService {
       return { conversationId, messageId, phoneNumber: storedPhoneNumber };
     });
 
+    // Resolve the per-merchant message-grouping window (debounce). Fail-open to
+    // the global default so a bad/missing config never breaks ingest.
+    let delay;
+    try {
+      const cfg = await this.configLoader(userId);
+      delay = resolveDebounceMs(cfg);
+    } catch (_) {
+      delay = resolveDebounceMs();
+    }
+
     await this.queue.enqueueAiReply({
       userId,
       conversationId: saved.conversationId,
@@ -301,6 +319,7 @@ class MessageIngestService {
       media,
     }, {
       jobKey: `conversation-${saved.conversationId}`,
+      delay,
     });
 
     this.logger.info?.('message', `queued inbound message ${providerMessageId} from ${sender}`);

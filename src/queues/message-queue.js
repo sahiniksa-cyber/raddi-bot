@@ -24,7 +24,20 @@ const DEFAULT_REMOVE_ON_FAIL = {
   count: parseInt(process.env.QUEUE_REMOVE_FAIL_COUNT || '5000', 10),
 };
 
-const DEFAULT_AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '9000', 10);
+const DEFAULT_AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '20000', 10);
+
+/**
+ * Returns the effective AI-reply debounce window in ms.
+ * When a merchant config carrying `messageGroupingSeconds` is passed, the
+ * per-merchant value (clamped to 5–60s) wins. Otherwise falls back to the
+ * global env-overridable default (currently 20000). Called with no args it
+ * returns the global default (back-compat).
+ */
+function resolveDebounceMs(config) {
+  const secs = parseInt(config && config.messageGroupingSeconds, 10);
+  if (Number.isFinite(secs)) return Math.min(60, Math.max(5, secs)) * 1000;
+  return DEFAULT_AI_REPLY_DEBOUNCE_MS; // global default (env-overridable, currently 20000)
+}
 const STALE_ACTIVE_JOB_MS = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '180000', 10) * 2;
 
 let connection = null;
@@ -229,4 +242,5 @@ module.exports = {
   getQueueEvents,
   getQueues,
   recordJob,
+  resolveDebounceMs,
 };

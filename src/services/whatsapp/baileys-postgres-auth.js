@@ -26,6 +26,12 @@ class BaileysPostgresAuthState {
     this.userId = userId;
     this.cache = { creds: null, keys: {} };
     this.loaded = false;
+    // Set once the live store is being torn down (logout/clear). A disposed
+    // store performs NO further auto-writes, so a dying socket's pending
+    // debounce timer or late set()/saveCreds cannot resurrect stale keys on
+    // top of a fresh clear(). clear()/persist() themselves are NOT guarded —
+    // clear() must still be able to wipe after dispose.
+    this.disposed = false;
     this.writeQueue = Promise.resolve();
     this._loadingPromise = null;
     // Debounce key writes: every inbound message triggers 2-4 set() calls in
@@ -84,7 +90,21 @@ class BaileysPostgresAuthState {
     return this.writeQueue;
   }
 
+  // Stop the live store from writing again. Called only from the connection
+  // manager's clearAuthCache (logout/clear) — never during normal operation.
+  // Cancels the pending debounce so the dying socket's last ratchet step can
+  // not land after the wipe. clear()/persist() stay usable so the wipe itself
+  // still goes through.
+  dispose() {
+    this.disposed = true;
+    if (this._persistDebounce) {
+      clearTimeout(this._persistDebounce);
+      this._persistDebounce = null;
+    }
+  }
+
   _schedulePersist() {
+    if (this.disposed) return;
     if (this._persistDebounce) return;
     this._persistDebounce = setTimeout(() => {
       this._persistDebounce = null;
@@ -146,6 +166,9 @@ class BaileysPostgresAuthState {
       // Credentials change rarely and carry pairing state (identity key,
       // signed prekey rotations) — persist immediately, no debounce.
       saveCreds: async () => {
+        // A disposed store must not write: a saveCreds from the dying socket
+        // after clear() would otherwise restore stale creds over the wipe.
+        if (this.disposed) return;
         // Drain ALL in-flight set() calls so their _schedulePersist has run.
         try { await this._setChain; } catch (_) {}
         if (this._persistDebounce) {
@@ -195,7 +218,11 @@ class BaileysPostgresAuthState {
 
 async function usePostgresBaileysAuthState({ db, userId }) {
   const store = new BaileysPostgresAuthState({ db, userId });
-  return store.state();
+  const s = await store.state();
+  // Expose the store so the connection manager can dispose()/clear() the LIVE
+  // instance on logout. Backward compatible — callers still destructure
+  // { state, saveCreds, flush }.
+  return { ...s, store };
 }
 
 module.exports = {
