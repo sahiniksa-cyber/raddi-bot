@@ -803,8 +803,13 @@ body{background-attachment:scroll}
    collapsed; click the header (or its arrow) to expand. Keeps the page calm and
    organised instead of one overwhelming wall. JS adds the .collapsible/.collapsed
    classes and the arrow; clicks on real controls inside a header are ignored. */
-.panel.collapsible>.phdr{cursor:pointer;user-select:none}
+.panel.collapsible>.phdr{cursor:pointer;user-select:none;background:transparent}
 .panel.collapsible.collapsed>.pbdy{display:none!important}
+/* When collapsed the section is a clean bar: no divider line, and header action
+   buttons (محادثة جديدة / استئناف الكل) are tucked away — they reappear inside the
+   section once it's opened, instead of protruding from a closed header. */
+.panel.collapsible.collapsed>.phdr{border-bottom:none}
+.panel.collapsible.collapsed>.phdr button{display:none}
 .acc-arrow{margin-inline-start:auto;flex:none;width:9px;height:9px;border-right:2px solid var(--text-soft);border-bottom:2px solid var(--text-soft);transform:rotate(45deg);transition:transform .2s ease,border-color .2s ease;opacity:.75}
 .panel.collapsible:not(.collapsed)>.phdr .acc-arrow{transform:rotate(-135deg)}
 .panel.collapsible>.phdr:hover .acc-arrow{opacity:1;border-color:var(--green)}
