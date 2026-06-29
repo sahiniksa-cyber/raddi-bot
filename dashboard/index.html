@@ -111,7 +111,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .panel{background:var(--card);border:1px solid var(--border);border-radius:14px;margin-bottom:14px;overflow:hidden}
 .phdr{padding:13px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:13.5px;font-weight:600;color:var(--text);background:var(--card-soft)}
 .pbdy{padding:16px 18px}
-label{display:block;font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:5px;letter-spacing:.05em;text-transform:uppercase}
+label{display:block;font-size:12.5px;font-weight:600;color:var(--text-soft);margin-bottom:6px;letter-spacing:0}
 input,textarea,select{width:100%;background:var(--bg-soft);border:1.5px solid var(--border);border-radius:9px;padding:9px 12px;color:var(--text);font-size:13.5px;font-family:var(--font);outline:none;transition:all .15s;margin-bottom:12px;box-sizing:border-box}
 input::placeholder,textarea::placeholder{color:var(--text-dim)}
 input:focus,textarea:focus,select:focus{border-color:var(--green);background:#fff;box-shadow:0 0 0 3px var(--green-bg)}
@@ -201,7 +201,7 @@ html[dir="rtl"] select{background-position:left 13px center}
 .enhance-btn{margin-right:auto;padding:5px 11px;border-radius:7px;border:none;background:linear-gradient(135deg,#a855f7,var(--purple));color:#fff;font-family:var(--font);font-size:11px;font-weight:800;cursor:pointer;transition:all .18s;float:left;margin-top:-2px;box-shadow:0 1px 2px rgba(124,58,237,.25)}
 .enhance-btn:hover{transform:translateY(-1px)}
 .enhance-btn:disabled{opacity:.5;cursor:wait}
-label{display:flex;align-items:center}
+label{display:flex;align-items:center;gap:8px}
 
 
 /* HEALTH CHECK */
@@ -602,19 +602,24 @@ body{
 }
 
 input,textarea,select,.chips{
-  border:1px solid rgba(26,26,26,.09)!important;
-  border-radius:20px!important;
-  background:rgba(255,255,255,.76)!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.86),0 8px 22px rgba(35,44,64,.04);
+  border:1.5px solid var(--border)!important;
+  border-radius:10px!important;
+  background:#fff!important;
+  box-shadow:none!important;
 }
-
 input:focus,textarea:focus,select:focus,.chips:focus-within{
-  border-color:rgba(39,183,122,.42)!important;
-  box-shadow:0 0 0 4px rgba(39,183,122,.12),0 12px 26px rgba(35,44,64,.06)!important;
+  border-color:var(--green)!important;
+  box-shadow:0 0 0 3px var(--green-bg)!important;
+}
+/* Compact, branded checkboxes. The global input{width:100%} used to stretch
+   them into full-width rectangles (the "خيارات الصح والغلط شكلها غلط" issue). */
+input[type=checkbox]{
+  width:18px!important;height:18px!important;flex:none!important;margin:0!important;
+  accent-color:var(--green);cursor:pointer;box-shadow:none!important;border-radius:6px!important;
 }
 
 button,.green-btn,.red-btn,.ghost-btn,.ctrl-start,.ctrl-stop,.save-btn,.add-btn,.health-btn,.test-send,.train-start-btn,.train-send,.train-apply,.key-get-btn,.prod-del,.chip-add{
-  border-radius:999px!important;
+  border-radius:10px!important;
   transition:transform .18s ease,box-shadow .18s ease,background .18s ease,color .18s ease!important;
 }
 
@@ -771,6 +776,23 @@ body{background-attachment:scroll}
 .cv-banner-warn.warn-red{background:linear-gradient(135deg,#fee2e2,#fef2f2);color:#7f1d1d;border-color:#fca5a5}
 .cv-banner-warn a{color:inherit;text-decoration:underline;font-weight:800;margin:0 6px}
 .cv-banner-warn .cv-banner-close{background:transparent;border:none;color:inherit;cursor:pointer;font-size:18px;padding:0 6px;font-weight:900;margin-right:6px}
+
+/* ── Laptop layout: the Settings tab was one long vertical column. On wide
+   screens lay its cards out as a balanced two-column masonry, while keeping the
+   status bar, stats, health check and save button full-width. Pure CSS, scoped
+   to #view-settings — no markup/JS changes. Phone stays single-column. ── */
+@media (min-width:1024px){
+  #view-settings>.sw{max-width:1160px;columns:2;column-gap:16px}
+  #view-settings>.sw>.panel{break-inside:avoid;margin-bottom:16px;width:100%}
+  #view-settings>.sw>.bot-ctrl,
+  #view-settings>.sw>.stats-row,
+  #view-settings>.sw>.health-btn,
+  #view-settings>.sw>.health-results,
+  #view-settings>.sw>.save-btn{column-span:all}
+}
+@media (min-width:1500px){
+  #view-settings>.sw{max-width:1320px;column-gap:18px}
+}
 </style>
 <link rel="stylesheet" href="conversations.css">
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
