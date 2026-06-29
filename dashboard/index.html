@@ -1102,8 +1102,23 @@ body{background-attachment:scroll}
       </div>
 
       <div class="form-group">
-        <label><input type="checkbox" id="multilineFormat"> توزيع الرد على عدة أسطر (يبدو بشري، لا نسخ-لصق)</label>
-        <small style="display:block;color:#888">عند التفعيل يوزّع البوت الرد على عدة أسطر قصيرة ويفصل بين الأفكار بسطر جديد بدل كتلة واحدة متصلة.</small>
+        <label for="lineBreakMode">تنسيق الأسطر في الرد</label>
+        <select id="lineBreakMode" onchange="updateLineBreakFields()">
+          <option value="connected">متصل — جُمل متصلة بدون تقطيع (الافتراضي)</option>
+          <option value="sentence">سطر جديد بعد كل جملة</option>
+          <option value="topic">سطر فارغ بعد كل موضوع/فكرة</option>
+          <option value="words">سطر جديد بعد عدد كلمات</option>
+          <option value="ai">يقرر الذكاء الاصطناعي التوزيع</option>
+        </select>
+        <small style="display:block;color:#888">يتحكم في طريقة تقطيع رد البوت على أسطر. الخياران «بعد كل جملة» و«بعد عدد كلمات» مفروضان تلقائياً ومضمونان؛ «بعد كل موضوع» يحدده البوت ويُضبط عدد الأسطر تلقائياً.</small>
+        <div id="lineBreakCountWrap" style="display:none;margin-top:8px">
+          <label for="lineBreakCount">عدد الأسطر الفاصلة بين المواضيع (1–5)</label>
+          <input type="number" id="lineBreakCount" min="1" max="5" step="1" value="2">
+        </div>
+        <div id="lineBreakWordsWrap" style="display:none;margin-top:8px">
+          <label for="lineBreakWords">عدد الكلمات قبل كل سطر جديد (2–60)</label>
+          <input type="number" id="lineBreakWords" min="2" max="60" step="1" value="12">
+        </div>
       </div>
 
       <!-- Reply max length -->
@@ -1929,6 +1944,12 @@ async function loadConf(retry=0){
   }
 }
 
+function updateLineBreakFields(){
+  var mode=document.getElementById('lineBreakMode').value;
+  document.getElementById('lineBreakCountWrap').style.display = (mode==='topic') ? 'block' : 'none';
+  document.getElementById('lineBreakWordsWrap').style.display = (mode==='words') ? 'block' : 'none';
+}
+
 function fillForm(c){
   document.getElementById('storeName').value=c.storeName||'';
   document.getElementById('storeDesc').value=c.storeDescription||'';
@@ -1953,7 +1974,10 @@ function fillForm(c){
   document.getElementById('rsEmoji').value=r.emojiLevel||'none';
   document.getElementById('rsAllowExclamation').checked = r.allowExclamation !== false;
   document.getElementById('rsAllowPeriods').checked = r.allowSentencePeriods !== false;
-  document.getElementById('multilineFormat').checked = r.multilineFormat === true;
+  document.getElementById('lineBreakMode').value = r.lineBreakMode || (r.multilineFormat === true ? 'ai' : 'connected');
+  document.getElementById('lineBreakCount').value = r.lineBreakCount || 2;
+  document.getElementById('lineBreakWords').value = r.lineBreakWords || 12;
+  updateLineBreakFields();
   document.getElementById('rsLength').value=r.replyLength||'medium';
   renderChips('greetingChips',r.greetingPhrases||['أهلاً وسهلاً 🌹','هلا والله','حياك الله']);
   renderChips('closingChips',r.closingPhrases||[]);
@@ -2593,7 +2617,9 @@ async function saveConf(){
     emojiLevel:document.getElementById('rsEmoji').value,
     allowExclamation:document.getElementById('rsAllowExclamation').checked,
     allowSentencePeriods:document.getElementById('rsAllowPeriods').checked,
-    multilineFormat:document.getElementById('multilineFormat').checked,
+    lineBreakMode:document.getElementById('lineBreakMode').value,
+    lineBreakCount:parseInt(document.getElementById('lineBreakCount').value,10)||2,
+    lineBreakWords:parseInt(document.getElementById('lineBreakWords').value,10)||12,
     replyLength:document.getElementById('rsLength').value,
     useShortReplies:document.getElementById('rsLength').value==='short',
     greetingPhrases:getChips('greetingChips'),

@@ -28,7 +28,9 @@ test('multilineFormat absent behaves like false (default unchanged)', () => {
   assert.doesNotMatch(block, MULTILINE_RE);
 });
 
-test('dashboard exposes the multilineFormat toggle', () => {
+test('dashboard exposes the lineBreakMode control (replaces the old multilineFormat toggle)', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
-  assert.ok(html.includes('multilineFormat'), 'dashboard/index.html should reference multilineFormat');
+  assert.ok(html.includes('lineBreakMode'), 'dashboard/index.html should reference lineBreakMode');
+  assert.ok(html.includes('lineBreakWords'), 'dashboard/index.html should expose the words-per-line field');
+  assert.ok(html.includes('updateLineBreakFields'), 'dashboard should toggle the dependent fields');
 });
