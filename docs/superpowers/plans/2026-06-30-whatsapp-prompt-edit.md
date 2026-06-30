@@ -72,7 +72,7 @@ test('detectEditCommand matches each keyword and returns the body', () => {
 });
 
 test('detectEditCommand tolerates a one-letter typo in the keyword', () => {
-  assert.equal(detectEditCommand('تعدil أضف معلومة').matched, true); // missing letter
+  assert.equal(detectEditCommand('تعدي أضف معلومة').matched, true); // missing letter
   assert.equal(detectEditCommand('تعدييل أضف معلومة').matched, true); // extra letter
 });
 
