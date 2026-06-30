@@ -721,26 +721,37 @@ function createApp() {
     if (queues.error) {
       checks.push({ name: 'الطابور', ok: false, msg: queues.error });
     } else {
-      const queueOk = (queues.aiFailed === 0 || queues.aiActive > 0) && queues.aiWaiting < 10;
+      // Benign no-ops (the worker correctly skipping an empty/stale/expired message)
+      // are NOT real errors. Don't count them as "فاشل" and don't surface them as
+      // "آخر خطأ AI" — otherwise the health check cries wolf on normal behaviour
+      // (the merchant sees a red error while the bot is working fine).
+      const BENIGN_FAIL_RE = /empty inbound|no pending inbound|stale|expired/i;
+      let realFailed = queues.aiFailed;
+      let lastRealError = null;
+      if (queues.aiFailed > 0) {
+        try {
+          const failedJobs = await aiReplies.getFailed(0, 49);
+          const realOnes = failedJobs.filter(j => !BENIGN_FAIL_RE.test(String(j?.failedReason || '')));
+          realFailed = realOnes.length;
+          lastRealError = realOnes[0]?.failedReason || null;
+        } catch (err) {
+          console.warn(`[health-check] getFailed failed: ${err.message}`);
+        }
+      }
+
+      const queueOk = (realFailed === 0 || queues.aiActive > 0) && queues.aiWaiting < 10;
       const aiParts = [`${queues.aiWaiting} انتظار`, `${queues.aiActive} نشط`];
       if (queues.aiDelayed > 0) aiParts.push(`${queues.aiDelayed} مؤجل`);
-      if (queues.aiFailed > 0) aiParts.push(`${queues.aiFailed} فاشل`);
+      if (realFailed > 0) aiParts.push(`${realFailed} فاشل`);
       checks.push({
         name: 'الطابور',
         ok: queueOk,
         msg: `AI: ${aiParts.join(' / ')} — إرسال: ${queues.outWaiting} انتظار / ${queues.outActive} نشط`,
-        aiFailed: queues.aiFailed,
+        aiFailed: realFailed,
       });
 
-      if (queues.aiFailed > 0) {
-        try {
-          const failedJobs = await aiReplies.getFailed(0, 0);
-          if (failedJobs[0]?.failedReason) {
-            checks.push({ name: 'آخر خطأ AI', ok: false, msg: failedJobs[0].failedReason });
-          }
-        } catch (err) {
-          console.warn(`[health-check] getFailed failed: ${err.message}`);
-        }
+      if (lastRealError) {
+        checks.push({ name: 'آخر خطأ AI', ok: false, msg: lastRealError });
       }
     }
 

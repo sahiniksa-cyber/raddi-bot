@@ -32,6 +32,10 @@ const {
 const { createAdminMerchantController } = require('../controllers/admin-merchant.controller');
 const { listAdminAuditLog, logAdminAction } = require('../services/admin/admin-audit');
 const { copyMerchantConfigByEmail } = require('../services/admin/copy-merchant-config');
+const {
+  getPlatformSetting: getPlatformSettingDefault,
+  setPlatformSetting: setPlatformSettingDefault,
+} = require('../services/platform/platform-settings');
 
 // Set when the server process boots (module load ≈ deploy start). Lets the admin
 // page show WHICH build is live so a stale browser cache / non-applied deploy is
@@ -128,6 +132,33 @@ function createCustomerApiKeysHandlers(deps = {}) {
   }
 
   return { getKeys, putKey };
+}
+
+function createQuotaStopMessageHandlers(deps = {}) {
+  const getPS = deps.getPlatformSetting || getPlatformSettingDefault;
+  const setPS = deps.setPlatformSetting || setPlatformSettingDefault;
+
+  async function getQuotaStopMessage(req, res) {
+    try {
+      const setting = await getPS('quotaStopMessage');
+      res.status(200).json({ success: true, setting: setting || { enabled: false, text: '' } });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  async function putQuotaStopMessage(req, res) {
+    try {
+      const enabled = req.body?.enabled === true;
+      const text = String(req.body?.text || '').trim();
+      await setPS('quotaStopMessage', { enabled, text });
+      res.status(200).json({ success: true, setting: { enabled, text } });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  return { getQuotaStopMessage, putQuotaStopMessage };
 }
 
 function createAdminRoutes(deps = {}) {
@@ -338,6 +369,12 @@ function createAdminRoutes(deps = {}) {
     }
   });
 
+  // Quota-stop message: platform admin can enable/disable and set the text that
+  // gets sent to customers whose quota is exhausted.
+  const quotaStopMessageHandlers = createQuotaStopMessageHandlers();
+  router.get('/api/admin/quota-stop-message', requireOwner, quotaStopMessageHandlers.getQuotaStopMessage);
+  router.put('/api/admin/quota-stop-message', requireOwner, quotaStopMessageHandlers.putQuotaStopMessage);
+
   const apiKeyHandlers = createAdminApiKeysHandlers();
   router.get('/api/admin/api-keys', requireOwner, apiKeyHandlers.getApiKeys);
   router.put('/api/admin/api-keys', requireOwner, apiKeyHandlers.putApiKey);
@@ -474,4 +511,5 @@ module.exports = {
   createAdminRoutes,
   createAdminApiKeysHandlers,
   createCustomerApiKeysHandlers,
+  createQuotaStopMessageHandlers,
 };

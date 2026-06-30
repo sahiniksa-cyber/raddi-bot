@@ -1,9 +1,10 @@
 'use strict';
 
 const db = require('../../db/client');
-const { enqueueAiReply, enqueueOutgoingWhatsapp } = require('../../queues/message-queue');
+const { enqueueAiReply, enqueueOutgoingWhatsapp, resolveDebounceMs } = require('../../queues/message-queue');
 const escalationBridge = require('../escalation/escalation-bridge');
 const promptEditService = require('../prompt-edit/prompt-edit.service');
+const { isCustomerBlocked } = require('./do-not-reply');
 
 // Builds an AIClient bound to a merchant's config — used by the prompt-edit
 // handler to smart-merge edits. Lazy-required to avoid a heavy import on the
@@ -13,6 +14,13 @@ async function defaultBuildPromptEditAiClient(userId, logger) {
   const { resolveConfigForAI } = require('../bot/runtime-bot');
   const config = await resolveConfigForAI(userId);
   return new AIClient(config, logger);
+}
+
+// Lazy require to avoid a load-order circular dependency: runtime-bot transitively
+// pulls in this service, so destructuring resolveConfigForAI at module load time
+// can yield `undefined` when runtime-bot is required first. Resolve it at call time.
+function defaultConfigLoader(userId) {
+  return require('../bot/runtime-bot').resolveConfigForAI(userId);
 }
 
 function messageIdFromWhatsappMessage(msg) {
@@ -146,11 +154,13 @@ function ownerPauseExpiry(minutes, nowMs) {
 
 class MessageIngestService {
   constructor({ logger = console, queue = { enqueueAiReply }, database = db, bridge = escalationBridge,
+                configLoader = defaultConfigLoader,
                 promptEdit = null, enqueueOutgoing = enqueueOutgoingWhatsapp, buildPromptEditAiClient = null } = {}) {
     this.logger = logger;
     this.queue = queue;
     this.db = database;
     this.bridge = bridge;
+    this.configLoader = configLoader;
     this.enqueueOutgoing = enqueueOutgoing;
     this.buildPromptEditAiClient = buildPromptEditAiClient
       || ((userId) => defaultBuildPromptEditAiClient(userId, logger));
@@ -321,6 +331,38 @@ class MessageIngestService {
       return { conversationId, messageId, phoneNumber: storedPhoneNumber };
     });
 
+    // Resolve the per-merchant message-grouping window (debounce) AND the
+    // do-not-reply list from the same config read. Fail-open: any config error
+    // leaves delay at the global default and `blocked` false, so a bad/missing
+    // config can never break ingest or silently block a customer.
+    let delay;
+    let blocked = false;
+    try {
+      const cfg = await this.configLoader(userId);
+      delay = resolveDebounceMs(cfg);
+      blocked = isCustomerBlocked(cfg, sender, saved.phoneNumber || phoneNumber);
+    } catch (_) {
+      delay = resolveDebounceMs();
+    }
+
+    // Do-not-reply: the merchant asked the bot to stay silent for this customer.
+    // The message is already stored above (so it still shows in the dashboard),
+    // we simply never enqueue an AI job — which means NO reply, NO escalation,
+    // NO instant/auto reply (all of those live in the worker that never runs).
+    if (blocked) {
+      this.logger.info?.('message', `inbound from ${sender} is on the do-not-reply list — stored, not answered`);
+      return {
+        accepted: true,
+        statusCode: 200,
+        userId,
+        sender,
+        providerMessageId,
+        conversationId: saved.conversationId,
+        messageId: saved.messageId,
+        reason: 'do_not_reply',
+      };
+    }
+
     await this.queue.enqueueAiReply({
       userId,
       conversationId: saved.conversationId,
@@ -334,6 +376,7 @@ class MessageIngestService {
       media,
     }, {
       jobKey: `conversation-${saved.conversationId}`,
+      delay,
     });
 
     this.logger.info?.('message', `queued inbound message ${providerMessageId} from ${sender}`);

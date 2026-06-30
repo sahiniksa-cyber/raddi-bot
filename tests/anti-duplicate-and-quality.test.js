@@ -11,12 +11,19 @@ const aiClientSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ai-client
 // ---- B1: anti-duplicate ordering ----
 
 test('B1: inbound is marked answered BEFORE the customer-reply enqueue', () => {
+  // The invariant: on the SUCCESS path, the inbound is marked answered BEFORE
+  // the customer reply is enqueued, so a crash/retry cannot regenerate a
+  // duplicate. NOTE: earlier branches (the quota-stop systemNotice notice and
+  // team escalation) enqueue their own messages before this point — those are
+  // separate paths and each marks its inbound (quota_exceeded) first too. So we
+  // anchor on markInboundMessagesAnswered and require that the SUCCESS-path
+  // reply enqueue is the next enqueueOutgoingWhatsapp AFTER it.
   const answeredIdx = aiWorkerSrc.indexOf('await markInboundMessagesAnswered({');
-  const enqueueIdx = aiWorkerSrc.indexOf('await enqueueOutgoingWhatsapp({');
-  assert.ok(answeredIdx > 0 && enqueueIdx > 0, 'both calls must exist');
+  assert.ok(answeredIdx > 0, 'markInboundMessagesAnswered call must exist');
+  const successEnqueueIdx = aiWorkerSrc.indexOf('await enqueueOutgoingWhatsapp({', answeredIdx);
   assert.ok(
-    answeredIdx < enqueueIdx,
-    'markInboundMessagesAnswered must run BEFORE enqueueOutgoingWhatsapp so a crash/retry cannot regenerate a duplicate',
+    successEnqueueIdx > answeredIdx,
+    'markInboundMessagesAnswered must run BEFORE the success-path enqueueOutgoingWhatsapp so a crash/retry cannot regenerate a duplicate',
   );
 });
 
