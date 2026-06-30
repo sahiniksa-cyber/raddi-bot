@@ -4,6 +4,8 @@ const {
   stripApiKeysFromConfigForStorage,
   API_KEY_CONFIG_FIELDS,
 } = require('../services/config/api-keys-resolver');
+const db = require('../db/client');
+const promptEditService = require('../services/prompt-edit/prompt-edit.service');
 
 const API_KEY_FIELDS = API_KEY_CONFIG_FIELDS.slice();
 
@@ -89,6 +91,15 @@ function createConfigController({ getUserBot }) {
       bot.conversations.clear();
       bot.saveConversations();
       res.json({ success: true });
+    },
+
+    async listPromptEdits(req, res) {
+      try {
+        const rows = await promptEditService.listRecentEdits(db, req.session.userId, 10);
+        res.json({ success: true, edits: rows });
+      } catch (err) {
+        res.status(500).json({ success: false, error: 'failed_to_list_prompt_edits' });
+      }
     },
   };
 }

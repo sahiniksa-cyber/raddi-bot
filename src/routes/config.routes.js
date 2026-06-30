@@ -12,6 +12,7 @@ function createConfigRoutes(deps) {
   router.get('/api/config', controller.getConfig);
   router.post('/api/config', controller.saveConfig);
   router.post('/api/clear', controller.clearConversations);
+  router.get('/api/prompt-edits', controller.listPromptEdits);
 
   return router;
 }

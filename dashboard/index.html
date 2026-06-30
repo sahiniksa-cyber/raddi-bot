@@ -1245,6 +1245,13 @@ body{background-attachment:scroll}
         <textarea id="ownerPausePhrases" rows="2" placeholder="خليني أرد، أنا بكمل، تواصل واتساب"></textarea>
         <div class="hint">ردّك يوقف البوت فقط لو احتوى إحدى هالعبارات؛ غير كذا يكمل يرد.</div>
       </div>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-top:18px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text);text-transform:none;letter-spacing:0">
+        <input type="checkbox" id="pe_enabled" checked style="flex:none;width:18px;height:18px;margin:0">
+        <span style="flex:1">تعديل البرومنت من قروب التصعيد عبر الواتساب</span>
+      </label>
+      <div class="hint">أرسل في قروب التصعيد رسالة تبدأ بـ "تعديل" ثم التغيير المطلوب؛ البوت يفهمه ويستأذنك قبل التطبيق. مثال: <b>تعديل: أضف إننا نوصّل للرياض مجاناً</b>.</div>
+      <div id="peLog" style="margin-top:10px;font-size:13px;color:var(--text-soft,#555)"></div>
     </div>
   </div>
 
@@ -1890,6 +1897,20 @@ function qrImgLoaded(){
 }
 
 // ── CONFIG ──
+async function loadPromptEditLog(){
+  try{
+    const r=await fetch('/api/prompt-edits',{credentials:'same-origin'});
+    const data=await r.json();
+    const box=document.getElementById('peLog');
+    if(!box)return;
+    if(!data.success||!data.edits||!data.edits.length){box.textContent='لا توجد تعديلات بعد.';return;}
+    const statusAr={applied:'✅ تم',rejected:'❌ ملغى',pending:'⏳ بانتظار',expired:'⌛ انتهى'};
+    box.innerHTML='<b>آخر التعديلات من الواتساب:</b><br>'+data.edits.map(x=>
+      '• '+(statusAr[x.status]||x.status)+' — '+(x.change_summary||'')+' <span style="color:#999">('+new Date(x.created_at).toLocaleString('ar')+')</span>'
+    ).join('<br>');
+  }catch(_){/* non-fatal: log panel stays empty */}
+}
+
 let confLoaded=false;
 async function loadConf(retry=0){
   try{
@@ -1898,6 +1919,7 @@ async function loadConf(retry=0){
     if(!r.ok)throw new Error('HTTP '+r.status);
     config=await r.json();
     fillForm(config);
+    loadPromptEditLog();
     confLoaded=true;
     // Enable save button after successful load
     const sb=document.getElementById('saveBtn');if(sb){sb.disabled=false;sb.title='';}
@@ -1957,7 +1979,8 @@ function fillForm(c){
    if(e('escPausesBot')){e('escPausesBot').checked=c.escalationPausesBot===true;e('escPauseMinWrap').style.display=e('escPausesBot').checked?'block':'none';}
    if(e('escPauseMinutes'))e('escPauseMinutes').value=c.escalationPauseMinutes??5;
    if(e('ownerPausePhraseMode')){e('ownerPausePhraseMode').checked=c.ownerPausePhraseMode===true;e('ownerPausePhrasesWrap').style.display=e('ownerPausePhraseMode').checked?'block':'none';}
-   if(e('ownerPausePhrases'))e('ownerPausePhrases').value=(Array.isArray(c.ownerPausePhrases)?c.ownerPausePhrases:[]).join('، ');}
+   if(e('ownerPausePhrases'))e('ownerPausePhrases').value=(Array.isArray(c.ownerPausePhrases)?c.ownerPausePhrases:[]).join('، ');
+   if(e('pe_enabled'))e('pe_enabled').checked=c.whatsappPromptEditEnabled!==false;}
 
   // Training: remember previously saved answers and show the review panel.
   savedTrainAnswers=Array.isArray(c.trainAnswers)?c.trainAnswers:[];
@@ -2611,6 +2634,7 @@ async function saveConf(){
     escalationPauseMinutes:(()=>{const v=parseInt(document.getElementById('escPauseMinutes')?.value,10);return Number.isFinite(v)&&v>0?v:5;})(),
     ownerPausePhraseMode:!!document.getElementById('ownerPausePhraseMode')?.checked,
     ownerPausePhrases:(document.getElementById('ownerPausePhrases')?.value||'').split(/[،,\n]/).map(s=>s.trim()).filter(Boolean),
+    whatsappPromptEditEnabled:document.getElementById('pe_enabled')?document.getElementById('pe_enabled').checked:true,
   };
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(nc)});
