@@ -360,6 +360,26 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS escalation_log_dedup_idx
     ON escalation_log (user_id, conversation_id, contact_target, sent_at DESC)`,
 
+  // ── Added 2026-06-30: WhatsApp prompt-edit via the escalation group. Stores
+  //    each edit request (pending → applied/rejected/expired) plus before/after
+  //    instructions so the change is auditable and undo-able later.
+  `CREATE TABLE IF NOT EXISTS prompt_edit_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_jid TEXT NOT NULL,
+    requester_jid TEXT,
+    request_text TEXT NOT NULL,
+    current_instructions TEXT,
+    proposed_instructions TEXT NOT NULL,
+    change_summary TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decided_at TIMESTAMPTZ
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_prompt_edits_user_status
+    ON prompt_edit_requests (user_id, source_jid, status, created_at DESC)`,
+
   `CREATE TABLE IF NOT EXISTS pre_activations (
     id BIGSERIAL PRIMARY KEY,
     email TEXT NOT NULL,
