@@ -1,8 +1,19 @@
 'use strict';
 
 const db = require('../../db/client');
-const { enqueueAiReply } = require('../../queues/message-queue');
+const { enqueueAiReply, enqueueOutgoingWhatsapp } = require('../../queues/message-queue');
 const escalationBridge = require('../escalation/escalation-bridge');
+const promptEditService = require('../prompt-edit/prompt-edit.service');
+
+// Builds an AIClient bound to a merchant's config — used by the prompt-edit
+// handler to smart-merge edits. Lazy-required to avoid a heavy import on the
+// hot ingest path and to keep the module load cheap for tests.
+async function defaultBuildPromptEditAiClient(userId, logger) {
+  const AIClient = require('../../../lib/ai-client');
+  const { resolveConfigForAI } = require('../bot/runtime-bot');
+  const config = await resolveConfigForAI(userId);
+  return new AIClient(config, logger);
+}
 
 function messageIdFromWhatsappMessage(msg) {
   return msg?.id?._serialized || msg?.id?.id || null;
@@ -134,11 +145,25 @@ function ownerPauseExpiry(minutes, nowMs) {
 }
 
 class MessageIngestService {
-  constructor({ logger = console, queue = { enqueueAiReply }, database = db, bridge = escalationBridge } = {}) {
+  constructor({ logger = console, queue = { enqueueAiReply }, database = db, bridge = escalationBridge,
+                promptEdit = null, enqueueOutgoing = enqueueOutgoingWhatsapp, buildPromptEditAiClient = null } = {}) {
     this.logger = logger;
     this.queue = queue;
     this.db = database;
     this.bridge = bridge;
+    this.enqueueOutgoing = enqueueOutgoing;
+    this.buildPromptEditAiClient = buildPromptEditAiClient
+      || ((userId) => defaultBuildPromptEditAiClient(userId, logger));
+    // Injectable handler: a function ({ userId, msg }) => resultObject|null.
+    // Defaults to the real service wired with this instance's deps.
+    this.promptEdit = promptEdit || (({ userId, msg }) => promptEditService.tryHandle({
+      database: this.db,
+      userId,
+      msg,
+      enqueue: this.enqueueOutgoing,
+      buildAiClient: this.buildPromptEditAiClient,
+      logger: this.logger,
+    }));
   }
 
   /**
@@ -242,6 +267,14 @@ class MessageIngestService {
     if (bridged) return bridged;
 
     if (String(msg?.from || '').includes('@g.us')) {
+      // Prompt-edit command from an escalation group (e.g. "تعديل: ..."). Runs
+      // BEFORE the status query and the group drop, and is fail-open: any error
+      // falls through to normal group handling so ingest never breaks.
+      const editHandled = await Promise.resolve()
+        .then(() => this.promptEdit({ userId, msg }))
+        .catch((e) => { this.logger.warn?.('prompt-edit', `handler failed: ${e.message}`); return null; });
+      if (editHandled) return editHandled;
+
       // No quote, but a status question inside a group that has recent
       // escalation threads ("وش صار" بدون اقتباس) — answer about the latest
       // thread instead of ignoring it (production 2026-06-12).
