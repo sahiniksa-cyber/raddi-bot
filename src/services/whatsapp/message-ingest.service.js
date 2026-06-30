@@ -3,6 +3,7 @@
 const db = require('../../db/client');
 const { enqueueAiReply, resolveDebounceMs } = require('../../queues/message-queue');
 const escalationBridge = require('../escalation/escalation-bridge');
+const { isCustomerBlocked } = require('./do-not-reply');
 
 // Lazy require to avoid a load-order circular dependency: runtime-bot transitively
 // pulls in this service, so destructuring resolveConfigForAI at module load time
@@ -296,14 +297,36 @@ class MessageIngestService {
       return { conversationId, messageId, phoneNumber: storedPhoneNumber };
     });
 
-    // Resolve the per-merchant message-grouping window (debounce). Fail-open to
-    // the global default so a bad/missing config never breaks ingest.
+    // Resolve the per-merchant message-grouping window (debounce) AND the
+    // do-not-reply list from the same config read. Fail-open: any config error
+    // leaves delay at the global default and `blocked` false, so a bad/missing
+    // config can never break ingest or silently block a customer.
     let delay;
+    let blocked = false;
     try {
       const cfg = await this.configLoader(userId);
       delay = resolveDebounceMs(cfg);
+      blocked = isCustomerBlocked(cfg, sender, saved.phoneNumber || phoneNumber);
     } catch (_) {
       delay = resolveDebounceMs();
+    }
+
+    // Do-not-reply: the merchant asked the bot to stay silent for this customer.
+    // The message is already stored above (so it still shows in the dashboard),
+    // we simply never enqueue an AI job — which means NO reply, NO escalation,
+    // NO instant/auto reply (all of those live in the worker that never runs).
+    if (blocked) {
+      this.logger.info?.('message', `inbound from ${sender} is on the do-not-reply list — stored, not answered`);
+      return {
+        accepted: true,
+        statusCode: 200,
+        userId,
+        sender,
+        providerMessageId,
+        conversationId: saved.conversationId,
+        messageId: saved.messageId,
+        reason: 'do_not_reply',
+      };
     }
 
     await this.queue.enqueueAiReply({
