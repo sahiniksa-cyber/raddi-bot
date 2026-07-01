@@ -63,12 +63,31 @@ function mergeConfigForSave({ existing, incoming, isAdmin }) {
   return stripApiKeysFromConfigForStorage(merged);
 }
 
-function createConfigController({ getUserBot }) {
+function createConfigController({ getUserBot, loadPersistedConfig } = {}) {
   if (typeof getUserBot !== 'function') throw new Error('getUserBot dependency is required');
 
+  // Reads the persisted config straight from bot_configs. Used to refresh the
+  // web process's in-memory bot on dashboard load so out-of-band changes — e.g.
+  // a WhatsApp prompt-edit applied by the ingest/worker process — are reflected
+  // immediately in both the settings view and the test-chat. Injectable for tests.
+  const loadConfig = loadPersistedConfig || (async (userId) => {
+    const r = await db.query('SELECT config FROM bot_configs WHERE user_id = $1', [userId]);
+    return r.rows[0]?.config || null;
+  });
+
   return {
-    getConfig(req, res) {
-      res.json(stripApiKeysFromConfig(getUserBot(req.session.userId).config));
+    async getConfig(req, res) {
+      const bot = getUserBot(req.session.userId);
+      try {
+        const persisted = await loadConfig(req.session.userId);
+        if (persisted && typeof persisted === 'object') {
+          bot.config = { ...bot.config, ...persisted };
+          bot.ai?.updateConfig?.(bot.config);
+        }
+      } catch (_) {
+        // Fall back to the in-memory config — never fail the dashboard load.
+      }
+      res.json(stripApiKeysFromConfig(bot.config));
     },
 
     saveConfig(req, res) {
