@@ -32,8 +32,39 @@ test('proposePromptEdit tolerates JSON wrapped in ```json fences', async () => {
   assert.equal(out.summary, 'س');
 });
 
-test('proposePromptEdit throws a clear error when the model returns no usable JSON', async () => {
+test('proposePromptEdit throws a clear error when the model returns no usable output', async () => {
   const ai = new AIClient({}, silentLogger);
   ai.buildClient = () => clientReturning('عذراً لم أفهم');
   await assert.rejects(() => ai.proposePromptEdit('قديم', 'xx'), /لم أفهم التعديل|prompt edit/i);
+});
+
+// ROOT CAUSE (production 2026-07-01): the JSON contract fails when the model
+// embeds the full MULTI-LINE instructions as a JSON string value — real
+// newlines make the JSON invalid, so parsing throws every time ("ما فهمت").
+// The delimiter protocol must handle arbitrary multi-line Arabic content.
+test('proposePromptEdit parses the delimiter format with multi-line instructions', async () => {
+  const ai = new AIClient({}, silentLogger);
+  const modelOut = [
+    'إضافة: سياسة ضمان اشتراك أدوبي 4 أشهر.',
+    '@@@INSTRUCTIONS@@@',
+    'أنت موظف خدمة عملاء لمتجر ProStoree.',
+    'ساعات العمل ٩ص - ٩م.',
+    '',
+    'لو سأل العميل عن اشتراك أدوبي 4 أشهر هل هو مضمون:',
+    'قل: نعم مضمون، الاشتراك ما يكون على تيم ويبان تاريخه فوق كذا، وأكبر دليل آراء عملائنا.',
+  ].join('\n');
+  ai.buildClient = () => clientReturning(modelOut);
+  const out = await ai.proposePromptEdit('أنت موظف خدمة عملاء لمتجر ProStoree.\nساعات العمل ٩ص - ٩م.', 'ضيف ضمان أدوبي');
+  assert.match(out.summary, /ضمان اشتراك أدوبي/);
+  assert.match(out.newInstructions, /نعم مضمون/);
+  assert.match(out.newInstructions, /ساعات العمل/); // preserved
+  assert.ok(out.newInstructions.includes('\n'), 'multi-line instructions preserved intact');
+});
+
+test('proposePromptEdit still accepts a clean JSON reply (backward-compatible fallback)', async () => {
+  const ai = new AIClient({}, silentLogger);
+  ai.buildClient = () => clientReturning(JSON.stringify({ newInstructions: 'ن', summary: 'س' }));
+  const out = await ai.proposePromptEdit('قديم', 'غيّر');
+  assert.equal(out.newInstructions, 'ن');
+  assert.equal(out.summary, 'س');
 });
