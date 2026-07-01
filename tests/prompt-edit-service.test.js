@@ -9,14 +9,19 @@ const silentLogger = { info: () => {}, warn: () => {}, error: () => {} };
 const GROUP = '120363111@g.us';
 
 // Minimal fake DB that records writes and serves a scripted config + pending row.
-function fakeDb({ config = {}, pending = null } = {}) {
+// threadTargets: group JIDs the bot has escalated to (escalation_threads ground truth).
+function fakeDb({ config = {}, pending = null, threadTargets = [] } = {}) {
   const writes = [];
+  const targetDigits = threadTargets.map(j => String(j).replace(/@.*$/, '').replace(/\D/g, ''));
   return {
     writes,
     isConfigured: () => true,
     query: async (sql, params) => {
       writes.push({ sql, params });
       if (/FROM bot_configs/.test(sql)) return { rows: [{ config }] };
+      if (/FROM escalation_threads/.test(sql)) {
+        return { rows: targetDigits.includes(String(params[1])) ? [{ ok: 1 }] : [] };
+      }
       if (/SELECT[\s\S]*FROM prompt_edit_requests[\s\S]*status = 'pending'/.test(sql)) {
         return { rows: pending ? [pending] : [] };
       }
@@ -79,6 +84,7 @@ test('tryHandle: an edit command proposes a change, stores pending, replies a su
   assert.ok(db.writes.some(w => /INSERT INTO prompt_edit_requests/.test(w.sql)), 'pending row inserted');
   assert.equal(sent.length, 1, 'one summary message sent to the group');
   assert.equal(sent[0].sender, GROUP);
+  assert.equal(sent[0].systemNotice, true, 'control message must bypass quota (not billable, not blocked when empty)');
   assert.match(sent[0].reply, /إضافة معلومة/);
 });
 
@@ -121,6 +127,26 @@ test('tryHandle: returns null when the group is not a configured escalation grou
   const { deps } = makeDeps({ database: db });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: '777@g.us', body: 'تعديل: شيء' } });
   assert.equal(res, null);
+});
+
+// ROOT CAUSE (production 2026-07-01): the bot escalates to a GROUP recorded in
+// escalation_threads, but escalationContacts holds descriptive text — not the
+// group JID. Group identification MUST also trust escalation_threads (the real
+// destination), not only config. Without the fix this returns null (silent).
+test('tryHandle: recognizes the group via escalation_threads even when escalationContacts lacks it', async () => {
+  const config = {
+    escalationContacts: [{ name: 'محمد شاهيني', phone: 'متجر ProStoree خدمة عملاء' }], // NOT a jid
+    botInstructions: 'أنت موظف خدمة عملاء لمتجر ProStoree. ساعات العمل ٩ص-٩م بدون أي مشاكل.',
+  };
+  const db = fakeDb({ config, threadTargets: [GROUP] }); // bot HAS escalated to GROUP
+  const { sent, deps } = makeDeps({ database: db });
+  const res = await svc.tryHandle({
+    ...deps, userId: 'u1',
+    msg: { from: GROUP, author: '96650@s.whatsapp.net', body: 'ضيف في البرومنت: لو سأل عن اشتراك ادوبي قول مضمون' },
+  });
+  assert.equal(res.promptEdit, 'proposed', 'group recognized via escalation_threads');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].sender, GROUP);
 });
 
 test('tryHandle: a lone keyword asks the user to write the change (handled, no AI call)', async () => {

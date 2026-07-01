@@ -23,6 +23,34 @@ function isEnabled(config) {
   return config?.whatsappPromptEditEnabled !== false; // default ON
 }
 
+// True when the bot has ACTUALLY escalated to this jid before (escalation_threads
+// is the ground truth). Merchants rarely paste the real group JID into
+// escalationContacts — the group is resolved at runtime — so config matching
+// alone misses live escalation groups (production bug 2026-07-01). No time
+// window: any past escalation to this group qualifies it. Fail-closed to false.
+async function isKnownEscalationTarget(database, userId, jid) {
+  const digits = digitsOf(jid);
+  if (!digits) return false;
+  try {
+    const r = await database.query(
+      `SELECT 1 FROM escalation_threads
+        WHERE user_id = $1 AND regexp_replace(target_jid, '\\D', '', 'g') = $2
+        LIMIT 1`,
+      [userId, digits],
+    );
+    return (r?.rows?.length || 0) > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+// A group qualifies for prompt-edit if it's configured as an escalation contact
+// OR it's a real escalation destination the bot has used.
+async function isEscalationGroup(database, config, userId, jid) {
+  if (groupMatchesEscalation(config, jid)) return true;
+  return isKnownEscalationTarget(database, userId, jid);
+}
+
 async function loadConfig(database, userId) {
   const r = await database.query('SELECT config FROM bot_configs WHERE user_id = $1', [userId]);
   return r?.rows?.[0]?.config || {};
@@ -84,7 +112,11 @@ async function applyInstructions(database, userId, newInstructions) {
 }
 
 async function send(enqueue, userId, groupJid, reply) {
-  await enqueue({ userId, sender: groupJid, reply, source: 'prompt_edit' });
+  // systemNotice: these are control/confirmation messages to the team group —
+  // NOT billable customer replies. The flag makes the outgoing worker bypass the
+  // message-quota gate (so an empty balance can't silence the confirmation) and
+  // skip decrementing the merchant's quota. (production fix 2026-07-01)
+  await enqueue({ userId, sender: groupJid, reply, systemNotice: true, source: 'prompt_edit' });
 }
 
 /**
@@ -100,7 +132,7 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
 
   const config = await loadConfig(database, userId);
   if (!isEnabled(config)) return null;
-  if (!groupMatchesEscalation(config, groupJid)) return null;
+  if (!(await isEscalationGroup(database, config, userId, groupJid))) return null;
 
   const nowMs = now();
   const pending = await findPendingEdit(database, userId, groupJid, nowMs, ttlMinutes);
@@ -177,6 +209,8 @@ async function listRecentEdits(database, userId, limit = 10) {
 module.exports = {
   tryHandle,
   groupMatchesEscalation,
+  isKnownEscalationTarget,
+  isEscalationGroup,
   isEnabled,
   findPendingEdit,
   applyInstructions,
