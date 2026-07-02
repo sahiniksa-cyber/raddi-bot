@@ -78,3 +78,12 @@ test('isNo still catches real cancellations', () => {
   assert.equal(isNo('تراجع'), true);
   assert.equal(isNo('لا خلاص'), true);
 });
+
+test('detectEditCommand recognizes natural action verbs for structured edits', () => {
+  assert.equal(detectEditCommand('غيّر سعر القلم إلى ٩٩').matched, true);
+  assert.equal(detectEditCommand('احذف منتج القلم').matched, true);
+  assert.equal(detectEditCommand('احظر الرقم 0501234567').matched, true);
+  assert.equal(detectEditCommand('شيل الحظر عن 0501234567').matched, true);
+  assert.equal(detectEditCommand('امسح الرد الفوري الدوام').matched, true);
+  assert.equal(detectEditCommand('صباح الخير').matched, false);
+});
