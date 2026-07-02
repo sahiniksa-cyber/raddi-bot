@@ -68,3 +68,20 @@ test('proposePromptEdit still accepts a clean JSON reply (backward-compatible fa
   assert.equal(out.newInstructions, 'ن');
   assert.equal(out.summary, 'س');
 });
+
+test('classifyReplyIntent maps the model word to confirm/cancel/other', async () => {
+  const ai = new AIClient({}, silentLogger);
+  ai.buildClient = () => clientReturning('confirm');
+  assert.equal(await ai.classifyReplyIntent('ثبتها وخلاص'), 'confirm');
+  ai.buildClient = () => clientReturning('cancel');
+  assert.equal(await ai.classifyReplyIntent('لا خلها زي ماهي'), 'cancel');
+  ai.buildClient = () => clientReturning('other');
+  assert.equal(await ai.classifyReplyIntent('كم الساعة'), 'other');
+});
+
+test('classifyReplyIntent is fail-safe: returns other on empty text or model error', async () => {
+  const ai = new AIClient({}, silentLogger);
+  assert.equal(await ai.classifyReplyIntent('   '), 'other');
+  ai.buildClient = () => { throw new Error('no key'); };
+  assert.equal(await ai.classifyReplyIntent('ثبتها'), 'other', 'never auto-acts when the model is unavailable');
+});

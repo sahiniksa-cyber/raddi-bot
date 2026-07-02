@@ -137,32 +137,51 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
   const nowMs = now();
   const pending = await findPendingEdit(database, userId, groupJid, nowMs, ttlMinutes);
 
+  const applyPending = async () => {
+    await applyInstructions(database, userId, pending.proposed_instructions);
+    await markStatus(database, pending.id, 'applied');
+    await send(enqueue, userId, groupJid, '✅ تم تعديل البرومنت. أمشي عليه من الحين.');
+    logger?.info?.('prompt-edit', `applied edit ${pending.id} for ${userId}`);
+    return { accepted: true, statusCode: 200, promptEdit: 'applied' };
+  };
+  const cancelPending = async () => {
+    await markStatus(database, pending.id, 'rejected');
+    await send(enqueue, userId, groupJid, 'تمام، ألغيت التعديل. ما غيّرت شيء.');
+    return { accepted: true, statusCode: 200, promptEdit: 'rejected' };
+  };
+
   // Confirmation flow (only meaningful when a pending edit exists).
+  // Fast path: obvious yes/no words are handled instantly with no AI cost.
   if (pending) {
-    if (isYes(text)) {
-      await applyInstructions(database, userId, pending.proposed_instructions);
-      await markStatus(database, pending.id, 'applied');
-      await send(enqueue, userId, groupJid, '✅ تم تعديل البرومنت. أمشي عليه من الحين.');
-      logger?.info?.('prompt-edit', `applied edit ${pending.id} for ${userId}`);
-      return { accepted: true, statusCode: 200, promptEdit: 'applied' };
-    }
-    if (isNo(text)) {
-      await markStatus(database, pending.id, 'rejected');
-      await send(enqueue, userId, groupJid, 'تمام، ألغيت التعديل. ما غيّرت شيء.');
-      return { accepted: true, statusCode: 200, promptEdit: 'rejected' };
-    }
-    // Neither yes nor no — fall through; maybe it's a brand-new edit command.
+    if (isYes(text)) return applyPending();
+    if (isNo(text)) return cancelPending();
+    // Neither obvious yes nor no — fall through; maybe it's a brand-new edit command.
   }
 
   const { matched, body } = detectEditCommand(text);
   if (!matched) {
-    // A SHORT unrecognized reply while an edit is pending: the merchant is
-    // likely trying to confirm/answer — remind them instead of going silent
-    // (production 2026-07-02: the bot went quiet and the merchant typed "الو").
-    // Long messages (team coordination) are left alone to avoid spam.
-    if (pending && text.split(/\s+/).filter(Boolean).length <= 3) {
-      await send(enqueue, userId, groupJid, 'عندك تعديل بانتظار التأكيد — رد بـ (نعم) للتطبيق أو (لا) للإلغاء.');
-      return { accepted: true, statusCode: 200, promptEdit: 'reprompt' };
+    if (pending) {
+      const wordCount = text.split(/\s+/).filter(Boolean).length;
+      // ANY natural confirmation wording should work — not a fixed keyword list.
+      // For short-ish replies, ask the AI whether the merchant means confirm /
+      // cancel / other. Fail-safe: 'other' on any error (never auto-acts).
+      if (wordCount <= 8) {
+        let intent = 'other';
+        try {
+          const ai = await buildAiClient(userId);
+          intent = await ai.classifyReplyIntent(text);
+        } catch (err) {
+          logger?.warn?.('prompt-edit', `intent classify failed: ${err.message}`);
+        }
+        if (intent === 'confirm') return applyPending();
+        if (intent === 'cancel') return cancelPending();
+      }
+      // Still unclear: for a SHORT reply, remind instead of going silent
+      // (production 2026-07-02: the bot went quiet and the merchant typed "الو").
+      if (wordCount <= 3) {
+        await send(enqueue, userId, groupJid, 'عندك تعديل بانتظار التأكيد — رد بـ (نعم) للتطبيق أو (لا) للإلغاء.');
+        return { accepted: true, statusCode: 200, promptEdit: 'reprompt' };
+      }
     }
     return null;
   }

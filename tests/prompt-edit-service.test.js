@@ -34,8 +34,8 @@ function fakeDb({ config = {}, pending = null, threadTargets = [] } = {}) {
   };
 }
 
-function fakeAi(out) {
-  return { proposePromptEdit: async () => out };
+function fakeAi(out, intent = 'other') {
+  return { proposePromptEdit: async () => out, classifyReplyIntent: async () => intent };
 }
 
 function makeDeps(over = {}) {
@@ -46,7 +46,7 @@ function makeDeps(over = {}) {
       database: over.database || fakeDb(),
       logger: silentLogger,
       enqueue: async (p) => { sent.push(p); },
-      buildAiClient: async () => over.ai || fakeAi({ newInstructions: 'الجديد الكامل', summary: 'إضافة معلومة' }),
+      buildAiClient: async () => over.ai || fakeAi({ newInstructions: 'الجديد الكامل', summary: 'إضافة معلومة' }, over.intent || 'other'),
       now: () => 1_000_000,
       ttlMinutes: 10,
       ...over.deps,
@@ -136,6 +136,36 @@ test('tryHandle: a LONG unrecognized sentence while pending does NOT re-prompt (
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'يا شباب لا تنسون ترسلون طلب الدفع للعميل اليوم قبل المغرب' } });
   assert.equal(res, null);
   assert.equal(sent.length, 0);
+});
+
+// The merchant wants ANY confirmation wording to work — not a fixed keyword.
+// Unusual phrasings are classified by the AI (confirm/cancel/other).
+test('tryHandle: an unusual confirmation ("ثبتها") is applied via AI intent classification', async () => {
+  const pending = { id: 'pe-1', proposed_instructions: 'النص النهائي', change_summary: 'x', created_at: new Date(1_000_000).toISOString() };
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+  const { sent, deps } = makeDeps({ database: db, intent: 'confirm' });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'ثبتها وخلاص' } });
+  assert.equal(res.promptEdit, 'applied');
+  assert.ok(db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config updated via AI-understood confirm');
+});
+
+test('tryHandle: an unusual cancellation is rejected via AI intent classification', async () => {
+  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+  const { deps } = makeDeps({ database: db, intent: 'cancel' });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'خلها زي ماهي بلا تغيير' } });
+  assert.equal(res.promptEdit, 'rejected');
+  assert.ok(!db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config not changed on cancel');
+});
+
+test('tryHandle: AI says "other" for a short reply -> re-prompt, no apply/cancel', async () => {
+  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+  const { sent, deps } = makeDeps({ database: db, intent: 'other' });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'الو' } });
+  assert.equal(res.promptEdit, 'reprompt');
+  assert.ok(!db.writes.some(w => /UPDATE bot_configs/.test(w.sql)));
+  assert.match(sent[0].reply, /بانتظار التأكيد/);
 });
 
 test('tryHandle: returns null when feature disabled, even for an edit command', async () => {
