@@ -233,6 +233,15 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     }
   }
 
+  // Instant replies are OPT-IN: a rigid keyword→canned reply (bypasses the AI)
+  // must be explicitly requested. A general behavior instruction ("لو العميل يبي
+  // كذا قوله كذا") must shape the PROMPT, not become a fixed auto-reply
+  // (production 2026-07-02: a Tamara payment instruction got keyed as an instant
+  // reply on "تمارا"). Without an explicit فوري/تلقائي marker, treat as prompt.
+  if (plan && plan.target === 'instant_replies' && !/(فوري|تلقائ|تلقاي|instant|auto)/i.test(body)) {
+    plan = null;
+  }
+
   if (plan && plan.target && plan.target !== 'prompt') {
     if (plan.clarify) {
       await send(enqueue, userId, groupJid, String(plan.clarify));

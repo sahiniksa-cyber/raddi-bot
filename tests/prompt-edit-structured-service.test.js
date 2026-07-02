@@ -78,6 +78,28 @@ test('an applier validation error is reported, no pending', async () => {
   assert.ok(!db.writes.some((w) => /INSERT INTO prompt_edit_requests/.test(w.sql)));
 });
 
+// Production 2026-07-02: a behavior instruction ("when a customer wants to pay
+// via Tamara, tell them ...") was misrouted to a rigid instant reply keyed on
+// "تمارا". Instant replies must be OPT-IN (explicit فوري/تلقائي marker); any
+// other guidance defaults to the prompt.
+test('instant_replies plan WITHOUT an explicit instant-reply marker falls through to the prompt', async () => {
+  const db = fakeDb();
+  const { d } = deps({ target: 'instant_replies', action: 'add', keyword: 'تمارا', reply: 'اعطني رقم الجوال', summary: 'رد على تمارا' }, db);
+  const res = await svc.tryHandle({ ...d, userId: 'u1', msg: { from: GROUP, body: 'ضيف لو العميل يبي يدفع تمارا قوله الادارة بترسل طلب دفع' } });
+  assert.equal(res.promptEdit, 'proposed');
+  const ins = db.writes.find((w) => /INSERT INTO prompt_edit_requests/.test(w.sql));
+  assert.ok(ins.params.includes('prompt'), 'routed to prompt, not instant_replies');
+});
+
+test('instant_replies plan WITH an explicit "رد فوري" marker is honored', async () => {
+  const db = fakeDb();
+  const { d } = deps({ target: 'instant_replies', action: 'add', keyword: 'شكرا', reply: 'عفواً', summary: 'رد فوري: شكرا' }, db);
+  const res = await svc.tryHandle({ ...d, userId: 'u1', msg: { from: GROUP, body: 'أضف رد فوري لو قال شكرا رد عفواً' } });
+  assert.equal(res.promptEdit, 'proposed');
+  const ins = db.writes.find((w) => /INSERT INTO prompt_edit_requests/.test(w.sql));
+  assert.ok(ins.params.includes('instant_replies'), 'honored as an instant reply');
+});
+
 test('an explicit "برومنت" command skips classification and goes to the prompt path', async () => {
   const db = fakeDb();
   // planConfigEdit would (wrongly) say products, but forcePrompt must bypass it.
