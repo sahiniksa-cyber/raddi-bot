@@ -380,6 +380,12 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_prompt_edits_user_status
     ON prompt_edit_requests (user_id, source_jid, status, created_at DESC)`,
 
+  // Added 2026-07-02: structured config edits (products / instant replies /
+  // do-not-reply) reuse this table. `target` names the section; `proposed_value`
+  // holds the computed new value for that section (applied on confirm).
+  `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS target TEXT NOT NULL DEFAULT 'prompt'`,
+  `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS proposed_value JSONB`,
+
   `CREATE TABLE IF NOT EXISTS pre_activations (
     id BIGSERIAL PRIMARY KEY,
     email TEXT NOT NULL,
