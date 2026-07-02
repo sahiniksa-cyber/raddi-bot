@@ -1,6 +1,6 @@
 'use strict';
 
-const { detectEditCommand, isYes, isNo } = require('../../../lib/prompt-edit-keywords');
+const { detectEditCommand, isYes, isNo, normalizeArabic } = require('../../../lib/prompt-edit-keywords');
 const { normalizeEscalationTarget } = require('../../workers/escalation-routing');
 const { applyProductOp, applyInstantReplyOp, applyDoNotReplyOp } = require('../../../lib/config-edit-appliers');
 
@@ -215,15 +215,22 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     return { accepted: true, statusCode: 200, promptEdit: 'help' };
   }
 
+  // Explicit "برومنت" keyword => definitely a prompt edit; skip classification
+  // so an instruction mentioning a product/price isn't misrouted to a data edit.
+  const firstTok = normalizeArabic(text.split(/\s+/)[0] || '');
+  const forcePrompt = firstTok === normalizeArabic('برومنت') || firstTok === normalizeArabic('البرومنت');
+
   // Classify the command into a structured section edit. A non-prompt target is
   // handled here; anything else (or a classification failure) falls through to
   // the unchanged prompt path below — the safe default.
   let plan = null;
-  try {
-    const ai = await buildAiClient(userId);
-    plan = await ai.planConfigEdit(config, body);
-  } catch (err) {
-    logger?.warn?.('prompt-edit', `planConfigEdit failed: ${err.message}`);
+  if (!forcePrompt) {
+    try {
+      const ai = await buildAiClient(userId);
+      plan = await ai.planConfigEdit(config, body);
+    } catch (err) {
+      logger?.warn?.('prompt-edit', `planConfigEdit failed: ${err.message}`);
+    }
   }
 
   if (plan && plan.target && plan.target !== 'prompt') {

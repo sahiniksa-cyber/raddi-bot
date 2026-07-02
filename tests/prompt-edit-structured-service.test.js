@@ -78,6 +78,16 @@ test('an applier validation error is reported, no pending', async () => {
   assert.ok(!db.writes.some((w) => /INSERT INTO prompt_edit_requests/.test(w.sql)));
 });
 
+test('an explicit "برومنت" command skips classification and goes to the prompt path', async () => {
+  const db = fakeDb();
+  // planConfigEdit would (wrongly) say products, but forcePrompt must bypass it.
+  const { sent, d } = deps({ target: 'products', action: 'update', product: { name: 'اشتراك أدوبي', price: '1' }, summary: 'خطأ' }, db);
+  const res = await svc.tryHandle({ ...d, userId: 'u1', msg: { from: GROUP, body: 'برومنت لو سأل عن سعر أدوبي قول مضمون' } });
+  assert.equal(res.promptEdit, 'proposed');
+  const ins = db.writes.find((w) => /INSERT INTO prompt_edit_requests/.test(w.sql));
+  assert.ok(ins.params.includes('prompt'), 'stored as a prompt edit, not products');
+});
+
 test('confirming a structured pending writes proposed_value to the target field', async () => {
   const applied = [];
   const db = {
