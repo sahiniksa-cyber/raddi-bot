@@ -49,3 +49,32 @@ test('isYes / isNo detect Arabic confirmations and tolerate typos', () => {
   assert.equal(isNo('الغاء'), true);
   assert.equal(isNo('نعم'), false);
 });
+
+// Production 2026-07-02 (screenshot): "الو" was mis-read as "إلغاء" and canceled
+// a pending edit, and natural confirmations like "تم اكد" were not recognized so
+// the edit never applied.
+test('isYes recognizes natural multi-word confirmations', () => {
+  assert.equal(isYes('تم اكد'), true);
+  assert.equal(isYes('تم التاكيد'), true);
+  assert.equal(isYes('ابغى اكد'), true);
+  assert.equal(isYes('اكد'), true);
+  assert.equal(isYes('نعم اكيد'), true);
+  assert.equal(isYes('تم'), true);
+});
+
+test('isNo does NOT fire on "الو" or on a long sentence that merely contains a stop-ish word', () => {
+  assert.equal(isNo('الو'), false, '"الو" must never be read as cancel');
+  assert.equal(isYes('الو'), false);
+  // the merchant\'s long instruction sentence must not be read as yes/no
+  const longSentence = 'احتاج منك تاكيد انه اي كلام مثل اذا تحتاج اي شيء ثاني انا موجود ما يقولها ابدا';
+  assert.equal(isNo(longSentence), false);
+  assert.equal(isYes(longSentence), false);
+});
+
+test('isNo still catches real cancellations', () => {
+  assert.equal(isNo('لا'), true);
+  assert.equal(isNo('الغاء'), true);
+  assert.equal(isNo('الغي'), true);
+  assert.equal(isNo('تراجع'), true);
+  assert.equal(isNo('لا خلاص'), true);
+});

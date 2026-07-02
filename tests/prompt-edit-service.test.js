@@ -115,6 +115,29 @@ test('tryHandle: returns null for a non-command message in the group (falls thro
   assert.equal(res, null);
 });
 
+// Production 2026-07-02: after an unrecognized reply the bot went silent and the
+// merchant typed "الو"; a pending edit should be re-prompted (not canceled, not
+// silent) for SHORT unrecognized replies.
+test('tryHandle: short unrecognized reply while a pending edit exists re-prompts (does not cancel)', async () => {
+  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+  const { sent, deps } = makeDeps({ database: db });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'الو' } });
+  assert.equal(res.promptEdit, 'reprompt');
+  assert.ok(!db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config not changed');
+  assert.ok(!db.writes.some(w => /UPDATE prompt_edit_requests/.test(w.sql)), 'pending not resolved');
+  assert.match(sent[0].reply, /بانتظار التأكيد|نعم|لا/);
+});
+
+test('tryHandle: a LONG unrecognized sentence while pending does NOT re-prompt (stays silent to avoid spam)', async () => {
+  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+  const { sent, deps } = makeDeps({ database: db });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'يا شباب لا تنسون ترسلون طلب الدفع للعميل اليوم قبل المغرب' } });
+  assert.equal(res, null);
+  assert.equal(sent.length, 0);
+});
+
 test('tryHandle: returns null when feature disabled, even for an edit command', async () => {
   const db = fakeDb({ config: { ...CONFIG_WITH_GROUP, whatsappPromptEditEnabled: false } });
   const { deps } = makeDeps({ database: db });

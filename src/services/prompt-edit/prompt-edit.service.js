@@ -155,7 +155,17 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
   }
 
   const { matched, body } = detectEditCommand(text);
-  if (!matched) return null;
+  if (!matched) {
+    // A SHORT unrecognized reply while an edit is pending: the merchant is
+    // likely trying to confirm/answer — remind them instead of going silent
+    // (production 2026-07-02: the bot went quiet and the merchant typed "الو").
+    // Long messages (team coordination) are left alone to avoid spam.
+    if (pending && text.split(/\s+/).filter(Boolean).length <= 3) {
+      await send(enqueue, userId, groupJid, 'عندك تعديل بانتظار التأكيد — رد بـ (نعم) للتطبيق أو (لا) للإلغاء.');
+      return { accepted: true, statusCode: 200, promptEdit: 'reprompt' };
+    }
+    return null;
+  }
 
   if (!body) {
     await send(enqueue, userId, groupJid,
