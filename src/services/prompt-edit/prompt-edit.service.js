@@ -2,6 +2,16 @@
 
 const { detectEditCommand, isYes, isNo } = require('../../../lib/prompt-edit-keywords');
 const { normalizeEscalationTarget } = require('../../workers/escalation-routing');
+const { applyProductOp, applyInstantReplyOp, applyDoNotReplyOp } = require('../../../lib/config-edit-appliers');
+
+const TARGET_FIELD = { prompt: 'botInstructions', products: 'products', instant_replies: 'autoReplyKeywords', do_not_reply: 'doNotReplyList' };
+const APPLIERS = { products: applyProductOp, instant_replies: applyInstantReplyOp, do_not_reply: applyDoNotReplyOp };
+const APPLIED_MSG = {
+  prompt: '✅ تم تعديل البرومنت. أمشي عليه من الحين.',
+  products: '✅ تم تحديث المنتجات.',
+  instant_replies: '✅ تم تحديث الردود الفورية.',
+  do_not_reply: '✅ تم تحديث قائمة الأرقام المحظورة.',
+};
 
 function digitsOf(jid) {
   return String(jid || '').replace(/@.*$/, '').replace(/[^\d]/g, '');
@@ -58,7 +68,7 @@ async function loadConfig(database, userId) {
 
 async function findPendingEdit(database, userId, sourceJid, nowMs, ttlMinutes) {
   const r = await database.query(
-    `SELECT id, proposed_instructions, change_summary, created_at
+    `SELECT id, proposed_instructions, change_summary, created_at, target, proposed_value
        FROM prompt_edit_requests
       WHERE user_id = $1 AND source_jid = $2 AND status = 'pending'
       ORDER BY created_at DESC
@@ -86,10 +96,12 @@ async function expireGroupPendings(database, userId, sourceJid) {
 async function insertPending(database, row) {
   const r = await database.query(
     `INSERT INTO prompt_edit_requests
-       (user_id, source_jid, requester_jid, request_text, current_instructions, proposed_instructions, change_summary, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+       (user_id, source_jid, requester_jid, request_text, current_instructions, proposed_instructions, change_summary, status, target, proposed_value)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9::jsonb)
      RETURNING id`,
-    [row.userId, row.sourceJid, row.requesterJid, row.requestText, row.currentInstructions, row.proposedInstructions, row.changeSummary],
+    [row.userId, row.sourceJid, row.requesterJid, row.requestText, row.currentInstructions,
+      row.proposedInstructions, row.changeSummary, row.target || 'prompt',
+      row.proposedValue === undefined ? null : JSON.stringify(row.proposedValue)],
   );
   return r?.rows?.[0]?.id || null;
 }
@@ -102,12 +114,18 @@ async function markStatus(database, id, status) {
 }
 
 async function applyInstructions(database, userId, newInstructions) {
+  return applySectionValue(database, userId, 'botInstructions', String(newInstructions || ''));
+}
+
+// Writes a single config section (botInstructions / products / autoReplyKeywords
+// / doNotReplyList) via jsonb_set. `field` comes from a fixed whitelist.
+async function applySectionValue(database, userId, field, value) {
   await database.query(
     `UPDATE bot_configs
-        SET config = jsonb_set(COALESCE(config, '{}'::jsonb), '{botInstructions}', $2::jsonb, true),
+        SET config = jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
             updated_at = NOW()
       WHERE user_id = $1`,
-    [userId, JSON.stringify(String(newInstructions || ''))],
+    [userId, `{${field}}`, JSON.stringify(value)],
   );
 }
 
@@ -138,10 +156,15 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
   const pending = await findPendingEdit(database, userId, groupJid, nowMs, ttlMinutes);
 
   const applyPending = async () => {
-    await applyInstructions(database, userId, pending.proposed_instructions);
+    const target = pending.target || 'prompt';
+    if (target === 'prompt') {
+      await applyInstructions(database, userId, pending.proposed_instructions);
+    } else {
+      await applySectionValue(database, userId, TARGET_FIELD[target], pending.proposed_value);
+    }
     await markStatus(database, pending.id, 'applied');
-    await send(enqueue, userId, groupJid, '✅ تم تعديل البرومنت. أمشي عليه من الحين.');
-    logger?.info?.('prompt-edit', `applied edit ${pending.id} for ${userId}`);
+    await send(enqueue, userId, groupJid, APPLIED_MSG[target] || '✅ تم الحفظ.');
+    logger?.info?.('prompt-edit', `applied ${target} edit ${pending.id} for ${userId}`);
     return { accepted: true, statusCode: 200, promptEdit: 'applied' };
   };
   const cancelPending = async () => {
@@ -192,6 +215,54 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     return { accepted: true, statusCode: 200, promptEdit: 'help' };
   }
 
+  // Classify the command into a structured section edit. A non-prompt target is
+  // handled here; anything else (or a classification failure) falls through to
+  // the unchanged prompt path below — the safe default.
+  let plan = null;
+  try {
+    const ai = await buildAiClient(userId);
+    plan = await ai.planConfigEdit(config, body);
+  } catch (err) {
+    logger?.warn?.('prompt-edit', `planConfigEdit failed: ${err.message}`);
+  }
+
+  if (plan && plan.target && plan.target !== 'prompt') {
+    if (plan.clarify) {
+      await send(enqueue, userId, groupJid, String(plan.clarify));
+      return { accepted: true, statusCode: 200, promptEdit: 'clarify' };
+    }
+    const applier = APPLIERS[plan.target];
+    const field = TARGET_FIELD[plan.target];
+    const result = applier(config[field], plan);
+    if (result.error) {
+      await send(enqueue, userId, groupJid, `⚠️ ${result.error}`);
+      return { accepted: true, statusCode: 200, promptEdit: 'error' };
+    }
+    if (result.needsClarify) {
+      await send(enqueue, userId, groupJid, result.needsClarify);
+      return { accepted: true, statusCode: 200, promptEdit: 'clarify' };
+    }
+    await expireGroupPendings(database, userId, groupJid);
+    await insertPending(database, {
+      userId,
+      sourceJid: groupJid,
+      requesterJid: msg.author || msg.from || null,
+      requestText: body,
+      currentInstructions: '',
+      proposedInstructions: result.summary,
+      changeSummary: result.summary,
+      target: plan.target,
+      proposedValue: result.value,
+    });
+    await send(enqueue, userId, groupJid, [
+      '📝 فهمت التعديل:',
+      `• ${result.summary}`,
+      'أأكّد التطبيق؟ رد بـ (نعم) للتطبيق أو (لا) للإلغاء.',
+    ].join('\n'));
+    logger?.info?.('prompt-edit', `proposed ${plan.target} edit for ${userId} in ${groupJid}`);
+    return { accepted: true, statusCode: 200, promptEdit: 'proposed' };
+  }
+
   let proposal;
   try {
     const ai = await buildAiClient(userId);
@@ -211,6 +282,7 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     currentInstructions: config.botInstructions || '',
     proposedInstructions: proposal.newInstructions,
     changeSummary: proposal.summary,
+    target: 'prompt',
   });
 
   const reply = [
@@ -243,5 +315,6 @@ module.exports = {
   isEnabled,
   findPendingEdit,
   applyInstructions,
+  applySectionValue,
   listRecentEdits,
 };

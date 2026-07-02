@@ -57,8 +57,9 @@ function statefulDb(initialConfig) {
         return { rows: [{ id }] };
       }
       if (/UPDATE bot_configs/.test(sql)) {
-        const [, instrJson] = params;
-        config = { ...config, botInstructions: JSON.parse(instrJson) };
+        // applySectionValue: params = [userId, '{field}', jsonValue]
+        const field = String(params[1]).replace(/[{}]/g, '');
+        config = { ...config, [field]: JSON.parse(params[2]) };
         return { rowCount: 1 };
       }
       return { rows: [] };
@@ -94,6 +95,7 @@ test('FULL FLOW: edit command -> proposal -> نعم -> bot_configs.botInstructio
     enqueueOutgoing: async (p) => { sent.push(p); },
     // Real promptEdit (not injected) — wired by the constructor to the real service.
     buildPromptEditAiClient: async () => ({
+      planConfigEdit: async () => ({ target: 'prompt' }),
       proposePromptEdit: async (current, request) => ({
         newInstructions: current + '\nالتوصيل مجاني داخل الرياض، وبقية المدن ٢٥ ريال.',
         summary: 'إضافة سياسة التوصيل: مجاني للرياض و٢٥ ريال لبقية المدن.',
@@ -143,6 +145,7 @@ test('FULL FLOW: لا after a proposal leaves bot_configs untouched', async () =
     queue: { enqueueAiReply: async () => {} },
     enqueueOutgoing: async (p) => { sent.push(p); },
     buildPromptEditAiClient: async () => ({
+      planConfigEdit: async () => ({ target: 'prompt' }),
       proposePromptEdit: async () => ({ newInstructions: 'نص مرفوض', summary: 'تغيير لن يُطبّق' }),
     }),
   });
