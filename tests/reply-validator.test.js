@@ -20,6 +20,18 @@ test('enforceLength hard-cuts when no sentence boundary', () => {
   assert.ok(out.length <= 61);
 });
 
+// Production 2026-07-02: a product-card reply was cut at the dot inside the URL
+// ("https://prostoree." — the '.' in prostoree.com was taken as a sentence
+// boundary). A reply carrying a link must NEVER be truncated (broken link).
+test('enforceLength never truncates a reply containing a URL (keeps the link whole)', () => {
+  // Long enough to exceed the limit, with the URL's dot (prostoree.com) sitting
+  // inside the cut window — the exact production case that produced "https://prostoree.".
+  const reply = 'رابط الاشتراك https://prostoree.com/NAADyOm وبعده شرح إضافي طويل جداً يتجاوز الحد المسموح به بمسافة كبيرة عشان يجبر القص';
+  const out = enforceLength(reply, 60);
+  assert.ok(out.includes('https://prostoree.com/NAADyOm'), 'the full URL must survive, not cut at the dot');
+  assert.equal(out, reply, 'a URL-bearing reply is returned whole (never cut mid-link)');
+});
+
 const { enforceEscalationTag, detectEscalationIntent } = require('../src/services/ai/reply-validator');
 
 const ESC_CONFIG = { escalationContacts: [{ name: 'المالك', phone: '0500000000' }] };

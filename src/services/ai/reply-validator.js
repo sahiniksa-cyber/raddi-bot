@@ -21,6 +21,12 @@ function enforceLength(reply, maxLen) {
   const limit = Math.max(40, parseInt(maxLen, 10) || 300);
   if (text.length <= limit) return text;
 
+  // Never truncate a reply that carries a link: cutting mid-URL — or at the dot
+  // inside "prostoree.com" (lastIndexOf('.') treated it as a sentence end) —
+  // produced the broken "https://prostoree." (production 2026-07-02). Product
+  // cards with a subscription link are sent whole.
+  if (/https?:\/\/\S+/i.test(text)) return text;
+
   const slice = text.slice(0, limit + 1);
   // ابحث عن آخر فاصل جملة ضمن الحد
   const lastBoundary = Math.max(
