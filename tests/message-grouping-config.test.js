@@ -20,12 +20,12 @@ test('resolveDebounceMs clamps high values to 60s', () => {
   assert.equal(resolveDebounceMs({ messageGroupingSeconds: 999 }), 60000);
 });
 
-test('resolveDebounceMs returns the global default (20000) with no args', () => {
-  assert.equal(resolveDebounceMs(), 20000);
+test('resolveDebounceMs returns the global default (30000) with no args', () => {
+  assert.equal(resolveDebounceMs(), 30000);
 });
 
 test('resolveDebounceMs returns the global default for an empty config', () => {
-  assert.equal(resolveDebounceMs({}), 20000);
+  assert.equal(resolveDebounceMs({}), 30000);
 });
 
 function createFakeDb() {
@@ -81,7 +81,7 @@ test('ingest fails open to the global default when configLoader throws', async (
   });
 
   assert.equal(enqueued.length, 1);
-  assert.equal(enqueued[0].options.delay, 20000);
+  assert.equal(enqueued[0].options.delay, 30000);
 });
 
 test('dashboard exposes a messageGroupingSeconds control', () => {

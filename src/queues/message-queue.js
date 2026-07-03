@@ -24,7 +24,7 @@ const DEFAULT_REMOVE_ON_FAIL = {
   count: parseInt(process.env.QUEUE_REMOVE_FAIL_COUNT || '5000', 10),
 };
 
-const DEFAULT_AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '20000', 10);
+const DEFAULT_AI_REPLY_DEBOUNCE_MS = parseInt(process.env.AI_REPLY_DEBOUNCE_MS || '30000', 10);
 
 /**
  * Returns the effective AI-reply debounce window in ms.

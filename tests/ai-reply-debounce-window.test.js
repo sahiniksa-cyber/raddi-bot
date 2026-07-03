@@ -3,12 +3,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-// Test that the default AI reply debounce window is 20s.
+// Test that the default AI reply debounce window is 30s (raised from 20s on
+// 2026-07-02 to better group a customer's consecutive messages into one reply).
 // We delete the env var to ensure we're testing the hardcoded default, then
 // force a fresh module load with a cache-bust so the module-level constant
 // re-evaluates.
 
-test('resolveDebounceMs returns 20000 when AI_REPLY_DEBOUNCE_MS is unset', () => {
+test('resolveDebounceMs returns 30000 when AI_REPLY_DEBOUNCE_MS is unset', () => {
   const saved = process.env.AI_REPLY_DEBOUNCE_MS;
   delete process.env.AI_REPLY_DEBOUNCE_MS;
 
@@ -20,8 +21,8 @@ test('resolveDebounceMs returns 20000 when AI_REPLY_DEBOUNCE_MS is unset', () =>
     const { resolveDebounceMs } = require('../src/queues/message-queue');
     assert.equal(
       resolveDebounceMs(),
-      20000,
-      'Default debounce must be 20000 ms when AI_REPLY_DEBOUNCE_MS is unset',
+      30000,
+      'Default debounce must be 30000 ms when AI_REPLY_DEBOUNCE_MS is unset',
     );
   } finally {
     // Restore env and evict again so other tests see a clean state.
@@ -82,7 +83,7 @@ test('ai-worker.js follow-up path uses resolveDebounceMs() — no stale 9000 def
   );
 });
 
-test('buildAiReplyQueueOptions uses 20000 as default delay for debounced jobs', () => {
+test('buildAiReplyQueueOptions uses 30000 as default delay for debounced jobs', () => {
   const saved = process.env.AI_REPLY_DEBOUNCE_MS;
   delete process.env.AI_REPLY_DEBOUNCE_MS;
 
@@ -94,8 +95,8 @@ test('buildAiReplyQueueOptions uses 20000 as default delay for debounced jobs', 
     const opts = buildAiReplyQueueOptions({ conversationId: 'conv-123', messageId: 'msg-1' });
     assert.equal(
       opts.delay,
-      20000,
-      `Default debounce delay must be 20000 ms, got ${opts.delay}`,
+      30000,
+      `Default debounce delay must be 30000 ms, got ${opts.delay}`,
     );
   } finally {
     if (saved !== undefined) {
