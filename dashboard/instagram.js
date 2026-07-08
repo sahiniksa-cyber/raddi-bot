@@ -1,11 +1,10 @@
-/* Instagram tab — connection, seeded settings, inbox, manual reply.
- * Isolated from WhatsApp: talks ONLY to /api/instagram/* endpoints and never
- * touches the WhatsApp /api/config endpoint. Settings arrive pre-filled from
- * the merchant's WhatsApp config (seeded server-side on first open); the
- * merchant only edits. Any fields not shown here are still carried over,
- * because igSaveConf spreads the existing (seeded) config before overriding. */
+/* Instagram tab — connection + inbox. The bot-brain SETTINGS reuse the exact
+ * same WhatsApp settings form via "Instagram mode" (see igOpenSettings /
+ * settingsChannel in index.html), so there is NO duplicated settings markup and
+ * full 1:1 parity is guaranteed. This file talks ONLY to /api/instagram/*.
+ *
+ * The connected area (bot brain + inbox) is hidden until the account is linked. */
 
-let igConfig = {};
 const igToast = (msg, err) => (window.toast ? window.toast(msg, err) : console.log(msg));
 
 async function igLoadStatus() {
@@ -13,78 +12,22 @@ async function igLoadStatus() {
     const r = await fetch('/api/instagram/status');
     if (!r.ok) return;
     const d = await r.json();
+    const connected = d.connected === true;
     const st = document.getElementById('igStatus');
-    if (st) st.textContent = d.connected ? ('مربوط: @' + (d.username || '')) : 'غير مربوط';
+    if (st) st.textContent = connected ? ('✅ مربوط: @' + (d.username || '')) : 'غير مربوط بعد.';
+    const pill = document.getElementById('igStatusPill');
+    if (pill) pill.textContent = connected ? 'مربوط' : '';
     const cbtn = document.getElementById('igConnectBtn');
     const dbtn = document.getElementById('igDisconnectBtn');
-    if (cbtn) cbtn.style.display = d.connected ? 'none' : '';
-    if (dbtn) dbtn.style.display = d.connected ? '' : 'none';
-    const toggle = document.getElementById('ig_enabled');
-    if (toggle) toggle.checked = d.aiEnabled === true;
+    if (cbtn) cbtn.style.display = connected ? 'none' : '';
+    if (dbtn) dbtn.style.display = connected ? '' : 'none';
+    const hint = document.getElementById('igNotLinkedHint');
+    if (hint) hint.style.display = connected ? 'none' : '';
+    // The whole bot-brain + inbox area only appears after linking.
+    const area = document.getElementById('igConnectedArea');
+    if (area) area.style.display = connected ? '' : 'none';
+    if (connected) igLoadInbox();
   } catch (_) { /* non-fatal */ }
-}
-
-async function igLoadConf() {
-  try {
-    const r = await fetch('/api/instagram/config');
-    if (r.status === 401) { location.href = '/login'; return; }
-    if (!r.ok) return;
-    const d = await r.json();
-    igConfig = d.config || {};
-    igFillForm(igConfig, d.enabled);
-  } catch (_) { igToast('❌ تعذر تحميل إعدادات إنستقرام', true); }
-}
-
-function igSetVal(id, val) { const el = document.getElementById(id); if (el) el.value = val == null ? '' : val; }
-function igGetVal(id) { const el = document.getElementById(id); return el ? el.value : ''; }
-
-function igFillForm(c, enabled) {
-  const t = document.getElementById('ig_enabled'); if (t) t.checked = enabled === true;
-  igSetVal('ig_storeName', c.storeName);
-  igSetVal('ig_storeDesc', c.storeDescription);
-  igSetVal('ig_welcomeMsg', c.welcomeMessage);
-  igSetVal('ig_workHours', c.workingHours);
-  igSetVal('ig_botInstr', c.botInstructions);
-  igSetVal('ig_maxLen', c.maxResponseLength || 300);
-  const r = c.replyStyle || {};
-  igSetVal('ig_rsEmployeeName', r.employeeName);
-  igSetVal('ig_rsTone', r.tone || 'ودي ومحترم');
-  igSetVal('ig_rsDialect', r.dialect || 'السعودية الخفيفة');
-  igSetVal('ig_rsEmoji', r.emojiLevel || 'none');
-  igSetVal('ig_rsReplyLength', r.replyLength || 'medium');
-}
-
-async function igSaveConf() {
-  // Spread the existing (seeded) config first so fields not shown in this form
-  // (keywords, escalation contacts, delays, ...) are preserved on save.
-  const nc = {
-    ...igConfig,
-    storeName: igGetVal('ig_storeName').trim(),
-    storeDescription: igGetVal('ig_storeDesc').trim(),
-    welcomeMessage: igGetVal('ig_welcomeMsg').trim(),
-    workingHours: igGetVal('ig_workHours').trim(),
-    botInstructions: igGetVal('ig_botInstr').trim(),
-    maxResponseLength: parseInt(igGetVal('ig_maxLen'), 10) || 300,
-    replyStyle: {
-      ...(igConfig.replyStyle || {}),
-      employeeName: igGetVal('ig_rsEmployeeName').trim(),
-      tone: igGetVal('ig_rsTone'),
-      dialect: igGetVal('ig_rsDialect'),
-      emojiLevel: igGetVal('ig_rsEmoji'),
-      replyLength: igGetVal('ig_rsReplyLength'),
-    },
-  };
-  const enabled = !!(document.getElementById('ig_enabled') && document.getElementById('ig_enabled').checked);
-  try {
-    const r = await fetch('/api/instagram/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled, config: nc }),
-    });
-    if (r.status === 401) { location.href = '/login'; return; }
-    const d = await r.json();
-    if (d.success) { igConfig = nc; igToast('✅ تم حفظ إعدادات إنستقرام'); } else igToast('❌ تعذر الحفظ', true);
-  } catch (_) { igToast('❌ تعذر الحفظ', true); }
 }
 
 async function igDisconnect() {
@@ -101,8 +44,8 @@ async function igLoadInbox() {
     if (!list) return;
     const rows = d.conversations || [];
     list.innerHTML = rows.length
-      ? rows.map((c) => '<div class="ig-conv" onclick="igOpen(\'' + c.id + '\')">@' + (c.participant_username || c.participant_id) + '</div>').join('')
-      : '<div class="muted">لا توجد محادثات بعد</div>';
+      ? rows.map((c) => '<div class="ig-conv" style="padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer" onclick="igOpen(\'' + c.id + '\')">@' + escapeHtmlIg(c.participant_username || c.participant_id) + '</div>').join('')
+      : '<p class="hint">لا توجد محادثات بعد.</p>';
   } catch (_) { /* non-fatal */ }
 }
 
@@ -114,9 +57,12 @@ async function igOpen(id) {
     const thread = document.getElementById('igThread');
     if (!thread) return;
     const msgs = (d.messages || []).map((m) =>
-      '<div class="ig-msg ig-' + m.direction + '">' + escapeHtmlIg(m.content || '') + '</div>').join('');
-    thread.innerHTML = msgs +
-      '<div class="ig-reply-row"><input id="igReply" placeholder="ردّك..."><button onclick="igSend(\'' + id + '\')">إرسال</button></div>';
+      '<div class="ig-msg ig-' + m.direction + '" style="margin:6px 0;padding:8px 11px;border-radius:10px;background:' +
+      (m.direction === 'inbound' ? 'var(--bg-soft,#f1f5f9)' : 'var(--green-bg,#dcfce7)') + '">' +
+      escapeHtmlIg(m.content || '') + '</div>').join('');
+    thread.innerHTML = '<div style="margin-top:12px">' + msgs +
+      '<div style="display:flex;gap:8px;margin-top:8px"><input id="igReply" placeholder="ردّك..." style="flex:1">' +
+      '<button class="add-btn" onclick="igSend(\'' + id + '\')">إرسال</button></div></div>';
   } catch (_) { /* non-fatal */ }
 }
 
@@ -136,5 +82,5 @@ function escapeHtmlIg(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// Called by goTab('instagram') in index.html.
-window.igOnTab = function igOnTab() { igLoadStatus(); igLoadConf(); igLoadInbox(); };
+// Called by goTab('instagram'). Settings load lazily via igOpenSettings().
+window.igOnTab = function igOnTab() { igLoadStatus(); };

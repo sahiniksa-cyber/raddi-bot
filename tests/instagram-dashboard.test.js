@@ -9,31 +9,52 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html
 const js = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'instagram.js'), 'utf8');
 const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
 
-test('index.html has an Instagram tab + view container + script + goTab hook', () => {
+test('index.html has a distinctive Instagram tab + view + script + goTab hook', () => {
   assert.ok(/goTab\(['"]instagram['"]\)/.test(html), 'nav button missing');
   assert.ok(html.includes('id="view-instagram"'), 'view container missing');
   assert.ok(html.includes('id="tab-instagram"'), 'tab id missing');
   assert.ok(html.includes('/instagram.js'), 'script include missing');
   assert.ok(html.includes("t==='instagram'"), 'goTab hook missing');
+  assert.ok(html.includes('#tab-instagram{'), 'distinctive tab style missing');
+});
+
+test('bot-brain settings + inbox are gated behind connection', () => {
+  assert.ok(html.includes('id="igConnectedArea"'), 'connected-only area missing');
+  assert.ok(html.includes('style="display:none"') || /igConnectedArea"[^>]*display:none/.test(html), 'connected area should start hidden');
+  assert.ok(html.includes('igOpenSettings()'), 'open-settings button missing');
+});
+
+test('settings form is reused for Instagram via a channel switch (true parity)', () => {
+  assert.ok(html.includes("let settingsChannel = 'whatsapp'"), 'settingsChannel default missing');
+  assert.ok(html.includes("'/api/instagram/config'"), 'instagram config endpoint not used by shared form');
+  assert.ok(html.includes('id="igCfgBanner"'), 'instagram-mode banner missing');
+  assert.ok(html.includes('.ig-cfg .wa-only'), 'wa-only hide rule missing');
+  assert.ok(html.includes('function igOpenSettings'), 'igOpenSettings missing');
+  assert.ok(html.includes('function exitIgCfgMode'), 'exitIgCfgMode missing');
+});
+
+test('WhatsApp-only panels are tagged wa-only so they hide in Instagram mode', () => {
+  assert.ok(html.includes('bot-ctrl wa-only'), 'bot control not tagged');
+  assert.ok(html.includes('stats-row wa-only'), 'stats not tagged');
+  assert.ok(html.includes('panel wa-only'), 'a whatsapp-only panel not tagged');
 });
 
 test('server serves /instagram.js', () => {
   assert.ok(serverSrc.includes("app.get('/instagram.js'"), 'static route missing');
 });
 
-test('instagram.js loads and saves via the isolated endpoints', () => {
-  assert.ok(js.includes('/api/instagram/config'));
+test('instagram.js uses the isolated endpoints and gates the connected area', () => {
   assert.ok(js.includes('/api/instagram/status'));
   assert.ok(js.includes('/api/instagram/conversations'));
-  assert.ok(js.includes('igFillForm'));
-  assert.ok(js.includes('igSaveConf'));
+  assert.ok(js.includes('igConnectedArea'));
   assert.ok(js.includes('window.igOnTab'));
+  assert.ok(js.includes('igLoadStatus'));
+});
+
+test('instagram.js never calls the WhatsApp /api/config endpoint', () => {
+  assert.ok(!/['"]\/api\/config['"]/.test(js), 'instagram.js must not touch WhatsApp config');
 });
 
 test('the connect button links to the OAuth start endpoint', () => {
   assert.ok(html.includes('/api/instagram/connect'), 'connect link missing in index.html');
-});
-
-test('instagram.js never calls the WhatsApp /api/config endpoint', () => {
-  assert.ok(!/['"]\/api\/config['"]/.test(js), 'must not touch WhatsApp config');
 });

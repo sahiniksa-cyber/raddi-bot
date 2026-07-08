@@ -821,6 +821,13 @@ body{background-attachment:scroll}
 
 <div class="topbar">
   <div class="logo">جواب</div>
+  <style>
+    #tab-instagram{background:linear-gradient(135deg,#feda75 0%,#fa7e1e 22%,#d62976 55%,#962fbf 78%,#4f5bd5 100%);color:#fff!important;font-weight:800;border:none;box-shadow:0 2px 10px rgba(214,41,118,.38);margin-inline-start:6px}
+    #tab-instagram i{color:#fff}
+    #tab-instagram.active{outline:2px solid #fff;outline-offset:-3px}
+    #igCfgBanner{border:2px solid #d62976;border-radius:14px;background:linear-gradient(135deg,rgba(254,218,117,.14),rgba(214,41,118,.10),rgba(79,91,213,.12))}
+    .ig-cfg .wa-only{display:none!important}
+  </style>
   <div class="nav-tabs">
     <button class="tab active" onclick="goTab('connect')" id="tab-connect"><i data-lucide="smartphone"></i> الربط</button>
     <button class="tab" onclick="goTab('settings')" id="tab-settings"><i data-lucide="settings"></i> الإعدادات</button>
@@ -978,7 +985,18 @@ body{background-attachment:scroll}
 <div class="view" id="view-settings">
 <div class="sw">
 
-  <div class="bot-ctrl">
+  <div id="igCfgBanner" style="display:none;padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:15px;font-weight:900;color:#d62976">📸 تعدّل الآن إعدادات إنستقرام</div>
+        <div class="hint" style="margin:2px 0 0">منسوخة تلقائيًا من الواتساب — أي تعديل هنا لإنستقرام فقط ولا يمسّ الواتساب.</div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;white-space:nowrap"><input type="checkbox" id="igCfgEnabled" style="width:18px;height:18px"> تشغيل الرد الآلي على إنستقرام</label>
+      <button class="ghost-btn" onclick="igCloseSettings()" style="white-space:nowrap">← رجوع لإنستقرام</button>
+    </div>
+  </div>
+
+  <div class="bot-ctrl wa-only">
     <div class="bot-ctrl-info">
       <div class="bcdot" id="ctrlDot"></div>
       <span class="bc-label" id="ctrlStatusTxt">⏹ متوقف</span>
@@ -989,7 +1007,7 @@ body{background-attachment:scroll}
     </div>
   </div>
 
-  <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
+  <div class="stats-row wa-only" style="grid-template-columns:repeat(4,1fr)">
     <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
     <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
     <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
@@ -997,14 +1015,14 @@ body{background-attachment:scroll}
   </div>
 
   <!-- ═══ FULL SERVICE HEALTH CHECK ═══ -->
-  <button class="health-btn" onclick="runHealthCheck()" id="healthBtn">🩺 فحص الخدمة الكامل — هل كل شيء يعمل؟</button>
-  <div class="health-results" id="healthResults">
+  <button class="health-btn wa-only" onclick="runHealthCheck()" id="healthBtn">🩺 فحص الخدمة الكامل — هل كل شيء يعمل؟</button>
+  <div class="health-results wa-only" id="healthResults">
     <div class="health-results-hdr"><span id="healthHdrIcon">📋</span><span id="healthHdrTxt">نتائج الفحص</span></div>
     <div id="healthBody"></div>
   </div>
 
   <!-- ═══ TEST BOT LIVE ═══ -->
-  <div class="panel">
+  <div class="panel wa-only">
     <div class="phdr">
       <span>💬 جرّب البوت الآن — قبل ما يرد على عملاء حقيقيين</span>
       <button class="add-btn" onclick="resetTestChat()">🗑 محادثة جديدة</button>
@@ -1333,7 +1351,7 @@ body{background-attachment:scroll}
   </div>
 
   <!-- ═══ OWNER PAUSE STATUS ═══ -->
-  <div class="panel" id="pausedPanel" style="display:none">
+  <div class="panel wa-only" id="pausedPanel" style="display:none">
     <div class="phdr">
       <span>⏸ محادثات موقوفة — المالك يرد فيها</span>
       <button class="add-btn" onclick="resumeAll()" style="background:rgba(37,211,102,.1);color:var(--green)">▶ استئناف الكل</button>
@@ -1716,50 +1734,38 @@ body{background-attachment:scroll}
 <div class="view" id="view-instagram">
 <div class="sw">
 
-  <div class="panel">
-    <div class="phdr"><span>📸 ربط إنستقرام</span></div>
+  <!-- Connection card (always visible) -->
+  <div class="panel" id="igConnCard">
+    <div class="phdr"><span>📸 ربط إنستقرام</span><span id="igStatusPill" style="font-size:12px;font-weight:700;color:var(--text-soft)"></span></div>
     <div class="pbdy">
-      <p class="hint" id="igStatus" style="margin:0 0 10px">…</p>
+      <p class="hint" id="igStatus" style="margin:0 0 12px">جارٍ التحقق…</p>
       <a class="green-btn" id="igConnectBtn" href="/api/instagram/connect">🔗 ربط حساب إنستقرام</a>
       <button class="ghost-btn" id="igDisconnectBtn" style="display:none" onclick="igDisconnect()">فصل الحساب</button>
+      <p class="hint" id="igNotLinkedHint" style="margin:12px 0 0;background:var(--amber-bg);border:1px solid var(--amber-border);padding:11px 13px;border-radius:8px;color:var(--amber);font-weight:600">اربط حسابك أولاً — بعد الربط تظهر إعدادات عقل البوت والرسائل.</p>
     </div>
   </div>
 
-  <div class="panel">
-    <div class="phdr"><span>⚙️ إعدادات ذكاء إنستقرام</span></div>
-    <div class="pbdy">
-      <p class="hint" style="margin:0 0 12px">هذه الإعدادات منسوخة تلقائيًا من إعدادات الواتساب — عدّل ما تريد. أي تعديل هنا لا يؤثر على الواتساب.</p>
-      <label class="sw-row"><input type="checkbox" id="ig_enabled"> تفعيل الرد الآلي (AI) على إنستقرام</label>
-      <label>اسم الموظف<input id="ig_rsEmployeeName" type="text"></label>
-      <label>اسم المتجر<input id="ig_storeName" type="text"></label>
-      <label>وصف المتجر<textarea id="ig_storeDesc" rows="2"></textarea></label>
-      <label>رسالة الترحيب<textarea id="ig_welcomeMsg" rows="2"></textarea></label>
-      <label>أوقات العمل<input id="ig_workHours" type="text"></label>
-      <label>تعليمات البوت<textarea id="ig_botInstr" rows="5"></textarea></label>
-      <label>النبرة<input id="ig_rsTone" type="text"></label>
-      <label>اللهجة<input id="ig_rsDialect" type="text"></label>
-      <label>مستوى الإيموجي
-        <select id="ig_rsEmoji">
-          <option value="none">بدون</option><option value="light">خفيف</option>
-          <option value="medium">متوسط</option><option value="heavy">كثير</option>
-        </select>
-      </label>
-      <label>طول الرد
-        <select id="ig_rsReplyLength">
-          <option value="short">قصير</option><option value="medium">متوسط</option><option value="long">طويل</option>
-        </select>
-      </label>
-      <label>أقصى طول للرد (حرف)<input id="ig_maxLen" type="number"></label>
-      <button class="green-btn" onclick="igSaveConf()">💾 حفظ إعدادات إنستقرام</button>
-    </div>
-  </div>
+  <!-- Everything below appears ONLY after the account is linked -->
+  <div id="igConnectedArea" style="display:none">
 
-  <div class="panel">
-    <div class="phdr"><span>📥 الرسائل (Inbox)</span></div>
-    <div class="pbdy">
-      <div id="igConvList"></div>
-      <div id="igThread"></div>
+    <div class="panel">
+      <div class="phdr"><span>🤖 عقل البوت لإنستقرام</span></div>
+      <div class="pbdy">
+        <p class="hint" style="margin:0 0 14px;background:var(--indigo-bg);border-right:3px solid var(--indigo-soft);padding:11px 13px;border-radius:8px;color:var(--indigo);font-weight:600">
+          إعدادات إنستقرام كاملة — نفس صفحة الواتساب بالضبط، ومنسوخة تلقائيًا من إعداداتك في الواتساب. افتحها وعدّل ما تريد؛ أي تعديل هنا لإنستقرام فقط ولا يمسّ الواتساب.
+        </p>
+        <button class="green-btn" onclick="igOpenSettings()">⚙️ فتح إعدادات عقل البوت (نفس صفحة الواتساب)</button>
+      </div>
     </div>
+
+    <div class="panel">
+      <div class="phdr"><span>📥 الرسائل (Inbox)</span></div>
+      <div class="pbdy">
+        <div id="igConvList"></div>
+        <div id="igThread"></div>
+      </div>
+    </div>
+
   </div>
 
 </div>
@@ -1768,10 +1774,33 @@ body{background-attachment:scroll}
 <script src="/instagram.js"></script>
 <script>
 let config = {}, lastStatus = '';
+// Which channel the shared settings form is currently editing. Default whatsapp
+// keeps WhatsApp behaviour byte-identical; 'instagram' reuses the SAME form but
+// loads/saves the Instagram config (full 1:1 parity, no duplicated markup).
+let settingsChannel = 'whatsapp';
+function exitIgCfgMode(){
+  settingsChannel='whatsapp';
+  const v=document.getElementById('view-settings'); if(v)v.classList.remove('ig-cfg');
+  const b=document.getElementById('igCfgBanner'); if(b)b.style.display='none';
+}
+function igOpenSettings(){
+  settingsChannel='instagram';
+  const v=document.getElementById('view-settings'); if(v)v.classList.add('ig-cfg');
+  const b=document.getElementById('igCfgBanner'); if(b)b.style.display='';
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  if(v)v.classList.add('active');
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  const t=document.getElementById('tab-instagram'); if(t)t.classList.add('active');
+  loadConf();
+  window.scrollTo(0,0);
+}
+function igCloseSettings(){ exitIgCfgMode(); goTab('instagram'); }
 let billingState = null, billingSettings = null;
 
 // ── NAV ──
 function goTab(t){
+  // Leaving Instagram-settings mode → restore WhatsApp as the form's channel.
+  if (settingsChannel === 'instagram' && t !== 'instagram') exitIgCfgMode();
   if (billingState && billingActive() && t === 'pricing') t = 'connect';
   if (billingState && !billingState.accessActive && !billingState.accessBypass && !['pricing','account'].includes(t)) {
     t = 'pricing';
@@ -1781,6 +1810,7 @@ function goTab(t){
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+t).classList.add('active');
   document.getElementById('tab-'+t).classList.add('active');
+  if(t==='settings'&&typeof loadConf==='function')loadConf();
   if(t==='conversations')loadConversations();
   if(t==='train')loadLearnedReplies();
   if(t==='instagram'&&window.igOnTab)window.igOnTab();
@@ -2059,12 +2089,19 @@ async function loadPromptEditLog(){
 let confLoaded=false;
 async function loadConf(retry=0){
   try{
-    const r=await fetch('/api/config');
+    const igMode=settingsChannel==='instagram';
+    const r=await fetch(igMode?'/api/instagram/config':'/api/config');
     if(r.status===401){window.location.href='/login';return;}
     if(!r.ok)throw new Error('HTTP '+r.status);
-    config=await r.json();
+    const d=await r.json();
+    if(igMode){
+      config=d.config||{};
+      const t=document.getElementById('igCfgEnabled'); if(t)t.checked=d.enabled===true;
+    }else{
+      config=d;
+    }
     fillForm(config);
-    loadPromptEditLog();
+    if(!igMode)loadPromptEditLog();
     confLoaded=true;
     // Enable save button after successful load
     const sb=document.getElementById('saveBtn');if(sb){sb.disabled=false;sb.title='';}
@@ -2816,11 +2853,16 @@ async function saveConf(){
     whatsappPromptEditEnabled:document.getElementById('pe_enabled')?document.getElementById('pe_enabled').checked:true,
   };
   try{
-    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(nc)});
+    const igMode=settingsChannel==='instagram';
+    const url=igMode?'/api/instagram/config':'/api/config';
+    const body=igMode
+      ?JSON.stringify({enabled:!!(document.getElementById('igCfgEnabled')&&document.getElementById('igCfgEnabled').checked),config:nc})
+      :JSON.stringify(nc);
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();
-    if(d.success){config=nc;toast('✅ تم حفظ الإعدادات');}
-    else toast('❌ '+d.message,true);
+    if(d.success){config=nc;toast(igMode?'✅ تم حفظ إعدادات إنستقرام':'✅ تم حفظ الإعدادات');}
+    else toast('❌ '+(d.message||'تعذر الحفظ'),true);
   }catch(_){toast('❌ تعذر الحفظ',true);}
 }
 
