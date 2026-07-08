@@ -827,6 +827,7 @@ body{background-attachment:scroll}
     <button class="tab" onclick="goTab('train')" id="tab-train"><i data-lucide="graduation-cap"></i> دربني</button>
     <button class="tab" onclick="goTab('conversations')" id="tab-conversations"><i data-lucide="message-circle"></i> المحادثات</button>
     <button class="tab" onclick="goTab('pricing')" id="tab-pricing"><i data-lucide="badge-check"></i> التفعيل</button>
+    <button class="tab" onclick="goTab('instagram')" id="tab-instagram"><i data-lucide="instagram"></i> إنستقرام</button>
     <button class="tab" onclick="goTab('account')" id="tab-account"><i data-lucide="user"></i> حسابي</button>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
@@ -1712,6 +1713,59 @@ body{background-attachment:scroll}
 
 <div class="toast" id="toast"></div>
 
+<div class="view" id="view-instagram">
+<div class="sw">
+
+  <div class="panel">
+    <div class="phdr"><span>📸 ربط إنستقرام</span></div>
+    <div class="pbdy">
+      <p class="hint" id="igStatus" style="margin:0 0 10px">…</p>
+      <a class="green-btn" id="igConnectBtn" href="/api/instagram/connect">🔗 ربط حساب إنستقرام</a>
+      <button class="ghost-btn" id="igDisconnectBtn" style="display:none" onclick="igDisconnect()">فصل الحساب</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="phdr"><span>⚙️ إعدادات ذكاء إنستقرام</span></div>
+    <div class="pbdy">
+      <p class="hint" style="margin:0 0 12px">هذه الإعدادات منسوخة تلقائيًا من إعدادات الواتساب — عدّل ما تريد. أي تعديل هنا لا يؤثر على الواتساب.</p>
+      <label class="sw-row"><input type="checkbox" id="ig_enabled"> تفعيل الرد الآلي (AI) على إنستقرام</label>
+      <label>اسم الموظف<input id="ig_rsEmployeeName" type="text"></label>
+      <label>اسم المتجر<input id="ig_storeName" type="text"></label>
+      <label>وصف المتجر<textarea id="ig_storeDesc" rows="2"></textarea></label>
+      <label>رسالة الترحيب<textarea id="ig_welcomeMsg" rows="2"></textarea></label>
+      <label>أوقات العمل<input id="ig_workHours" type="text"></label>
+      <label>تعليمات البوت<textarea id="ig_botInstr" rows="5"></textarea></label>
+      <label>النبرة<input id="ig_rsTone" type="text"></label>
+      <label>اللهجة<input id="ig_rsDialect" type="text"></label>
+      <label>مستوى الإيموجي
+        <select id="ig_rsEmoji">
+          <option value="none">بدون</option><option value="light">خفيف</option>
+          <option value="medium">متوسط</option><option value="heavy">كثير</option>
+        </select>
+      </label>
+      <label>طول الرد
+        <select id="ig_rsReplyLength">
+          <option value="short">قصير</option><option value="medium">متوسط</option><option value="long">طويل</option>
+        </select>
+      </label>
+      <label>أقصى طول للرد (حرف)<input id="ig_maxLen" type="number"></label>
+      <button class="green-btn" onclick="igSaveConf()">💾 حفظ إعدادات إنستقرام</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="phdr"><span>📥 الرسائل (Inbox)</span></div>
+    <div class="pbdy">
+      <div id="igConvList"></div>
+      <div id="igThread"></div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script src="/instagram.js"></script>
 <script>
 let config = {}, lastStatus = '';
 let billingState = null, billingSettings = null;
@@ -1729,6 +1783,7 @@ function goTab(t){
   document.getElementById('tab-'+t).classList.add('active');
   if(t==='conversations')loadConversations();
   if(t==='train')loadLearnedReplies();
+  if(t==='instagram'&&window.igOnTab)window.igOnTab();
 }
 
 // ── SCREENS ──

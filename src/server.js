@@ -332,6 +332,7 @@ function createApp() {
   }
   app.use('/fonts', express.static(path.join(process.cwd(), 'dashboard/fonts')));
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
+  app.get('/instagram.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'instagram.js')));
 
   const routeDeps = {
     dashboardDir: path.join(process.cwd(), 'dashboard'),
