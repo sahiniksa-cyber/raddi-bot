@@ -1,11 +1,23 @@
-/* Instagram tab — connection + inbox. The bot-brain SETTINGS reuse the exact
- * same WhatsApp settings form via "Instagram mode" (see igOpenSettings /
- * settingsChannel in index.html), so there is NO duplicated settings markup and
- * full 1:1 parity is guaranteed. This file talks ONLY to /api/instagram/*.
+/* Instagram channel — connection + inbox, living INSIDE the shared settings
+ * page (Instagram mode). The bot-brain settings are the exact same WhatsApp
+ * form (see igOpenSettings / settingsChannel in index.html), so formatting is
+ * identical. This file talks ONLY to /api/instagram/*.
  *
- * The connected area (bot brain + inbox) is hidden until the account is linked. */
+ * Gating: until the account is linked, everything except the connection panel
+ * is hidden (igApplyGate), so settings appear only after linking. */
 
 const igToast = (msg, err) => (window.toast ? window.toast(msg, err) : console.log(msg));
+
+// Show/hide the settings panels based on connection: only the connect panel
+// (and the Instagram-mode banner) stay visible until the account is linked.
+function igApplyGate(connected) {
+  const sw = document.querySelector('#view-settings .sw');
+  if (!sw) return;
+  [...sw.children].forEach((el) => {
+    if (el.id === 'igCfgBanner' || el.classList.contains('ig-connect')) { el.classList.remove('ig-hidden'); return; }
+    if (connected) el.classList.remove('ig-hidden'); else el.classList.add('ig-hidden');
+  });
+}
 
 async function igLoadStatus() {
   try {
@@ -23,9 +35,7 @@ async function igLoadStatus() {
     if (dbtn) dbtn.style.display = connected ? '' : 'none';
     const hint = document.getElementById('igNotLinkedHint');
     if (hint) hint.style.display = connected ? 'none' : '';
-    // The whole bot-brain + inbox area only appears after linking.
-    const area = document.getElementById('igConnectedArea');
-    if (area) area.style.display = connected ? '' : 'none';
+    igApplyGate(connected);
     if (connected) igLoadInbox();
   } catch (_) { /* non-fatal */ }
 }
@@ -82,5 +92,6 @@ function escapeHtmlIg(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// Called by goTab('instagram'). Settings load lazily via igOpenSettings().
+// Kept for safety if goTab('instagram') is ever called; the real entry is the
+// Instagram channel chip → igOpenSettings().
 window.igOnTab = function igOnTab() { igLoadStatus(); };

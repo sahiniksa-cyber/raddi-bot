@@ -27,10 +27,21 @@ test('index.html has a distinctive Instagram tab + view + script + goTab hook', 
   assert.ok(html.includes("t==='instagram'"), 'goTab hook missing');
 });
 
-test('bot-brain settings + inbox are gated behind connection', () => {
-  assert.ok(html.includes('id="igConnectedArea"'), 'connected-only area missing');
-  assert.ok(html.includes('style="display:none"') || /igConnectedArea"[^>]*display:none/.test(html), 'connected area should start hidden');
-  assert.ok(html.includes('igOpenSettings()'), 'open-settings button missing');
+test('nav tabs drop to their own row under the header', () => {
+  assert.ok(html.includes('.nav-tabs{order:10;flex-basis:100%}'), 'tabs-second-row rule missing');
+});
+
+test('instagram connection + inbox live inside the settings page as ig-only panels', () => {
+  assert.ok(html.includes('panel ig-only ig-connect'), 'IG connect panel missing');
+  assert.ok(html.includes('id="igConvList"'), 'inbox list missing (should be in settings page)');
+  assert.ok(html.includes('.ig-only{display:none}'), 'ig-only hidden by default');
+  assert.ok(html.includes('.ig-cfg .ig-only{display:block}'), 'ig-only shown in instagram mode');
+  // The old custom instagram view is now an empty stub (no duplicate ids).
+  assert.ok(html.includes('<div class="view" id="view-instagram"><div class="sw"></div></div>'), 'view-instagram should be an empty stub');
+});
+
+test('selecting the Instagram channel opens the shared settings page', () => {
+  assert.ok(html.includes("if(ch==='instagram'){ igOpenSettings(); }"), 'instagram chip should open settings');
 });
 
 test('settings form is reused for Instagram via a channel switch (true parity)', () => {
@@ -52,11 +63,11 @@ test('server serves /instagram.js', () => {
   assert.ok(serverSrc.includes("app.get('/instagram.js'"), 'static route missing');
 });
 
-test('instagram.js uses the isolated endpoints and gates the connected area', () => {
+test('instagram.js uses the isolated endpoints and gates until linked', () => {
   assert.ok(js.includes('/api/instagram/status'));
   assert.ok(js.includes('/api/instagram/conversations'));
-  assert.ok(js.includes('igConnectedArea'));
-  assert.ok(js.includes('window.igOnTab'));
+  assert.ok(js.includes('function igApplyGate'));
+  assert.ok(js.includes('ig-hidden'));
   assert.ok(js.includes('igLoadStatus'));
 });
 
