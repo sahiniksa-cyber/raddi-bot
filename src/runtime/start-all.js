@@ -9,6 +9,12 @@ const processes = [
   { name: 'ai-worker', command: 'node', args: ['src/workers/ai-worker.js'], required: false, restartable: true },
 ];
 
+// Instagram worker: spawned ONLY when the feature is on. Not required and
+// restartable, so a crash never takes down web or the WhatsApp worker.
+if (process.env.INSTAGRAM_ENABLED === 'true') {
+  processes.push({ name: 'instagram-worker', command: 'node', args: ['src/workers/instagram-worker.js'], required: false, restartable: true });
+}
+
 const children = new Map();
 let shuttingDown = false;
 

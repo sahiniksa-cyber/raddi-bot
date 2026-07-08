@@ -975,6 +975,17 @@ async function main() {
     }
   }
 
+  // Instagram token-refresh timer — only when the feature is on. Wrapped so a
+  // failure here can never affect the web server or WhatsApp.
+  if (process.env.INSTAGRAM_ENABLED === 'true') {
+    try {
+      require('./services/instagram/token-refresh').startTokenRefreshTimer();
+      console.log(`${new Date().toISOString()} [server] instagram token refresh timer started`);
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [server] instagram refresh timer failed: ${err.message}`);
+    }
+  }
+
   // Start the 24/7 health monitor: detects outages and alerts the owner.
   if (process.env.HEALTH_MONITOR_DISABLED !== 'true') {
     try {
