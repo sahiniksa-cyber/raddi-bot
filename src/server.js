@@ -41,6 +41,7 @@ const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
+const { createInstagramRoutes } = require('./routes/instagram.routes');
 const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
@@ -231,6 +232,7 @@ function createApp() {
   // routes attach their own express.raw() parser inline.
   const RAW_BODY_PATHS = new Set([
     '/billing/moyasar/webhook',
+    '/instagram/webhook',
   ]);
   app.use((req, res, next) => {
     if (RAW_BODY_PATHS.has(req.path)) return next();
@@ -356,6 +358,9 @@ function createApp() {
   app.use(createDashboardRoutes(routeDeps));
   app.use('/api', createBillingApiGate({ settings: billingSettings }));
   app.use(createQueueRoutes(routeDeps));
+  // Instagram module (isolated; every route self-guards on INSTAGRAM_ENABLED).
+  // The webhook is in RAW_BODY_PATHS above and mounts its own express.raw.
+  app.use(createInstagramRoutes(routeDeps));
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup, database: db });
   const configControllerModule = require('./controllers/config.controller');

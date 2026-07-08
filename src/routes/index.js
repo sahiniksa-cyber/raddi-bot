@@ -6,6 +6,7 @@ const { createDashboardRoutes } = require('./dashboard.routes');
 const { createHealthRoutes } = require('./health.routes');
 const { createQueueRoutes } = require('./queue.routes');
 const { createAuthRoutes } = require('./auth.routes');
+const { createInstagramRoutes } = require('./instagram.routes');
 
 function mountRoutes(app, deps = {}) {
   app.use(createHealthRoutes(deps));
@@ -14,6 +15,7 @@ function mountRoutes(app, deps = {}) {
   app.use(createBotRoutes(deps));
   app.use(createConfigRoutes(deps));
   app.use(createQueueRoutes(deps));
+  app.use(createInstagramRoutes(deps));
   return app;
 }
 
@@ -24,5 +26,6 @@ module.exports = {
   createDashboardRoutes,
   createHealthRoutes,
   createQueueRoutes,
+  createInstagramRoutes,
   mountRoutes,
 };
