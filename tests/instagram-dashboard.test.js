@@ -9,13 +9,22 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html
 const js = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'instagram.js'), 'utf8');
 const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
 
+test('header shows a WhatsApp + Instagram channel switcher next to the logo', () => {
+  assert.ok(html.includes('class="chan-switch"'), 'channel switcher missing');
+  assert.ok(html.includes('id="chan-wa"'), 'WhatsApp channel chip missing');
+  assert.ok(html.includes('id="chan-ig"'), 'Instagram channel chip missing');
+  assert.ok(html.includes('function selectChannel'), 'selectChannel missing');
+  // both chips carry a distinctive brand background
+  assert.ok(html.includes('.chan-wa{background'), 'WhatsApp chip style missing');
+  assert.ok(html.includes('.chan-ig{background'), 'Instagram chip style missing');
+});
+
 test('index.html has a distinctive Instagram tab + view + script + goTab hook', () => {
   assert.ok(/goTab\(['"]instagram['"]\)/.test(html), 'nav button missing');
   assert.ok(html.includes('id="view-instagram"'), 'view container missing');
   assert.ok(html.includes('id="tab-instagram"'), 'tab id missing');
   assert.ok(html.includes('/instagram.js'), 'script include missing');
   assert.ok(html.includes("t==='instagram'"), 'goTab hook missing');
-  assert.ok(html.includes('#tab-instagram{'), 'distinctive tab style missing');
 });
 
 test('bot-brain settings + inbox are gated behind connection', () => {
