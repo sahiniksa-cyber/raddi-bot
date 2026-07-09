@@ -830,14 +830,14 @@ body{background-attachment:scroll}
 
   <style>
     .chan-switch{display:flex;gap:8px;align-items:center;margin-inline-start:14px}
-    .chan{display:inline-flex;align-items:center;gap:6px;padding:8px 15px;border-radius:12px;border:none;font-family:var(--font);font-weight:800;font-size:13.5px;cursor:pointer;color:#fff;opacity:.5;transition:opacity .15s,transform .15s,box-shadow .15s}
-    .chan i{width:16px;height:16px}
-    .chan-wa{background:linear-gradient(135deg,#25d366,#128c7e)}
-    .chan-ig{background:linear-gradient(135deg,#feda75 0%,#fa7e1e 22%,#d62976 55%,#962fbf 78%,#4f5bd5 100%)}
-    .chan.active{opacity:1;box-shadow:0 3px 12px rgba(0,0,0,.2);outline:2px solid #fff;outline-offset:-3px;transform:translateY(-1px)}
-    /* Tabs drop to their own row under the logo + channel switcher */
+    .chan{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:10px;border:none;font-family:var(--font);font-weight:700;font-size:13px;cursor:pointer;color:#fff;opacity:.55;transition:opacity .15s}
+    .chan i{width:15px;height:15px}
+    .chan-wa{background:#25d366}
+    .chan-ig{background:#d62976}
+    .chan.active{opacity:1}
+    /* Tabs drop to their own row under the header, centered */
     .topbar{flex-wrap:wrap;row-gap:10px}
-    .nav-tabs{order:10;flex-basis:100%}
+    .nav-tabs{order:10;flex-basis:100%;justify-content:center}
     #igCfgBanner{border:2px solid #d62976;border-radius:14px;background:linear-gradient(135deg,rgba(254,218,117,.14),rgba(214,41,118,.10),rgba(79,91,213,.12))}
     .ig-cfg .wa-only{display:none!important}
     .ig-only{display:none}
@@ -1012,17 +1012,7 @@ body{background-attachment:scroll}
     </div>
   </div>
 
-  <!-- Instagram-only panels (visible only in Instagram mode) — same styling as WhatsApp -->
-  <div class="panel ig-only ig-connect">
-    <div class="phdr"><span>📸 ربط إنستقرام</span><span id="igStatusPill" style="font-size:12px;font-weight:700;color:var(--text-soft)"></span></div>
-    <div class="pbdy">
-      <p class="hint" id="igStatus" style="margin:0 0 12px">جارٍ التحقق…</p>
-      <a class="green-btn" id="igConnectBtn" href="/api/instagram/connect">🔗 ربط حساب إنستقرام</a>
-      <button class="ghost-btn" id="igDisconnectBtn" style="display:none" onclick="igDisconnect()">فصل الحساب</button>
-      <p class="hint" id="igNotLinkedHint" style="margin:12px 0 0;background:var(--amber-bg);border:1px solid var(--amber-border);padding:11px 13px;border-radius:8px;color:var(--amber);font-weight:600">اربط حسابك أولاً — بعد الربط تظهر بقية الإعدادات والرسائل.</p>
-    </div>
-  </div>
-
+  <!-- Instagram-only: inbox panel (connection is its own page, view-instagram) -->
   <div class="panel ig-only">
     <div class="phdr"><span>📥 رسائل إنستقرام (Inbox)</span></div>
     <div class="pbdy">
@@ -1766,11 +1756,23 @@ body{background-attachment:scroll}
 
 <div class="toast" id="toast"></div>
 
-<!-- Instagram has no separate view: selecting the Instagram channel opens the
-     SAME settings page in Instagram mode (see igOpenSettings), with the
-     connection + inbox shown as panels inside it. This empty stub keeps
-     goTab('instagram') safe if ever called. -->
-<div class="view" id="view-instagram"><div class="sw"></div></div>
+<!-- Instagram CONNECT/ACTIVATE page — a simple registration screen (like the
+     WhatsApp الربط page). After linking, the full settings page opens. -->
+<div class="view" id="view-instagram">
+<div class="sw">
+  <div class="panel" style="max-width:560px;margin:24px auto;text-align:center">
+    <div class="pbdy" style="padding:36px 26px">
+      <div style="font-size:52px;margin-bottom:10px">📸</div>
+      <h2 style="margin:0 0 8px;font-size:22px;color:var(--text)">ربط وتفعيل إنستقرام</h2>
+      <p class="hint" id="igStatus" style="margin:0 auto 22px;max-width:420px">اربط حساب إنستقرام للأعمال عشان يبدأ البوت يرد تلقائيًا على الرسائل الخاصة (DM).</p>
+      <a class="green-btn" id="igConnectBtn" href="/api/instagram/connect" style="display:inline-block;padding:13px 30px;font-size:15px">🔗 ربط حساب إنستقرام</a>
+      <button class="green-btn" id="igOpenSettingsBtn" style="display:none;padding:13px 30px;font-size:15px" onclick="igOpenSettings()">⚙️ فتح إعدادات إنستقرام</button>
+      <div><button class="ghost-btn" id="igDisconnectBtn" style="display:none;margin-top:12px" onclick="igDisconnect()">فصل الحساب</button></div>
+      <p class="hint" style="margin:20px auto 0;max-width:420px;font-size:12px;color:var(--text-soft)">بعد الربط تنفتح صفحة الإعدادات الكاملة — نفس إعدادات الواتساب بالضبط، منسوخة تلقائيًا، وتقدر تعدّلها.</p>
+    </div>
+  </div>
+</div>
+</div>
 
 <script src="/instagram.js"></script>
 <script>
@@ -1801,9 +1803,15 @@ function igOpenSettings(){
   window.scrollTo(0,0);
 }
 function igCloseSettings(){ exitIgCfgMode(); goTab('connect'); }
-// Header channel chips. WhatsApp → the WhatsApp experience. Instagram → the SAME
-// settings page in Instagram mode (with IG connect + inbox panels inside it).
-function selectChannel(ch){ if(ch==='instagram'){ igOpenSettings(); } else { goTab('connect'); } }
+// Header channel chips. WhatsApp → straight to its data (settings). Instagram →
+// simple connect/activate page first; once linked, the full settings page.
+function selectChannel(ch){ if(ch==='instagram'){ openInstagram(); } else { goTab('settings'); } }
+async function openInstagram(){
+  let connected=false;
+  try{ const r=await fetch('/api/instagram/status'); const d=await r.json(); connected=d.connected===true; }catch(_){}
+  if(connected){ igOpenSettings(); }
+  else { goTab('instagram'); if(typeof igLoadStatus==='function')igLoadStatus(); }
+}
 let billingState = null, billingSettings = null;
 
 // ── NAV ──

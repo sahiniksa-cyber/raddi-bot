@@ -1,23 +1,12 @@
-/* Instagram channel — connection + inbox, living INSIDE the shared settings
- * page (Instagram mode). The bot-brain settings are the exact same WhatsApp
- * form (see igOpenSettings / settingsChannel in index.html), so formatting is
- * identical. This file talks ONLY to /api/instagram/*.
- *
- * Gating: until the account is linked, everything except the connection panel
- * is hidden (igApplyGate), so settings appear only after linking. */
+/* Instagram channel front-end. Flow:
+ *   1) A simple connect/activate page (view-instagram) — like the WhatsApp
+ *      الربط screen. Before linking, that's all the merchant sees.
+ *   2) After linking, the SAME WhatsApp settings form opens in Instagram mode
+ *      (see igOpenSettings / settingsChannel in index.html) — identical
+ *      formatting — with the Instagram inbox as a panel inside it.
+ * Talks ONLY to /api/instagram/*. */
 
 const igToast = (msg, err) => (window.toast ? window.toast(msg, err) : console.log(msg));
-
-// Show/hide the settings panels based on connection: only the connect panel
-// (and the Instagram-mode banner) stay visible until the account is linked.
-function igApplyGate(connected) {
-  const sw = document.querySelector('#view-settings .sw');
-  if (!sw) return;
-  [...sw.children].forEach((el) => {
-    if (el.id === 'igCfgBanner' || el.classList.contains('ig-connect')) { el.classList.remove('ig-hidden'); return; }
-    if (connected) el.classList.remove('ig-hidden'); else el.classList.add('ig-hidden');
-  });
-}
 
 async function igLoadStatus() {
   try {
@@ -26,22 +15,23 @@ async function igLoadStatus() {
     const d = await r.json();
     const connected = d.connected === true;
     const st = document.getElementById('igStatus');
-    if (st) st.textContent = connected ? ('✅ مربوط: @' + (d.username || '')) : 'غير مربوط بعد.';
-    const pill = document.getElementById('igStatusPill');
-    if (pill) pill.textContent = connected ? 'مربوط' : '';
+    if (st) st.textContent = connected
+      ? ('✅ حسابك مربوط: @' + (d.username || '') + ' — التفعيل جاهز.')
+      : 'اربط حساب إنستقرام للأعمال عشان يبدأ البوت يرد تلقائيًا على الرسائل الخاصة (DM).';
     const cbtn = document.getElementById('igConnectBtn');
+    const obtn = document.getElementById('igOpenSettingsBtn');
     const dbtn = document.getElementById('igDisconnectBtn');
-    if (cbtn) cbtn.style.display = connected ? 'none' : '';
-    if (dbtn) dbtn.style.display = connected ? '' : 'none';
-    const hint = document.getElementById('igNotLinkedHint');
-    if (hint) hint.style.display = connected ? 'none' : '';
-    igApplyGate(connected);
+    if (cbtn) cbtn.style.display = connected ? 'none' : 'inline-block';
+    if (obtn) obtn.style.display = connected ? 'inline-block' : 'none';
+    if (dbtn) dbtn.style.display = connected ? 'inline-block' : 'none';
     if (connected) igLoadInbox();
   } catch (_) { /* non-fatal */ }
 }
 
 async function igDisconnect() {
   try { await fetch('/api/instagram/disconnect', { method: 'POST' }); } catch (_) { /* ignore */ }
+  if (typeof exitIgCfgMode === 'function') exitIgCfgMode();
+  if (typeof goTab === 'function') goTab('instagram');
   igLoadStatus();
 }
 
@@ -92,6 +82,5 @@ function escapeHtmlIg(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// Kept for safety if goTab('instagram') is ever called; the real entry is the
-// Instagram channel chip → igOpenSettings().
+// goTab('instagram') shows the connect page; refresh its status.
 window.igOnTab = function igOnTab() { igLoadStatus(); };
