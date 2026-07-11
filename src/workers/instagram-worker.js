@@ -39,6 +39,12 @@ function shouldBlockSendForQuota(quota) {
   return Boolean(quota && quota.canReply === false);
 }
 
+// Idempotency: if this reply row is already sent (or has a provider id), a
+// BullMQ retry must NOT re-send it or decrement the shared quota again.
+function alreadySent(row) {
+  return Boolean(row && (row.status === 'sent' || row.provider_message_id));
+}
+
 /**
  * Merge the merchant's Instagram behavior config with the shared resolved
  * API keys (Instagram config is stored WITHOUT keys, so keys come from
@@ -110,6 +116,10 @@ async function processIncoming(job) {
 async function processOutgoing(job) {
   const { userId, recipientId, text, replyMessageId } = job.data;
 
+  // Idempotency guard: skip if a prior attempt already sent this reply.
+  const existing = await db.query('SELECT status, provider_message_id FROM instagram_messages WHERE id = $1', [replyMessageId]);
+  if (alreadySent(existing.rows[0])) return { skipped: 'already_sent' };
+
   const quota = await checkMessageQuota(userId);
   if (shouldBlockSendForQuota(quota)) {
     await db.query(`UPDATE instagram_messages SET status='quota_stop' WHERE id=$1`, [replyMessageId]);
@@ -172,6 +182,7 @@ if (require.main === module) {
 module.exports = {
   shouldGenerateReply,
   shouldBlockSendForQuota,
+  alreadySent,
   buildAiConfig,
   processIncoming,
   processOutgoing,

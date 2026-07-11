@@ -1782,11 +1782,15 @@ let config = {}, lastStatus = '';
 // loads/saves the Instagram config (full 1:1 parity, no duplicated markup).
 let settingsChannel = 'whatsapp';
 function exitIgCfgMode(){
+  const wasIg = settingsChannel==='instagram';
   settingsChannel='whatsapp';
   const v=document.getElementById('view-settings'); if(v)v.classList.remove('ig-cfg');
   const b=document.getElementById('igCfgBanner'); if(b)b.style.display='none';
   // Clear any connection-gating so the WhatsApp settings view is fully restored.
   document.querySelectorAll('#view-settings .sw > *').forEach(el=>el.classList.remove('ig-hidden'));
+  // Reload WhatsApp config into the shared form (only when leaving Instagram mode),
+  // so the form shows WhatsApp data again — without refetching on every settings nav.
+  if(wasIg && typeof loadConf==='function') loadConf();
 }
 function igOpenSettings(){
   settingsChannel='instagram';
@@ -1830,7 +1834,6 @@ function goTab(t){
   // Sync the header channel chips (WhatsApp vs Instagram).
   const _wa=document.getElementById('chan-wa'), _ig=document.getElementById('chan-ig');
   if(_wa&&_ig){const isIg=(t==='instagram');_ig.classList.toggle('active',isIg);_wa.classList.toggle('active',!isIg);}
-  if(t==='settings'&&typeof loadConf==='function')loadConf();
   if(t==='conversations')loadConversations();
   if(t==='train')loadLearnedReplies();
   if(t==='instagram'&&window.igOnTab)window.igOnTab();

@@ -5,8 +5,16 @@ const assert = require('node:assert');
 const {
   shouldGenerateReply,
   shouldBlockSendForQuota,
+  alreadySent,
   buildAiConfig,
 } = require('../src/workers/instagram-worker');
+
+test('alreadySent guards against double-send on retry', () => {
+  assert.strictEqual(alreadySent({ status: 'sent' }), true);
+  assert.strictEqual(alreadySent({ provider_message_id: 'mid.1' }), true);
+  assert.strictEqual(alreadySent({ status: 'queued_for_send', provider_message_id: null }), false);
+  assert.strictEqual(alreadySent(undefined), false);
+});
 
 test('shouldGenerateReply true only when AI enabled', () => {
   assert.strictEqual(shouldGenerateReply({ enabled: false }), false);
