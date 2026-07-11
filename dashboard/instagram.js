@@ -84,3 +84,13 @@ function escapeHtmlIg(s) {
 
 // goTab('instagram') shows the connect page; refresh its status.
 window.igOnTab = function igOnTab() { igLoadStatus(); };
+
+// Reveal the WhatsApp/Instagram channel switcher ONLY when the Instagram
+// feature is enabled. When INSTAGRAM_ENABLED is off, /api/instagram/status
+// returns 503 and the switcher stays hidden — so nothing half-finished is
+// exposed to merchants and the dashboard looks like the WhatsApp-only version.
+(function igGateSwitch() {
+  fetch('/api/instagram/status').then(function (r) {
+    if (r.ok) { const cs = document.querySelector('.chan-switch'); if (cs) cs.style.display = ''; }
+  }).catch(function () { /* keep hidden */ });
+})();

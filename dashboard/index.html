@@ -822,8 +822,10 @@ body{background-attachment:scroll}
 <div class="topbar">
   <div class="logo">جواب</div>
 
-  <!-- Channel switcher next to the logo — shows the platform handles both channels -->
-  <div class="chan-switch">
+  <!-- Channel switcher next to the logo. Hidden by default; instagram.js reveals
+       it only when the Instagram feature is enabled (INSTAGRAM_ENABLED). While
+       disabled the dashboard looks exactly like the WhatsApp-only version. -->
+  <div class="chan-switch" style="display:none">
     <button class="chan chan-wa active" id="chan-wa" onclick="selectChannel('whatsapp')"><i data-lucide="message-circle"></i> واتساب</button>
     <button class="chan chan-ig" id="chan-ig" onclick="selectChannel('instagram')"><i data-lucide="instagram"></i> إنستقرام</button>
   </div>
