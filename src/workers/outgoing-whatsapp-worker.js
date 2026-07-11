@@ -354,7 +354,10 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     }
     const bot = await waitForConnectedBot(loadedBot, {
       reason: `outgoing-lid:${job.id}`,
-      timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '45000', 10),
+      // Aligned with the main path (10s): @lid is the majority JID type and the
+      // outgoing worker is concurrency=1, so a 45s wait here would freeze every
+      // other merchant's sends when one bot is briefly disconnected.
+      timeoutMs: parseInt(process.env.OUTGOING_WAIT_CONNECTED_MS || '10000', 10),
     });
     if (!isSocketOpen(bot)) throw new Error('socket_not_open');
     if (!bot?.client?.sendMessage) throw new Error('no_send_channel_for_lid');

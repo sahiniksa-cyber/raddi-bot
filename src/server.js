@@ -659,6 +659,13 @@ function createApp() {
       err => ({ ok: false, msg: err.code === 'REDIS_NOT_CONFIGURED' ? 'غير مضبوط' : err.message }),
     );
 
+    // Real DB probe — the health card must reflect the actual DB state, not a
+    // hardcoded "ok" (otherwise a down database still shows green).
+    const dbPing = db.query('SELECT 1').then(
+      () => ({ ok: true, msg: 'PostgreSQL' }),
+      err => ({ ok: false, msg: err.message }),
+    );
+
     // Combined into one query — saves a round trip per dashboard click.
     const aiPipelineStats = db.query(
       `SELECT
@@ -708,10 +715,10 @@ function createApp() {
       err => { console.warn(`[health-check] queue counts failed: ${err.message}`); return { error: err.message }; },
     );
 
-    const [redisResult, aiStats, queues, aiFailureErrors] = await Promise.all([redisPing, aiPipelineStats, queueCounts, recentAiFailures]);
+    const [redisResult, dbResult, aiStats, queues, aiFailureErrors] = await Promise.all([redisPing, dbPing, aiPipelineStats, queueCounts, recentAiFailures]);
 
     const checks = [
-      { name: 'قاعدة البيانات', ok: true, msg: 'PostgreSQL' },
+      { name: 'قاعدة البيانات', ...dbResult },
       { name: 'الواتساب', ok: bot.appState.status === 'connected', msg: bot.appState.status },
       { name: 'Redis', ...redisResult },
     ];
