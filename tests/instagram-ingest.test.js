@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { extractMessages, ingestWebhookEntry } = require('../src/services/instagram/instagram-ingest');
+const { extractMessages, ingestWebhookEntry, ensureUsername } = require('../src/services/instagram/instagram-ingest');
 
 test('extractMessages flattens entry[].messaging[] into normalized items', () => {
   const body = {
@@ -78,6 +78,41 @@ test('ingestWebhookEntry does NOT enqueue AI when conversation ai_paused', async
   const r = await ingestWebhookEntry('u1', { participantId: 'C', mid: 'm', text: 'hi', echo: false }, { database, enqueueAi: async () => { enqueued++; } });
   assert.strictEqual(enqueued, 0);
   assert.strictEqual(r.aiPaused, true);
+});
+
+test('ensureUsername fetches + stores the @username when missing', async () => {
+  const updates = [];
+  const database = {
+    query: async (sql, params) => {
+      if (sql.includes('SELECT participant_username')) return { rows: [{ participant_username: null }] };
+      if (sql.startsWith('UPDATE instagram_conversations')) { updates.push(params); return { rows: [] }; }
+      return { rows: [] };
+    },
+  };
+  const accounts = { getAccountToken: async () => 'TOKEN' };
+  const graph = { getUserProfile: async () => ({ username: 'sara_q8', name: 'Sara' }) };
+  const u = await ensureUsername('u1', 'IGSID1', { database, accounts, graph });
+  assert.strictEqual(u, 'sara_q8');
+  assert.deepStrictEqual(updates[0], ['u1', 'IGSID1', 'sara_q8']);
+});
+
+test('ensureUsername skips the lookup when username already known', async () => {
+  let graphCalled = 0;
+  const database = { query: async (sql) => (sql.includes('SELECT participant_username') ? { rows: [{ participant_username: 'known' }] } : { rows: [] }) };
+  const graph = { getUserProfile: async () => { graphCalled++; return {}; } };
+  const u = await ensureUsername('u1', 'IGSID1', { database, accounts: { getAccountToken: async () => 'T' }, graph });
+  assert.strictEqual(u, 'known');
+  assert.strictEqual(graphCalled, 0);
+});
+
+test('ensureUsername is best-effort: returns null and never throws on failure', async () => {
+  const database = { query: async () => ({ rows: [{ participant_username: null }] }) };
+  const accounts = { getAccountToken: async () => 'T' };
+  const graph = { getUserProfile: async () => { throw new Error('no profile access'); } };
+  await assert.doesNotReject(async () => {
+    const u = await ensureUsername('u1', 'IGSID1', { database, accounts, graph });
+    assert.strictEqual(u, null);
+  });
 });
 
 test('ingestWebhookEntry treats duplicate mid (no insert row) as duplicate, no enqueue', async () => {

@@ -50,3 +50,18 @@ test('getProfile requests user_id and username', async () => {
   const r = await graph.getProfile({ token: 'LONG' }, { env, fetchImpl });
   assert.strictEqual(r.username, 'shop');
 });
+
+test('getUserProfile looks up a customer @username by IGSID', async () => {
+  const fetchImpl = async (url) => {
+    assert.ok(url.includes('/v25.0/1234567890?'), 'should hit the IGSID node');
+    assert.ok(url.includes('fields=username') && url.includes('name'));
+    return { ok: true, json: async () => ({ username: 'sara_q8', name: 'Sara' }) };
+  };
+  const r = await graph.getUserProfile({ token: 'LONG', igsid: '1234567890' }, { env, fetchImpl });
+  assert.strictEqual(r.username, 'sara_q8');
+});
+
+test('getUserProfile throws on error response', async () => {
+  const fetchImpl = async () => ({ ok: false, status: 400, text: async () => 'no access' });
+  await assert.rejects(() => graph.getUserProfile({ token: 'x', igsid: 'y' }, { env, fetchImpl }), /ig_user_profile_failed/);
+});

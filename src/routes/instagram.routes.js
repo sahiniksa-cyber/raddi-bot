@@ -59,7 +59,13 @@ function createInstagramRoutes(deps = {}) {
       for (const item of items) {
         if (item.echo || !item.text) continue;
         const userId = await accounts.findUserIdByIgAccount(item.igAccountId);
-        if (userId) await ingest.ingestWebhookEntry(userId, item);
+        if (userId) {
+          await ingest.ingestWebhookEntry(userId, item);
+          // Resolve the @username so the inbox shows handles, not numeric ids.
+          if (typeof ingest.ensureUsername === 'function') {
+            await ingest.ensureUsername(userId, item.participantId).catch(() => {});
+          }
+        }
       }
     } catch (err) {
       console.error(`${new Date().toISOString()} [instagram-webhook] ${err.message}`);

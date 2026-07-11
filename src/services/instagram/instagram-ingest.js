@@ -11,6 +11,8 @@
 
 const db = require('../../db/client');
 const { enqueueIncomingInstagram } = require('../../queues/instagram-queue');
+const defaultAccounts = require('./instagram-accounts');
+const defaultGraph = require('./instagram-graph');
 
 function extractMessages(body) {
   const out = [];
@@ -76,4 +78,33 @@ async function ingestWebhookEntry(userId, item, deps = {}) {
   return { stored: true, messageId, conversationId };
 }
 
-module.exports = { extractMessages, ingestWebhookEntry };
+// Resolve and store the customer's @username for a conversation when it's still
+// missing (Meta only sends the numeric IGSID). Best-effort: any failure returns
+// null and leaves the conversation untouched. Called after ingest so the inbox
+// shows @usernames instead of numeric ids.
+async function ensureUsername(userId, participantId, deps = {}) {
+  const database = deps.database || db;
+  const accounts = deps.accounts || defaultAccounts;
+  const graph = deps.graph || defaultGraph;
+  if (!userId || !participantId) return null;
+  const cur = await database.query(
+    'SELECT participant_username FROM instagram_conversations WHERE user_id = $1 AND participant_id = $2',
+    [userId, participantId],
+  );
+  if (cur.rows[0] && cur.rows[0].participant_username) return cur.rows[0].participant_username;
+  let token = null;
+  try { token = await accounts.getAccountToken(userId, { database }); } catch (_) { token = null; }
+  if (!token) return null;
+  let profile = {};
+  try { profile = await graph.getUserProfile({ token, igsid: participantId }); } catch (_) { return null; }
+  if (profile && profile.username) {
+    await database.query(
+      'UPDATE instagram_conversations SET participant_username = $3 WHERE user_id = $1 AND participant_id = $2',
+      [userId, participantId, profile.username],
+    );
+    return profile.username;
+  }
+  return null;
+}
+
+module.exports = { extractMessages, ingestWebhookEntry, ensureUsername };

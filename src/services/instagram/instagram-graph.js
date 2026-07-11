@@ -37,4 +37,14 @@ async function getProfile({ token }, { env = process.env, fetchImpl = fetch } = 
   return res.json();
 }
 
-module.exports = { sendDirectMessage, subscribeToMessages, getProfile };
+// Resolve the @username (and name) of a customer from their IGSID — the numeric
+// scoped id Meta sends in the webhook. Instagram only gives us the id; the
+// username must be looked up so the dashboard shows @handles, not numbers.
+async function getUserProfile({ token, igsid }, { env = process.env, fetchImpl = fetch } = {}) {
+  const params = new URLSearchParams({ fields: 'username,name', access_token: token });
+  const res = await fetchImpl(`https://graph.instagram.com/${version(env)}/${igsid}?${params.toString()}`);
+  if (!res.ok) throw new Error(`ig_user_profile_failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+module.exports = { sendDirectMessage, subscribeToMessages, getProfile, getUserProfile };
