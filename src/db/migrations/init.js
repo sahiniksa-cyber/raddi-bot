@@ -561,6 +561,110 @@ const statements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS uniq_quota_stop_notice_per_conversation
     ON messages (user_id, conversation_id)
     WHERE (raw_payload->>'kind') = 'quota_stop'`,
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Instagram DM module (added 2026-07-08). FULLY ISOLATED from WhatsApp:
+  // separate tables, no FK into whatsapp_sessions/conversations/messages. The
+  // whole feature is gated at runtime behind INSTAGRAM_ENABLED (default off);
+  // these tables are inert until then and can be dropped wholesale to remove
+  // the feature. Instagram replies decrement the SHARED billing_accounts quota
+  // (via the existing decrementMessageQuota), so no billing tables change here.
+  // ─────────────────────────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS instagram_accounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ig_user_id TEXT,
+    ig_username TEXT,
+    access_token_encrypted TEXT,
+    access_token_iv TEXT,
+    access_token_tag TEXT,
+    access_token_format TEXT DEFAULT 'aes-256-gcm',
+    access_token_plain TEXT,
+    token_expires_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'disconnected',
+    connected_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS instagram_ai_settings (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    seeded_from_whatsapp BOOLEAN NOT NULL DEFAULT FALSE,
+    config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS instagram_conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    participant_id TEXT NOT NULL,
+    participant_username TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    last_message_at TIMESTAMPTZ,
+    escalated_until TIMESTAMPTZ,
+    window_expires_at TIMESTAMPTZ,
+    ai_paused BOOLEAN NOT NULL DEFAULT FALSE,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, participant_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS instagram_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID NOT NULL REFERENCES instagram_conversations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    participant_id TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    content TEXT,
+    provider_message_id TEXT,
+    status TEXT NOT NULL DEFAULT 'stored',
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS instagram_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    level TEXT NOT NULL DEFAULT 'info',
+    event_type TEXT,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_instagram_conversations_user_last
+    ON instagram_conversations (user_id, last_message_at DESC)`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_instagram_conversations_user_participant
+    ON instagram_conversations (user_id, participant_id)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_instagram_messages_conversation_created
+    ON instagram_messages (conversation_id, created_at ASC)`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_instagram_messages_user_provider_unique
+    ON instagram_messages (user_id, provider_message_id)
+    WHERE provider_message_id IS NOT NULL`,
+
+  `CREATE INDEX IF NOT EXISTS idx_instagram_logs_user_created
+    ON instagram_logs (user_id, created_at DESC)`,
+
+  `DROP TRIGGER IF EXISTS trg_instagram_accounts_updated_at ON instagram_accounts`,
+  `CREATE TRIGGER trg_instagram_accounts_updated_at
+    BEFORE UPDATE ON instagram_accounts
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `DROP TRIGGER IF EXISTS trg_instagram_ai_settings_updated_at ON instagram_ai_settings`,
+  `CREATE TRIGGER trg_instagram_ai_settings_updated_at
+    BEFORE UPDATE ON instagram_ai_settings
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  `DROP TRIGGER IF EXISTS trg_instagram_conversations_updated_at ON instagram_conversations`,
+  `CREATE TRIGGER trg_instagram_conversations_updated_at
+    BEFORE UPDATE ON instagram_conversations
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
 ];
 
 async function migrate() {

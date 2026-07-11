@@ -41,6 +41,7 @@ const { createDashboardRoutes } = require('./routes/dashboard.routes');
 const { createHealthRoutes } = require('./routes/health.routes');
 const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
+const { createInstagramRoutes } = require('./routes/instagram.routes');
 const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
@@ -231,6 +232,7 @@ function createApp() {
   // routes attach their own express.raw() parser inline.
   const RAW_BODY_PATHS = new Set([
     '/billing/moyasar/webhook',
+    '/instagram/webhook',
   ]);
   app.use((req, res, next) => {
     if (RAW_BODY_PATHS.has(req.path)) return next();
@@ -330,6 +332,7 @@ function createApp() {
   }
   app.use('/fonts', express.static(path.join(process.cwd(), 'dashboard/fonts')));
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
+  app.get('/instagram.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'instagram.js')));
 
   const routeDeps = {
     dashboardDir: path.join(process.cwd(), 'dashboard'),
@@ -356,6 +359,9 @@ function createApp() {
   app.use(createDashboardRoutes(routeDeps));
   app.use('/api', createBillingApiGate({ settings: billingSettings }));
   app.use(createQueueRoutes(routeDeps));
+  // Instagram module (isolated; every route self-guards on INSTAGRAM_ENABLED).
+  // The webhook is in RAW_BODY_PATHS above and mounts its own express.raw.
+  app.use(createInstagramRoutes(routeDeps));
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup, database: db });
   const configControllerModule = require('./controllers/config.controller');
@@ -653,6 +659,13 @@ function createApp() {
       err => ({ ok: false, msg: err.code === 'REDIS_NOT_CONFIGURED' ? 'غير مضبوط' : err.message }),
     );
 
+    // Real DB probe — the health card must reflect the actual DB state, not a
+    // hardcoded "ok" (otherwise a down database still shows green).
+    const dbPing = db.query('SELECT 1').then(
+      () => ({ ok: true, msg: 'PostgreSQL' }),
+      err => ({ ok: false, msg: err.message }),
+    );
+
     // Combined into one query — saves a round trip per dashboard click.
     const aiPipelineStats = db.query(
       `SELECT
@@ -702,10 +715,10 @@ function createApp() {
       err => { console.warn(`[health-check] queue counts failed: ${err.message}`); return { error: err.message }; },
     );
 
-    const [redisResult, aiStats, queues, aiFailureErrors] = await Promise.all([redisPing, aiPipelineStats, queueCounts, recentAiFailures]);
+    const [redisResult, dbResult, aiStats, queues, aiFailureErrors] = await Promise.all([redisPing, dbPing, aiPipelineStats, queueCounts, recentAiFailures]);
 
     const checks = [
-      { name: 'قاعدة البيانات', ok: true, msg: 'PostgreSQL' },
+      { name: 'قاعدة البيانات', ...dbResult },
       { name: 'الواتساب', ok: bot.appState.status === 'connected', msg: bot.appState.status },
       { name: 'Redis', ...redisResult },
     ];
@@ -966,6 +979,17 @@ async function main() {
     } catch (err) {
       console.error(`${new Date().toISOString()} [server] outgoing worker failed to start: ${err.message}`);
       // Don't crash — the web server should still serve healthchecks and the dashboard
+    }
+  }
+
+  // Instagram token-refresh timer — only when the feature is on. Wrapped so a
+  // failure here can never affect the web server or WhatsApp.
+  if (process.env.INSTAGRAM_ENABLED === 'true') {
+    try {
+      require('./services/instagram/token-refresh').startTokenRefreshTimer();
+      console.log(`${new Date().toISOString()} [server] instagram token refresh timer started`);
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [server] instagram refresh timer failed: ${err.message}`);
     }
   }
 

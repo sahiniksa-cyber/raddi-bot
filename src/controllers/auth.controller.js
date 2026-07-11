@@ -146,14 +146,19 @@ function createAuthController() {
 
     async me(req, res) {
       if (!req.session?.userId) return res.json({ loggedIn: false });
-      const result = await db.query(
-        'SELECT id, email, name, role FROM users WHERE id = $1 LIMIT 1',
-        [req.session.userId],
-      );
-      const user = result.rows[0];
-      if (!user) return res.json({ loggedIn: false });
-      req.session.userName = user.name;
-      res.json({ loggedIn: true, ...publicUser(user) });
+      try {
+        const result = await db.query(
+          'SELECT id, email, name, role FROM users WHERE id = $1 LIMIT 1',
+          [req.session.userId],
+        );
+        const user = result.rows[0];
+        if (!user) return res.json({ loggedIn: false });
+        req.session.userName = user.name;
+        res.json({ loggedIn: true, ...publicUser(user) });
+      } catch (err) {
+        // A transient DB error must not hang the dashboard's initial auth check.
+        res.status(503).json({ loggedIn: false, error: 'temporarily_unavailable' });
+      }
     },
 
     logout(req, res) {

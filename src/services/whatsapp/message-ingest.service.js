@@ -350,6 +350,14 @@ class MessageIngestService {
     // we simply never enqueue an AI job — which means NO reply, NO escalation,
     // NO instant/auto reply (all of those live in the worker that never runs).
     if (blocked) {
+      // Mark the stored row terminal so it is NOT queued_for_ai. Without this the
+      // ai-recovery loop (which re-enqueues every queued_for_ai row within the
+      // window) would answer the blocked customer ~30s later, defeating the
+      // do-not-reply feature entirely.
+      await this.db.query(
+        "UPDATE messages SET status = 'do_not_reply' WHERE id = $1 AND user_id = $2",
+        [saved.messageId, userId],
+      );
       this.logger.info?.('message', `inbound from ${sender} is on the do-not-reply list — stored, not answered`);
       return {
         accepted: true,
