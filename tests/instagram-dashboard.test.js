@@ -19,6 +19,14 @@ test('header shows a simple WhatsApp + Instagram channel switcher next to the lo
   assert.ok(html.includes('.chan-ig{background:#d62976}'), 'Instagram chip should be solid pink');
 });
 
+test('the channel switcher is hidden until the Instagram feature is enabled', () => {
+  // default hidden in markup
+  assert.ok(html.includes('class="chan-switch" style="display:none"'), 'switcher should default hidden');
+  // revealed by instagram.js only when /api/instagram/status is ok (feature on)
+  assert.ok(js.includes('igGateSwitch'), 'gate function missing');
+  assert.ok(js.includes("fetch('/api/instagram/status')"), 'gate must check feature status');
+});
+
 test('nav tabs drop to their own row, centered', () => {
   assert.ok(html.includes('.nav-tabs{order:10;flex-basis:100%;justify-content:center}'), 'centered second-row rule missing');
 });
