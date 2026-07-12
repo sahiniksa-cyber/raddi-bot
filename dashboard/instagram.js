@@ -27,10 +27,13 @@ async function igLoadStatus() {
     // Status + stats panel inside the settings view (mirrors the WhatsApp header).
     const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     setTxt('igStatusText', connected ? ('مربوط: @' + (d.username || '')) : 'غير مربوط');
-    setTxt('igStActive', Number(d.activeConversations || 0).toLocaleString('ar-EG'));
-    setTxt('igStReplies', Number(d.repliesCount || 0).toLocaleString('ar-EG'));
+    // Plain Western digits (mirrors the WhatsApp stats). Using toLocaleString('ar-EG')
+    // produced Arabic-Indic numerals whose glyphs the stat font lacks, so they
+    // rendered as ◆ tofu boxes.
+    setTxt('igStActive', Number(d.activeConversations || 0));
+    setTxt('igStReplies', Number(d.repliesCount || 0));
     setTxt('igStUser', connected ? ('@' + (d.username || '')) : '—');
-    setTxt('igStModel', d.model || '—');
+    setTxt('igStModel', String(d.model || '—').substring(0, 10));
     if (connected) igLoadInbox();
   } catch (_) { /* non-fatal */ }
 }
