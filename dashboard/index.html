@@ -1014,6 +1014,22 @@ body{background-attachment:scroll}
     </div>
   </div>
 
+  <!-- Instagram-only: status + stats + disconnect (mirrors the WhatsApp header) -->
+  <div class="panel ig-only" id="igStatusPanel">
+    <div class="phdr">
+      <span>📸 حالة إنستقرام — <span id="igStatusText">…</span></span>
+      <button class="ghost-btn" style="font-size:12px;padding:5px 10px" onclick="igDisconnect()">فصل الحساب</button>
+    </div>
+    <div class="pbdy">
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
+        <div class="stat"><div class="v" id="igStActive">0</div><div class="l">محادثات نشطة</div></div>
+        <div class="stat" title="إجمالي ردود البوت على إنستقرام"><div class="v" id="igStReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
+        <div class="stat"><div class="v" id="igStUser">—</div><div class="l">حساب إنستقرام</div></div>
+        <div class="stat"><div class="v" id="igStModel">—</div><div class="l">النموذج</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Instagram-only: inbox panel (connection is its own page, view-instagram) -->
   <div class="panel ig-only">
     <div class="phdr"><span>📥 رسائل إنستقرام (Inbox)</span></div>

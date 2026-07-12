@@ -96,16 +96,34 @@ function createInstagramRoutes(deps = {}) {
     } catch (err) { next(err); }
   });
 
-  // ── Status ────────────────────────────────────────────────────────────────
+  // ── Status (+ live stats mirroring the WhatsApp header) ────────────────────
   router.get('/api/instagram/status', guard, requireAuth, async (req, res, next) => {
     try {
-      const acc = await accounts.getAccount(req.session.userId, { database: db });
-      const settings = await cfg.resolveInstagramConfig(req.session.userId, { database: db });
+      const userId = req.session.userId;
+      const acc = await accounts.getAccount(userId, { database: db });
+      const settings = await cfg.resolveInstagramConfig(userId, { database: db });
+      let activeConversations = 0;
+      let repliesCount = 0;
+      try {
+        const a = await db.query(
+          "SELECT COUNT(*)::int AS n FROM instagram_conversations WHERE user_id = $1 AND status = 'active'",
+          [userId],
+        );
+        activeConversations = a.rows[0] ? a.rows[0].n : 0;
+        const r = await db.query(
+          "SELECT COUNT(*)::int AS n FROM instagram_messages WHERE user_id = $1 AND direction = 'outbound' AND role = 'assistant' AND status = 'sent'",
+          [userId],
+        );
+        repliesCount = r.rows[0] ? r.rows[0].n : 0;
+      } catch (_) { /* stats are best-effort */ }
       res.json({
         connected: Boolean(acc && acc.status === 'connected'),
         username: acc ? acc.ig_username : null,
         tokenExpiresAt: acc ? acc.token_expires_at : null,
         aiEnabled: settings.enabled === true,
+        activeConversations,
+        repliesCount,
+        model: (settings.config && settings.config.model) || 'gpt-4o',
       });
     } catch (err) { next(err); }
   });

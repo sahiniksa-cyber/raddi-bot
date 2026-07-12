@@ -54,6 +54,14 @@ test('after linking, the SAME WhatsApp settings form opens in Instagram mode', (
   assert.ok(html.includes('function exitIgCfgMode'), 'exitIgCfgMode missing');
 });
 
+test('Instagram settings show status + stat boxes + a disconnect button (like WhatsApp)', () => {
+  assert.ok(html.includes('id="igStatusPanel"'), 'status panel missing');
+  assert.ok(html.includes('id="igStActive"') && html.includes('id="igStReplies"'), 'stat boxes missing');
+  assert.ok(html.includes('id="igStUser"') && html.includes('id="igStModel"'), 'account/model boxes missing');
+  assert.ok(/فصل الحساب/.test(html) && html.includes('igDisconnect()'), 'disconnect control missing');
+  assert.ok(js.includes('igStActive') && js.includes('igStReplies'), 'stats not populated in instagram.js');
+});
+
 test('Instagram inbox is a panel inside the settings page, shown only in Instagram mode', () => {
   assert.ok(html.includes('class="panel ig-only"'), 'ig-only inbox panel missing');
   assert.ok(html.includes('id="igConvList"'), 'inbox list missing');
