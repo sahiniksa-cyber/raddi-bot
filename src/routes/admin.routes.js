@@ -32,6 +32,7 @@ const {
 const { createAdminMerchantController } = require('../controllers/admin-merchant.controller');
 const { listAdminAuditLog, logAdminAction } = require('../services/admin/admin-audit');
 const { copyMerchantConfigByEmail } = require('../services/admin/copy-merchant-config');
+const instagramAdminSvc = require('../services/admin/instagram-admin');
 const {
   getPlatformSetting: getPlatformSettingDefault,
   setPlatformSetting: setPlatformSettingDefault,
@@ -462,6 +463,54 @@ function createAdminRoutes(deps = {}) {
         });
       } catch (_) { /* audit best-effort */ }
       res.status(400).json({ success: false, message: err.message });
+    }
+  });
+
+  // ---- Per-merchant Instagram control (admin) ----
+  // Full parity with the WhatsApp admin controls, for the token+webhook Instagram
+  // model (no socket/QR/lease). Read view + force-disconnect + auto-reply toggle.
+  // Independent of getUserBot (Instagram has no in-memory bot), so mounted here.
+  const igAdmin = deps.instagramAdmin || instagramAdminSvc;
+  const igDb = deps.database || db;
+  const igActionLimiter = rateLimitFactory({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'too_many_attempts', message: 'محاولات كثيرة، حاول لاحقاً' },
+  });
+
+  router.get('/api/admin/customers/:userId/instagram', requireOwner, async (req, res, next) => {
+    try {
+      const view = await igAdmin.getInstagramMerchantView(req.params.userId, { db: igDb });
+      res.json({ success: true, instagram: view });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/api/admin/customers/:userId/instagram/disconnect', requireOwner, igActionLimiter, async (req, res, next) => {
+    const userId = String(req.params.userId || '').trim();
+    try {
+      const result = await igAdmin.adminDisconnectInstagram(userId, { db: igDb });
+      try { await logAdminAction({ adminUserId: req.session?.userId || null, action: 'ig_disconnect', targetUserId: userId, detail: result }, { db: igDb }); } catch (_) { /* audit best-effort */ }
+      res.json({ success: true, ...result });
+    } catch (err) {
+      try { await logAdminAction({ adminUserId: req.session?.userId || null, action: 'ig_disconnect', targetUserId: userId, detail: { error: err.message }, result: 'error' }, { db: igDb }); } catch (_) {}
+      next(err);
+    }
+  });
+
+  router.post('/api/admin/customers/:userId/instagram/ai-toggle', requireOwner, igActionLimiter, async (req, res, next) => {
+    const userId = String(req.params.userId || '').trim();
+    const enabled = req.body?.enabled === true;
+    try {
+      const result = await igAdmin.adminSetInstagramAi(userId, enabled, { db: igDb });
+      try { await logAdminAction({ adminUserId: req.session?.userId || null, action: 'ig_ai_toggle', targetUserId: userId, detail: result }, { db: igDb }); } catch (_) { /* audit best-effort */ }
+      res.json({ success: true, ...result });
+    } catch (err) {
+      try { await logAdminAction({ adminUserId: req.session?.userId || null, action: 'ig_ai_toggle', targetUserId: userId, detail: { error: err.message }, result: 'error' }, { db: igDb }); } catch (_) {}
+      next(err);
     }
   });
 
