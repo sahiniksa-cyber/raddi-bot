@@ -92,6 +92,69 @@ function escapeHtmlIg(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ── Instagram sandbox test chat (mirrors the WhatsApp جرّب البوت) ────────────
+let igTestSessionId = 'igtest-' + Date.now();
+function igAppendTestMsg(role, text, meta) {
+  const c = document.getElementById('igTestChat');
+  if (!c) return null;
+  const el = document.createElement('div');
+  el.className = 'tm ' + role;
+  el.innerHTML = escapeHtmlIg(text) + (meta ? '<div class="tm-meta">' + escapeHtmlIg(meta) + '</div>' : '');
+  c.appendChild(el);
+  c.scrollTop = c.scrollHeight;
+  return el;
+}
+async function igSendTestMsg() {
+  const inp = document.getElementById('igTestInput');
+  const txt = inp ? inp.value.trim() : '';
+  if (!txt) return;
+  const btn = document.getElementById('igTestSendBtn');
+  if (btn) btn.disabled = true;
+  if (inp) inp.disabled = true;
+  igAppendTestMsg('user', txt);
+  if (inp) inp.value = '';
+  const c = document.getElementById('igTestChat');
+  const typingEl = document.createElement('div');
+  typingEl.className = 'tm bot typing';
+  if (c) { c.appendChild(typingEl); c.scrollTop = 999999; }
+  try {
+    const r = await fetch('/api/instagram/test-chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: txt, sessionId: igTestSessionId }),
+    });
+    const d = await r.json();
+    typingEl.remove();
+    if (!d.success) {
+      igAppendTestMsg('bot', '❌ ' + (d.message || 'خطأ'), 'خطأ');
+    } else if (d.empty || !d.reply) {
+      igAppendTestMsg('bot', 'ما وصل رد — تأكد من مفتاح الـ AI في الإعدادات.', 'تنبيه');
+    } else {
+      igAppendTestMsg('bot', d.reply, '🤖 AI · 🧠 ' + (d.historyLength || 0) + ' رسالة في الذاكرة');
+      if (d.aiEnabled === false) {
+        igAppendTestMsg('bot', '⚠️ ملاحظة: "تشغيل الرد الآلي" موقوف حاليًا — التجربة تشتغل، لكن العملاء الحقيقيين ما يوصلهم رد حتى تفعّله وتحفظ.', 'تنبيه');
+      }
+    }
+  } catch (_) {
+    typingEl.remove();
+    igAppendTestMsg('bot', '❌ تعذر الاتصال', 'خطأ');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (inp) { inp.disabled = false; inp.focus(); }
+  }
+}
+async function igResetTestChat() {
+  igTestSessionId = 'igtest-' + Date.now();
+  const c = document.getElementById('igTestChat');
+  if (c) c.innerHTML = '';
+  try {
+    await fetch('/api/instagram/test-chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reset: true, sessionId: igTestSessionId }),
+    });
+  } catch (_) { /* ignore */ }
+  igToast('✅ بدأت محادثة جديدة');
+}
+
 // goTab('instagram') shows the connect page; refresh its status.
 window.igOnTab = function igOnTab() { igLoadStatus(); };
 

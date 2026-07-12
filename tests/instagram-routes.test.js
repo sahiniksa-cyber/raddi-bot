@@ -11,6 +11,12 @@ function makeApp(env, extraDeps = {}) {
   const app = express();
   // Attach a fake session so requireAuth-dependent routes have a userId.
   app.use((req, _res, next) => { req.session = { userId: 'u1' }; next(); });
+  // Mirror the production server: JSON body parsing for every route EXCEPT the
+  // webhook, which needs the raw body for HMAC (handled by its own express.raw).
+  app.use((req, res, next) => {
+    if (req.path === '/instagram/webhook') return next();
+    return express.json()(req, res, next);
+  });
   app.use(createInstagramRoutes({ env, ...extraDeps }));
   return app;
 }
@@ -102,4 +108,62 @@ test('connect redirects to the authorize URL when enabled', async () => {
   );
   const res = await req(app, 'GET', '/api/instagram/connect');
   assert.equal(res.status, 302);
+});
+
+// ── Sandbox test-chat ───────────────────────────────────────────────────────
+
+test('test-chat returns the generated reply and grows the sandbox memory', async () => {
+  const seen = [];
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    { generateInstagramTestReply: async (userId, history) => { seen.push(history.map((m) => m.role)); return { reply: 'أهلاً بك 👋', aiEnabled: true }; } },
+  );
+  const r1 = await req(app, 'POST', '/api/instagram/test-chat', { body: { message: 'السلام عليكم', sessionId: 's1' } });
+  assert.equal(r1.status, 200);
+  const b1 = JSON.parse(r1.body);
+  assert.equal(b1.reply, 'أهلاً بك 👋');
+  assert.equal(b1.historyLength, 2);            // user + assistant retained
+
+  // Second turn on the SAME session must carry the prior turns into the generator.
+  const r2 = await req(app, 'POST', '/api/instagram/test-chat', { body: { message: 'كم السعر؟', sessionId: 's1' } });
+  const b2 = JSON.parse(r2.body);
+  assert.equal(b2.historyLength, 4);
+  assert.deepEqual(seen[1], ['user', 'assistant', 'user']); // accumulated thread
+});
+
+test('test-chat rejects an empty message with 400', async () => {
+  const app = makeApp({ INSTAGRAM_ENABLED: 'true' }, { generateInstagramTestReply: async () => ({ reply: 'x' }) });
+  const res = await req(app, 'POST', '/api/instagram/test-chat', { body: { message: '   ', sessionId: 's1' } });
+  assert.equal(res.status, 400);
+});
+
+test('test-chat reset clears the session thread', async () => {
+  let calls = 0;
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    { generateInstagramTestReply: async () => { calls++; return { reply: 'r', aiEnabled: true }; } },
+  );
+  await req(app, 'POST', '/api/instagram/test-chat', { body: { message: 'hi', sessionId: 's1' } });
+  const reset = await req(app, 'POST', '/api/instagram/test-chat', { body: { reset: true, sessionId: 's1' } });
+  assert.equal(JSON.parse(reset.body).reset, true);
+  // After reset, the next message is treated as a fresh thread (length back to 2).
+  const after = await req(app, 'POST', '/api/instagram/test-chat', { body: { message: 'again', sessionId: 's1' } });
+  assert.equal(JSON.parse(after.body).historyLength, 2);
+});
+
+test('test-chat does not poison memory when the reply is empty', async () => {
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    { generateInstagramTestReply: async () => ({ reply: '', aiEnabled: false }) },
+  );
+  const res = await req(app, 'POST', '/api/instagram/test-chat', { body: { message: 'hi', sessionId: 's1' } });
+  const b = JSON.parse(res.body);
+  assert.equal(b.empty, true);
+  assert.equal(b.historyLength, 0);   // the user turn was rolled back
+});
+
+test('test-chat is gated by INSTAGRAM_ENABLED (503 when off)', async () => {
+  const app = makeApp({ INSTAGRAM_ENABLED: 'false' });
+  const res = await req(app, 'POST', '/api/instagram/test-chat', { body: { message: 'hi' } });
+  assert.equal(res.status, 503);
 });
