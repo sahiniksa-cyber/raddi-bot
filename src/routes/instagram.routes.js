@@ -7,6 +7,7 @@ const defaultAccounts = require('../services/instagram/instagram-accounts');
 const defaultIngest = require('../services/instagram/instagram-ingest');
 const defaultGraph = require('../services/instagram/instagram-graph');
 const defaultConfig = require('../services/instagram/instagram-config');
+const { generateInstagramTestReply: defaultGenerateTestReply } = require('../services/instagram/instagram-test-reply');
 const defaultDb = require('../db/client');
 const { enqueueOutgoingInstagram: defaultEnqueueOutgoing } = require('../queues/instagram-queue');
 
@@ -30,7 +31,14 @@ function createInstagramRoutes(deps = {}) {
   const cfg = deps.config || defaultConfig;
   const db = deps.database || defaultDb;
   const enqueueOutgoing = deps.enqueueOutgoingInstagram || defaultEnqueueOutgoing;
+  const generateTestReply = deps.generateInstagramTestReply || defaultGenerateTestReply;
   const requireAuth = deps.requireAuth || ((req, res, next) => next());
+
+  // In-memory sandbox threads for the Instagram "جرّب البوت" box, keyed by
+  // user+session. Ephemeral (lost on restart) — a dry-run playground, never
+  // persisted and never sent, exactly like the WhatsApp test-chat.
+  const igTestThreads = deps.igTestThreads || new Map();
+  const IG_TEST_MEMORY = 50;
 
   const router = express.Router();
   const enabled = () => env.INSTAGRAM_ENABLED === 'true';
@@ -156,6 +164,37 @@ function createInstagramRoutes(deps = {}) {
     try {
       await cfg.setAiEnabled(req.session.userId, (req.body || {}).enabled === true, { database: db });
       res.json({ success: true });
+    } catch (err) { next(err); }
+  });
+
+  // ── Sandbox "جرّب البوت" — dry-run reply using the Instagram brain ──────────
+  // Mirrors /api/test-chat but powered by the merchant's INSTAGRAM config; never
+  // sends a DM and never touches the shared quota.
+  router.post('/api/instagram/test-chat', guard, requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.session.userId;
+      const { sessionId, reset } = req.body || {};
+      const key = `${userId}:${sessionId || 'default'}`;
+      if (reset) {
+        igTestThreads.delete(key);
+        return res.json({ success: true, reset: true });
+      }
+      const message = String((req.body || {}).message || '').trim();
+      if (!message) return res.status(400).json({ success: false, message: 'رسالة فارغة' });
+
+      const history = igTestThreads.get(key) || [];
+      history.push({ role: 'user', content: message });
+      if (history.length > IG_TEST_MEMORY) history.splice(0, history.length - IG_TEST_MEMORY);
+
+      const { reply, aiEnabled } = await generateTestReply(userId, history, { database: db });
+      if (!reply) {
+        // Roll back the pushed user turn so a failed generation doesn't poison memory.
+        history.pop();
+        return res.json({ success: true, reply: '', empty: true, aiEnabled, historyLength: history.length });
+      }
+      history.push({ role: 'assistant', content: reply });
+      igTestThreads.set(key, history);
+      res.json({ success: true, reply, aiEnabled, historyLength: history.length });
     } catch (err) { next(err); }
   });
 

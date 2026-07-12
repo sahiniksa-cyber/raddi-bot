@@ -1033,6 +1033,22 @@ body{background-attachment:scroll}
     <div class="stat"><div class="v" id="igStModel">—</div><div class="l">النموذج</div></div>
   </div>
 
+  <!-- Instagram-only: sandbox test chat (mirrors the WhatsApp جرّب البوت) -->
+  <div class="panel ig-only">
+    <div class="phdr">
+      <span>💬 جرّب بوت إنستقرام — قبل ما يرد على عملاء حقيقيين</span>
+      <button class="add-btn" onclick="igResetTestChat()">🗑 محادثة جديدة</button>
+    </div>
+    <div class="pbdy">
+      <p class="hint" style="margin:0 0 10px">اكتب رسالة كأنك عميل على إنستقرام وشف كيف يرد البوت — يستخدم إعدادات إنستقرام. (تجربة فقط: ما يرسل DM ولا يخصم رصيد)</p>
+      <div class="test-chat" id="igTestChat"></div>
+      <div class="test-input">
+        <input type="text" id="igTestInput" placeholder="مثال: السلام عليكم، عندكم منتج X؟" onkeydown="if(event.key==='Enter'){event.preventDefault();igSendTestMsg()}">
+        <button class="test-send" onclick="igSendTestMsg()" id="igTestSendBtn">إرسال</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Instagram-only: inbox panel (connection is its own page, view-instagram) -->
   <div class="panel ig-only">
     <div class="phdr"><span>📥 رسائل إنستقرام (Inbox)</span></div>
