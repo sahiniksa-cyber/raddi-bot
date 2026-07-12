@@ -24,6 +24,13 @@ async function igLoadStatus() {
     if (cbtn) cbtn.style.display = connected ? 'none' : 'inline-block';
     if (obtn) obtn.style.display = connected ? 'inline-block' : 'none';
     if (dbtn) dbtn.style.display = connected ? 'inline-block' : 'none';
+    // Status + stats panel inside the settings view (mirrors the WhatsApp header).
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setTxt('igStatusText', connected ? ('مربوط: @' + (d.username || '')) : 'غير مربوط');
+    setTxt('igStActive', Number(d.activeConversations || 0).toLocaleString('ar-EG'));
+    setTxt('igStReplies', Number(d.repliesCount || 0).toLocaleString('ar-EG'));
+    setTxt('igStUser', connected ? ('@' + (d.username || '')) : '—');
+    setTxt('igStModel', d.model || '—');
     if (connected) igLoadInbox();
   } catch (_) { /* non-fatal */ }
 }
