@@ -1010,28 +1010,20 @@ body{background-attachment:scroll}
 <div class="view" id="view-settings">
 <div class="sw">
 
-  <div id="igCfgBanner" style="display:none;padding:14px 16px;margin-bottom:14px">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-      <div>
-        <div style="font-size:15px;font-weight:900;color:#d62976">📸 تعدّل الآن إعدادات إنستقرام</div>
-        <div class="hint" style="margin:2px 0 0">منسوخة تلقائيًا من الواتساب — أي تعديل هنا لإنستقرام فقط ولا يمسّ الواتساب.</div>
-      </div>
-      <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;white-space:nowrap"><input type="checkbox" id="igCfgEnabled" style="width:18px;height:18px"> تشغيل الرد الآلي على إنستقرام</label>
-      <button class="ghost-btn" onclick="igCloseSettings()" style="white-space:nowrap">← رجوع للواتساب</button>
-    </div>
-  </div>
-
-  <!-- Instagram-only: status bar + stats row. Mirrors the WhatsApp layout EXACTLY
-       (a bare .bot-ctrl + a bare .stats-row, NOT a .panel) so both stay always
-       visible — a .panel would be turned into a collapsed accordion and hide the
-       boxes behind a bar. -->
+  <!-- Instagram-only: ONE clean full-width control bar (mirrors the WhatsApp
+       "متصل / إيقاف" bar) — connection status + auto-reply toggle + disconnect +
+       back-to-WhatsApp. Replaces the old cramped pink #igCfgBanner (which was
+       trapped in one CSS column and duplicated this bar's status). A bare
+       .bot-ctrl, NOT a .panel, so it never collapses into an accordion. -->
   <div class="bot-ctrl ig-only" id="igStatusPanel">
     <div class="bot-ctrl-info">
       <div class="bcdot on"></div>
       <span class="bc-label" id="igStatusText">…</span>
     </div>
-    <div class="ctrl-btns">
-      <button class="ghost-btn" style="font-size:12px;padding:6px 12px" onclick="igDisconnect()">فصل الحساب</button>
+    <div class="ctrl-btns" style="flex-wrap:wrap;gap:10px">
+      <label style="display:flex;align-items:center;gap:7px;font-weight:700;cursor:pointer;font-size:13px;white-space:nowrap"><input type="checkbox" id="igCfgEnabled" style="width:17px;height:17px"> تشغيل الرد الآلي</label>
+      <button class="ghost-btn" style="font-size:12px;padding:6px 12px;white-space:nowrap" onclick="igDisconnect()">فصل الحساب</button>
+      <button class="ghost-btn" style="font-size:12px;padding:6px 12px;white-space:nowrap" onclick="igCloseSettings()">← رجوع للواتساب</button>
     </div>
   </div>
   <div class="stats-row ig-only" style="grid-template-columns:repeat(4,1fr)">

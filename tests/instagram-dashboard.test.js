@@ -48,7 +48,7 @@ test('Instagram has a simple connect/activate page (view-instagram)', () => {
 test('after linking, the SAME WhatsApp settings form opens in Instagram mode', () => {
   assert.ok(html.includes("let settingsChannel = 'whatsapp'"), 'settingsChannel default missing');
   assert.ok(html.includes("'/api/instagram/config'"), 'instagram config endpoint not used by shared form');
-  assert.ok(html.includes('id="igCfgBanner"'), 'instagram-mode banner missing');
+  assert.ok(html.includes('id="igCfgEnabled"'), 'instagram auto-reply toggle missing');
   assert.ok(html.includes('.ig-cfg .wa-only'), 'wa-only hide rule missing');
   assert.ok(html.includes('function igOpenSettings'), 'igOpenSettings missing');
   assert.ok(html.includes('function exitIgCfgMode'), 'exitIgCfgMode missing');
