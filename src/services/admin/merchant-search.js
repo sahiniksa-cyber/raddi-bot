@@ -20,10 +20,13 @@ async function searchMerchants(query, { db = realDb, limit = 20 } = {}) {
             COALESCE(NULLIF(ws.phone, ''), u.phone, '') AS phone,
             COALESCE(ws.status, 'stopped') AS whatsapp_status,
             ba.messages_remaining,
-            COALESCE(ba.platform_access_status, 'unpaid') AS platform_access_status
+            COALESCE(ba.platform_access_status, 'unpaid') AS platform_access_status,
+            (ig.status = 'connected') AS instagram_connected,
+            ig.ig_username AS instagram_username
        FROM users u
        LEFT JOIN whatsapp_sessions ws ON ws.user_id = u.id
        LEFT JOIN billing_accounts ba ON ba.user_id = u.id
+       LEFT JOIN instagram_accounts ig ON ig.user_id = u.id
       WHERE u.email ILIKE $1
          OR u.name ILIKE $1
          OR ($2 <> '' AND regexp_replace(COALESCE(ws.phone, ''), '[^0-9]', '', 'g') LIKE $3)
@@ -39,6 +42,8 @@ async function searchMerchants(query, { db = realDb, limit = 20 } = {}) {
     email: r.email || '',
     phone: r.phone || '',
     whatsappStatus: r.whatsapp_status,
+    instagramConnected: r.instagram_connected === true,
+    instagramUsername: r.instagram_username || '',
     messagesRemaining: r.messages_remaining == null ? null : Number(r.messages_remaining),
     platformAccessStatus: r.platform_access_status,
   }));

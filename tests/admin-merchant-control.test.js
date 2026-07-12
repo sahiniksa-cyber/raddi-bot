@@ -225,6 +225,86 @@ test('merchant-control routes are NOT mounted without a getUserBot resolver', as
   }
 });
 
+// ---- Instagram admin route tests (parity with WhatsApp controls) ----
+
+function startAppIg(instagramAdmin, { admin = true } = {}) {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { req.session = admin ? { isAdmin: true, userId: 'admin1' } : {}; next(); });
+  app.use(createAdminRoutes({
+    dashboardDir: '/tmp',
+    billingSettings: { adminSecretPath: '/admin' },
+    instagramAdmin,
+    database: { query: async () => ({ rows: [], rowCount: 1 }) }, // audit sink (no real DB)
+    // NOTE: deliberately NO getUserBot — Instagram admin must work without it.
+  }));
+  return new Promise((resolve) => {
+    const server = app.listen(0, () => resolve({ server, port: server.address().port }));
+  });
+}
+
+test('instagram admin routes dispatch to the service AND need no getUserBot resolver', async () => {
+  const calls = [];
+  const instagramAdmin = {
+    getInstagramMerchantView: async (uid) => { calls.push('view:' + uid); return { connected: true, username: 'shahini', aiEnabled: false }; },
+    adminDisconnectInstagram: async (uid) => { calls.push('disc:' + uid); return { disconnected: true }; },
+    adminSetInstagramAi: async (uid, enabled) => { calls.push('toggle:' + uid + ':' + enabled); return { aiEnabled: enabled }; },
+  };
+  const { server, port } = await startAppIg(instagramAdmin);
+  try {
+    const v = await reqJson(port, 'GET', '/api/admin/customers/u1/instagram');
+    assert.equal(v.status, 200);
+    assert.equal(v.body.instagram.connected, true);
+    assert.equal(v.body.instagram.username, 'shahini');
+
+    const d = await reqJson(port, 'POST', '/api/admin/customers/u1/instagram/disconnect', {});
+    assert.equal(d.status, 200);
+    assert.equal(d.body.disconnected, true);
+
+    const t = await reqJson(port, 'POST', '/api/admin/customers/u1/instagram/ai-toggle', { enabled: true });
+    assert.equal(t.status, 200);
+    assert.equal(t.body.aiEnabled, true);
+
+    assert.deepEqual(calls, ['view:u1', 'disc:u1', 'toggle:u1:true']);
+  } finally {
+    server.close();
+  }
+});
+
+test('instagram ai-toggle coerces a missing/false enabled flag to false', async () => {
+  let passed = null;
+  const instagramAdmin = {
+    getInstagramMerchantView: async () => ({}),
+    adminDisconnectInstagram: async () => ({ disconnected: true }),
+    adminSetInstagramAi: async (uid, enabled) => { passed = enabled; return { aiEnabled: enabled }; },
+  };
+  const { server, port } = await startAppIg(instagramAdmin);
+  try {
+    const t = await reqJson(port, 'POST', '/api/admin/customers/u1/instagram/ai-toggle', {});
+    assert.equal(t.status, 200);
+    assert.equal(passed, false);
+    assert.equal(t.body.aiEnabled, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('instagram admin routes are gated by requireOwner (401 for non-admin)', async () => {
+  const instagramAdmin = {
+    getInstagramMerchantView: async () => ({}),
+    adminDisconnectInstagram: async () => ({}),
+    adminSetInstagramAi: async () => ({}),
+  };
+  const { server, port } = await startAppIg(instagramAdmin, { admin: false });
+  try {
+    assert.equal((await reqJson(port, 'GET', '/api/admin/customers/u1/instagram')).status, 401);
+    assert.equal((await reqJson(port, 'POST', '/api/admin/customers/u1/instagram/disconnect', {})).status, 401);
+    assert.equal((await reqJson(port, 'POST', '/api/admin/customers/u1/instagram/ai-toggle', { enabled: true })).status, 401);
+  } finally {
+    server.close();
+  }
+});
+
 test('non-admin (no session) is rejected by requireOwner with 401', async () => {
   const app = express();
   app.use(express.json());

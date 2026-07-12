@@ -1,6 +1,7 @@
 'use strict';
 
 const realDb = require('../../db/client');
+const { getInstagramMerchantView } = require('./instagram-admin');
 
 // Aggregates a live diagnostic snapshot for ONE merchant (by user_id):
 // identity + billing/quota + WhatsApp session row + live in-memory bot state
@@ -70,6 +71,16 @@ async function getMerchantDiagnostics(userId, { db = realDb, getUserBot = null }
     }
   }
 
+  // Instagram snapshot (best-effort; isolated so an IG error never breaks the
+  // WhatsApp diagnostics). Mirrors the WhatsApp block so the admin card can show
+  // both channels for the merchant.
+  let instagram = null;
+  try {
+    instagram = await getInstagramMerchantView(uid, { db });
+  } catch (err) {
+    instagram = { error: err.message };
+  }
+
   return {
     identity: {
       userId: row.id,
@@ -79,6 +90,7 @@ async function getMerchantDiagnostics(userId, { db = realDb, getUserBot = null }
       role: row.role,
       createdAt: row.created_at,
     },
+    instagram,
     billing: {
       messagesRemaining: row.messages_remaining == null ? null : Number(row.messages_remaining),
       quotaExpiresAt: row.quota_expires_at || null,

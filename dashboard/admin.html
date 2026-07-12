@@ -280,7 +280,7 @@ async function mcSearchMerchants(){
     document.getElementById('mcResults').innerHTML=list.map(m=>`
       <tr>
         <td><b>${esc(m.name||'بدون اسم')}</b><div class="sub">${esc(m.email||'')} ${m.phone?'· '+esc(m.phone):''}</div></td>
-        <td>${chip(m.whatsappStatus)}</td>
+        <td>${chip(m.whatsappStatus)}${m.instagramConnected?'<div class="sub" style="margin-top:3px">📸 @'+esc(m.instagramUsername||'')+'</div>':''}</td>
         <td>${(m.messagesRemaining??0).toLocaleString('ar-EG')}</td>
         <td><button class="blue" onclick="mcLoadDiagnostics('${esc(m.userId)}')">عرض ▾</button></td>
       </tr>`).join('');
@@ -300,7 +300,7 @@ async function mcLoadDiagnostics(userId){
 }
 function mcCell(lbl,val){return `<div><div class="sub">${esc(lbl)}</div><b>${esc(val)}</b></div>`}
 function mcRenderCard(userId,d){
-  const w=d.whatsapp||{},live=d.live||{},b=d.billing||{},c=d.messageCounts||{};
+  const w=d.whatsapp||{},live=d.live||{},b=d.billing||{},c=d.messageCounts||{},ig=d.instagram||{};
   const backoff=live.inConnConflictBackoff?' <span class="sub">⏳ في انتظار 440</span>':'';
   const safeId=esc(userId).replace(/'/g,"\\'");
   document.getElementById('mcCard').innerHTML=`
@@ -330,7 +330,45 @@ function mcRenderCard(userId,d){
       <button class="bad" onclick="mcClearSession('${safeId}')">🗑 مسح الجلسة</button>
       <button onclick="mcLoadDiagnostics('${safeId}')">↻ تحديث</button>
     </div>
-    <div id="mcQr" style="margin-top:12px"></div>`;
+    <div id="mcQr" style="margin-top:12px"></div>
+    <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <b>📸 إنستقرام</b>
+        <span class="sub">${ig.connected?('🟢 مربوط: @'+esc(ig.username||'')):'⚪ غير مربوط'}${ig.tokenExpired===true?' · ⚠️ التوكن منتهي':''}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:12px">
+        ${mcCell('الرد الآلي',ig.aiEnabled?'مفعّل ✅':'موقوف ⛔')}
+        ${mcCell('محادثات نشطة',(ig.activeConversations||0))}
+        ${mcCell('ردود AI',(ig.repliesCount||0))}
+        ${mcCell('النموذج',ig.model||'-')}
+        ${mcCell('آخر رسالة واردة',fmtDate(ig.lastInboundAt))}
+        ${mcCell('آخر رد',fmtDate(ig.lastOutboundAt))}
+        ${mcCell('انتهاء التوكن',ig.tokenExpiresAt?fmtDate(ig.tokenExpiresAt):'-')}
+      </div>
+      <div class="actions" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="${ig.aiEnabled?'':'good'}" onclick="mcIgToggle('${safeId}',${ig.aiEnabled?'false':'true'})">${ig.aiEnabled?'⏹ إيقاف الرد':'▶ تشغيل الرد'}</button>
+        <button class="bad" onclick="mcIgDisconnect('${safeId}')" ${ig.connected?'':'disabled'}>🗑 فصل إنستقرام</button>
+      </div>
+    </div>`;
+}
+async function mcIgToggle(userId,enabled){
+  try{
+    const r=await fetch('/api/admin/customers/'+encodeURIComponent(userId)+'/instagram/ai-toggle',{
+      method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({enabled:enabled})});
+    const d=await r.json();
+    if(d.success){toast(enabled?'تم تشغيل رد إنستقرام ✓':'تم إيقاف رد إنستقرام ✓');setTimeout(()=>mcLoadDiagnostics(userId),700)}
+    else toast(d.message||'فشل',true);
+  }catch(_){toast('فشل',true)}
+}
+async function mcIgDisconnect(userId){
+  if(!confirm('فصل إنستقرام يلغي ربط الحساب نهائياً — التاجر سيحتاج يربط من جديد. متأكد؟'))return;
+  try{
+    const r=await fetch('/api/admin/customers/'+encodeURIComponent(userId)+'/instagram/disconnect',{
+      method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:'{}'});
+    const d=await r.json();
+    if(d.success){toast('تم فصل إنستقرام ✓');setTimeout(()=>mcLoadDiagnostics(userId),700)}
+    else toast(d.message||'فشل الفصل',true);
+  }catch(_){toast('فشل الفصل',true)}
 }
 async function mcAction(userId,action,labelText){
   try{

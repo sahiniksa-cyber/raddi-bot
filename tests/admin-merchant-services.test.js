@@ -52,6 +52,29 @@ test('searchMerchants clamps limit to 50', async () => {
   assert.equal(db.calls[0].params[3], 50);
 });
 
+test('searchMerchants surfaces Instagram connection alongside WhatsApp', async () => {
+  const db = fakeDb([
+    { rows: [{
+      id: 'u1', name: 'متجر', email: 'a@b.com', phone: '', whatsapp_status: 'connected',
+      messages_remaining: 5, platform_access_status: 'paid',
+      instagram_connected: true, instagram_username: 'designer_shahini',
+    }] },
+  ]);
+  const out = await searchMerchants('متجر', { db });
+  assert.match(db.calls[0].text, /LEFT JOIN instagram_accounts/);
+  assert.equal(out[0].instagramConnected, true);
+  assert.equal(out[0].instagramUsername, 'designer_shahini');
+});
+
+test('searchMerchants defaults Instagram fields when not connected', async () => {
+  const db = fakeDb([
+    { rows: [{ id: 'u2', name: 'x', email: 'x@y.com', phone: '', whatsapp_status: 'stopped', messages_remaining: 0, platform_access_status: 'unpaid' }] },
+  ]);
+  const out = await searchMerchants('x', { db });
+  assert.equal(out[0].instagramConnected, false);
+  assert.equal(out[0].instagramUsername, '');
+});
+
 // ---------- logAdminAction ----------
 
 test('logAdminAction inserts with correct params and returns logged:true', async () => {
