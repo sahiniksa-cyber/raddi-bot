@@ -799,6 +799,11 @@ body{background-attachment:scroll}
 #view-settings .stats-row,
 #view-settings .stats-row[style]{grid-template-columns:repeat(4,1fr)!important}
 
+/* Instagram status/stats panel must span the full settings width (like the
+   WhatsApp stats row) — otherwise it's trapped in one CSS column (half width)
+   and the stat boxes get so narrow the text wraps letter-by-letter. */
+#view-settings>.sw>#igStatusPanel{column-span:all}
+
 /* Collapsible sections (accordion): every panel with a header + body starts
    collapsed; click the header (or its arrow) to expand. Keeps the page calm and
    organised instead of one overwhelming wall. JS adds the .collapsible/.collapsed
@@ -1024,7 +1029,7 @@ body{background-attachment:scroll}
       <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
         <div class="stat"><div class="v" id="igStActive">0</div><div class="l">محادثات نشطة</div></div>
         <div class="stat" title="إجمالي ردود البوت على إنستقرام"><div class="v" id="igStReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
-        <div class="stat"><div class="v" id="igStUser">—</div><div class="l">حساب إنستقرام</div></div>
+        <div class="stat"><div class="v" id="igStUser" style="font-size:clamp(15px,1.7vw,22px);word-break:normal">—</div><div class="l">حساب إنستقرام</div></div>
         <div class="stat"><div class="v" id="igStModel">—</div><div class="l">النموذج</div></div>
       </div>
     </div>
