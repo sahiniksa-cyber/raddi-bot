@@ -333,6 +333,10 @@ function createApp() {
   app.use('/fonts', express.static(path.join(process.cwd(), 'dashboard/fonts')));
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
   app.get('/instagram.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'instagram.js')));
+  // Public privacy policy + data-deletion pages (required by Meta to publish the
+  // app). No auth: must be reachable by Meta's review and the public.
+  app.get('/privacy', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'privacy.html')));
+  app.get('/data-deletion', (req, res) => res.redirect('/privacy#data-deletion'));
 
   const routeDeps = {
     dashboardDir: path.join(process.cwd(), 'dashboard'),
