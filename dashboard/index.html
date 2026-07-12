@@ -799,10 +799,12 @@ body{background-attachment:scroll}
 #view-settings .stats-row,
 #view-settings .stats-row[style]{grid-template-columns:repeat(4,1fr)!important}
 
-/* Instagram status/stats panel must span the full settings width (like the
-   WhatsApp stats row) — otherwise it's trapped in one CSS column (half width)
-   and the stat boxes get so narrow the text wraps letter-by-letter. */
-#view-settings>.sw>#igStatusPanel{column-span:all}
+/* The Instagram status bar + stats row mirror the WhatsApp .bot-ctrl / .stats-row
+   (bare, always-visible, and already span both settings columns). The channel
+   toggle forces .ig-only to display:block, which would flatten the flex bar and
+   the stats grid — restore their real display so the boxes lay out like WhatsApp. */
+.ig-cfg .bot-ctrl.ig-only{display:flex}
+.ig-cfg .stats-row.ig-only{display:grid}
 
 /* Collapsible sections (accordion): every panel with a header + body starts
    collapsed; click the header (or its arrow) to expand. Keeps the page calm and
@@ -1019,20 +1021,24 @@ body{background-attachment:scroll}
     </div>
   </div>
 
-  <!-- Instagram-only: status + stats + disconnect (mirrors the WhatsApp header) -->
-  <div class="panel ig-only" id="igStatusPanel">
-    <div class="phdr">
-      <span>📸 حالة إنستقرام — <span id="igStatusText">…</span></span>
-      <button class="ghost-btn" style="font-size:12px;padding:5px 10px" onclick="igDisconnect()">فصل الحساب</button>
+  <!-- Instagram-only: status bar + stats row. Mirrors the WhatsApp layout EXACTLY
+       (a bare .bot-ctrl + a bare .stats-row, NOT a .panel) so both stay always
+       visible — a .panel would be turned into a collapsed accordion and hide the
+       boxes behind a bar. -->
+  <div class="bot-ctrl ig-only" id="igStatusPanel">
+    <div class="bot-ctrl-info">
+      <div class="bcdot on"></div>
+      <span class="bc-label" id="igStatusText">…</span>
     </div>
-    <div class="pbdy">
-      <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
-        <div class="stat"><div class="v" id="igStActive">0</div><div class="l">محادثات نشطة</div></div>
-        <div class="stat" title="إجمالي ردود البوت على إنستقرام"><div class="v" id="igStReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
-        <div class="stat"><div class="v" id="igStUser" style="font-size:clamp(15px,1.7vw,22px);word-break:normal">—</div><div class="l">حساب إنستقرام</div></div>
-        <div class="stat"><div class="v" id="igStModel">—</div><div class="l">النموذج</div></div>
-      </div>
+    <div class="ctrl-btns">
+      <button class="ghost-btn" style="font-size:12px;padding:6px 12px" onclick="igDisconnect()">فصل الحساب</button>
     </div>
+  </div>
+  <div class="stats-row ig-only" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat"><div class="v" id="igStActive">0</div><div class="l">محادثات نشطة</div></div>
+    <div class="stat" title="إجمالي ردود البوت على إنستقرام"><div class="v" id="igStReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
+    <div class="stat"><div class="v" id="igStUser" style="font-size:clamp(15px,1.7vw,22px);word-break:normal">—</div><div class="l">حساب إنستقرام</div></div>
+    <div class="stat"><div class="v" id="igStModel">—</div><div class="l">النموذج</div></div>
   </div>
 
   <!-- Instagram-only: inbox panel (connection is its own page, view-instagram) -->
