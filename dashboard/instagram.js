@@ -78,15 +78,29 @@ async function igResubscribe() {
   try {
     const r = await fetch('/api/instagram/resubscribe', { method: 'POST' });
     const d = await r.json();
-    if (d.success && d.hasMessages) {
-      igShowSubResult('✅ تم تفعيل استقبال الرسائل بنجاح. الحقول المشتركة: ' + ((d.fields || []).join('، ') || 'messages') + '\nجرّب ترسل DM جديد الحين — المفروض يرد.', 'ok');
-      igToast('✅ تم التفعيل');
-    } else if (d.success) {
-      igShowSubResult('⚠️ ميتا قبلت الطلب لكن حقل "messages" ما ظهر مفعّلًا بعد.\nالحقول: ' + ((d.fields || []).join('، ') || 'لا شيء') + '\nهذا غالبًا يعني إن التطبيق يحتاج App Review / Advanced Access لصلاحية الرسائل من ميتا.\nصوّر لي هذا النص.', 'warn');
-      igToast('تم الطلب — راجع الصندوق', true);
-    } else {
-      igShowSubResult('❌ فشل تفعيل استقبال الرسائل. رد ميتا:\n' + (d.message || 'خطأ غير معروف') + '\n\nانسخ هذا النص كامل وأرسله لي.', 'err');
+    if (!d.success) {
+      igShowSubResult('❌ فشل التفعيل. رد ميتا:\n' + (d.message || 'خطأ غير معروف') + '\n\nانسخ هذا النص كامل وأرسله لي.', 'err');
       igToast('❌ فشل — راجع الصندوق', true);
+    } else {
+      const ok = (v) => (v === true ? '✅ مفعّل' : v === false ? '❌ غير مفعّل' : '؟ غير معروف');
+      const lines = [];
+      lines.push('حالة استقبال الرسائل:');
+      lines.push('• على مستوى الحساب: ' + ok(d.accountHasMessages) + (d.accountError ? ' — ' + d.accountError : ''));
+      lines.push('• على مستوى التطبيق: ' + ok(d.appHasMessages) + (d.appError ? ' — ' + d.appError : ''));
+      let kind = 'warn';
+      if (d.hasMessages) {
+        kind = 'ok';
+        lines.push('');
+        lines.push('✅ تفعيل كامل — جرّب ترسل DM جديد الحين، المفروض يرد خلال دقيقة.');
+      } else if (d.appError && /review|permission|advanced|#10|#200|#3/i.test(d.appError)) {
+        lines.push('');
+        lines.push('⚠️ يبدو إن التطبيق يحتاج App Review / Advanced Access لصلاحية الرسائل من ميتا — هذا إجراء في لوحة ميتا. صوّر لي هذا النص.');
+      } else {
+        lines.push('');
+        lines.push('صوّر لي هذا النص كامل عشان أكمل.');
+      }
+      igShowSubResult(lines.join('\n'), kind);
+      igToast(d.hasMessages ? '✅ تم التفعيل الكامل' : 'راجع الصندوق تحت', !d.hasMessages);
     }
   } catch (e) {
     igShowSubResult('❌ تعذر الاتصال بالخادم: ' + (e && e.message ? e.message : '') + '\nحاول تحديث الصفحة وأعد المحاولة.', 'err');

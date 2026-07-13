@@ -64,6 +64,49 @@ test('getSubscribedApps throws on error response', async () => {
   await assert.rejects(() => graph.getSubscribedApps({ token: 'x' }, { env, fetchImpl }), /ig_subscribed_apps_failed/);
 });
 
+test('getAppSubscriptions reports the instagram object messages field', async () => {
+  const fetchImpl = async (url) => {
+    assert.ok(url.includes('/123/subscriptions'));
+    assert.ok(url.includes('access_token=123%7Csecret')); // app token appId|appSecret, url-encoded
+    return { ok: true, text: async () => JSON.stringify({ data: [{ object: 'instagram', active: true, fields: [{ name: 'messages' }, { name: 'comments' }] }] }) };
+  };
+  const r = await graph.getAppSubscriptions({ appId: '123', appSecret: 'secret' }, { env, fetchImpl });
+  assert.strictEqual(r.hasInstagram, true);
+  assert.strictEqual(r.hasMessages, true);
+  assert.strictEqual(r.active, true);
+});
+
+test('getAppSubscriptions reports missing instagram subscription', async () => {
+  const fetchImpl = async () => ({ ok: true, text: async () => JSON.stringify({ data: [] }) });
+  const r = await graph.getAppSubscriptions({ appId: '1', appSecret: 's' }, { env, fetchImpl });
+  assert.strictEqual(r.hasInstagram, false);
+  assert.strictEqual(r.hasMessages, false);
+});
+
+test('subscribeAppToInstagram POSTs object=instagram + fields=messages + callback + verify', async () => {
+  let seen;
+  const fetchImpl = async (url, opts) => { seen = { url, opts }; return { ok: true, text: async () => JSON.stringify({ success: true }) }; };
+  const r = await graph.subscribeAppToInstagram(
+    { appId: '123', appSecret: 'sec', callbackUrl: 'https://jwap.net/instagram/webhook', verifyToken: 'vt' },
+    { env, fetchImpl },
+  );
+  assert.ok(seen.url.includes('/123/subscriptions'));
+  assert.strictEqual(seen.opts.method, 'POST');
+  assert.match(seen.opts.body, /object=instagram/);
+  assert.match(seen.opts.body, /fields=messages/);
+  assert.match(seen.opts.body, /verify_token=vt/);
+  assert.match(seen.opts.body, /callback_url=https%3A%2F%2Fjwap.net%2Finstagram%2Fwebhook/);
+  assert.strictEqual(r.success, true);
+});
+
+test('subscribeAppToInstagram throws with Meta body on error', async () => {
+  const fetchImpl = async () => ({ ok: false, status: 400, text: async () => '{"error":{"message":"needs advanced access"}}' });
+  await assert.rejects(
+    () => graph.subscribeAppToInstagram({ appId: '1', appSecret: 's', callbackUrl: 'https://x/y', verifyToken: 'v' }, { env, fetchImpl }),
+    /ig_app_subscribe_failed.*advanced access/,
+  );
+});
+
 test('getProfile requests user_id and username', async () => {
   const fetchImpl = async (url) => {
     assert.ok(url.includes('fields=user_id%2Cusername') || url.includes('fields=user_id,username'));

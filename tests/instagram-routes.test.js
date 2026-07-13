@@ -244,24 +244,61 @@ test('subscription status flags missing messages field', async () => {
   assert.equal(d.hasMessages, false);
 });
 
-test('resubscribe calls subscribeToMessages and returns the resulting fields', async () => {
-  let subscribed = false;
+test('resubscribe subscribes BOTH account + app level and reports both true', async () => {
+  let acct = false; let appLvl = false;
   const app = makeApp(
-    { INSTAGRAM_ENABLED: 'true' },
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_ID: '123', INSTAGRAM_APP_SECRET: 'sec', INSTAGRAM_WEBHOOK_VERIFY_TOKEN: 'vt' },
     {
       accounts: { getAccountToken: async () => 'TOK' },
       graph: {
-        subscribeToMessages: async () => { subscribed = true; return { success: true }; },
+        subscribeToMessages: async () => { acct = true; return { success: true }; },
         getSubscribedApps: async () => ({ fields: ['messages'], hasMessages: true }),
+        subscribeAppToInstagram: async () => { appLvl = true; return { success: true }; },
+        getAppSubscriptions: async () => ({ fields: ['messages'], hasMessages: true, active: true }),
+      },
+    },
+  );
+  const d = JSON.parse((await req(app, 'POST', '/api/instagram/resubscribe', { body: {} })).body);
+  assert.equal(acct, true);
+  assert.equal(appLvl, true);
+  assert.equal(d.accountHasMessages, true);
+  assert.equal(d.appHasMessages, true);
+  assert.equal(d.hasMessages, true);
+});
+
+test('resubscribe surfaces an app-level Graph error WITHOUT failing the request (so the App-Review hint shows)', async () => {
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_ID: '123', INSTAGRAM_APP_SECRET: 'sec', INSTAGRAM_WEBHOOK_VERIFY_TOKEN: 'vt' },
+    {
+      accounts: { getAccountToken: async () => 'TOK' },
+      graph: {
+        subscribeToMessages: async () => ({}),
+        getSubscribedApps: async () => ({ fields: ['messages'], hasMessages: true }),
+        subscribeAppToInstagram: async () => { throw new Error('ig_app_subscribe_failed: 400 requires Advanced Access'); },
+        getAppSubscriptions: async () => ({ fields: [], hasMessages: false }),
       },
     },
   );
   const res = await req(app, 'POST', '/api/instagram/resubscribe', { body: {} });
   const d = JSON.parse(res.body);
   assert.equal(res.status, 200);
-  assert.equal(subscribed, true);
-  assert.equal(d.success, true);
-  assert.equal(d.hasMessages, true);
+  assert.equal(d.accountHasMessages, true);
+  assert.equal(d.hasMessages, false);
+  assert.match(d.appError, /Advanced Access/);
+});
+
+test('resubscribe reports missing app credentials in the server env', async () => {
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    {
+      accounts: { getAccountToken: async () => 'TOK' },
+      graph: { subscribeToMessages: async () => ({}), getSubscribedApps: async () => ({ fields: ['messages'], hasMessages: true }) },
+    },
+  );
+  const d = JSON.parse((await req(app, 'POST', '/api/instagram/resubscribe', { body: {} })).body);
+  assert.equal(d.accountHasMessages, true);
+  assert.match(d.appError, /مفاتيح التطبيق/);
+  assert.equal(d.hasMessages, false);
 });
 
 test('resubscribe returns 400 when the merchant has no token', async () => {
@@ -271,18 +308,4 @@ test('resubscribe returns 400 when the merchant has no token', async () => {
   );
   const res = await req(app, 'POST', '/api/instagram/resubscribe', { body: {} });
   assert.equal(res.status, 400);
-});
-
-test('resubscribe surfaces the Graph error (502) instead of swallowing it', async () => {
-  const app = makeApp(
-    { INSTAGRAM_ENABLED: 'true' },
-    {
-      accounts: { getAccountToken: async () => 'TOK' },
-      graph: { subscribeToMessages: async () => { throw new Error('ig_subscribe_failed: 400 permission'); } },
-    },
-  );
-  const res = await req(app, 'POST', '/api/instagram/resubscribe', { body: {} });
-  const d = JSON.parse(res.body);
-  assert.equal(res.status, 502);
-  assert.match(d.message, /permission/);
 });
