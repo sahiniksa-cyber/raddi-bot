@@ -56,20 +56,40 @@ async function igCheckSubscription() {
   } catch (_) { /* non-fatal */ }
 }
 
+function igShowSubResult(text, kind) {
+  const box = document.getElementById('igSubResult');
+  if (!box) return;
+  const colors = {
+    ok: { bg: 'var(--green-bg,#dcfce7)', fg: '#166534', bd: '#86efac' },
+    err: { bg: '#fef2f2', fg: '#991b1b', bd: '#fca5a5' },
+    warn: { bg: '#fffbeb', fg: '#92400e', bd: '#fcd34d' },
+  }[kind] || { bg: 'var(--bg-soft,#f1f5f9)', fg: 'inherit', bd: 'var(--border)' };
+  box.style.background = colors.bg;
+  box.style.color = colors.fg;
+  box.style.border = '1px solid ' + colors.bd;
+  box.textContent = text;
+  box.style.display = '';
+}
+
 async function igResubscribe() {
   const btn = document.getElementById('igResubBtn');
   if (btn) btn.disabled = true;
+  igShowSubResult('… جاري تفعيل استقبال الرسائل من ميتا', 'warn');
   try {
     const r = await fetch('/api/instagram/resubscribe', { method: 'POST' });
     const d = await r.json();
     if (d.success && d.hasMessages) {
-      igToast('✅ تم تفعيل استقبال الرسائل — جرّب ترسل DM الحين');
+      igShowSubResult('✅ تم تفعيل استقبال الرسائل بنجاح. الحقول المشتركة: ' + ((d.fields || []).join('، ') || 'messages') + '\nجرّب ترسل DM جديد الحين — المفروض يرد.', 'ok');
+      igToast('✅ تم التفعيل');
     } else if (d.success) {
-      igToast('تم إرسال الطلب، لكن لسّه ما تأكّد تفعيل الرسائل. جرّب فصل وإعادة الربط.', true);
+      igShowSubResult('⚠️ ميتا قبلت الطلب لكن حقل "messages" ما ظهر مفعّلًا بعد.\nالحقول: ' + ((d.fields || []).join('، ') || 'لا شيء') + '\nهذا غالبًا يعني إن التطبيق يحتاج App Review / Advanced Access لصلاحية الرسائل من ميتا.\nصوّر لي هذا النص.', 'warn');
+      igToast('تم الطلب — راجع الصندوق', true);
     } else {
-      igToast('❌ ' + (d.message || 'فشل التفعيل'), true);
+      igShowSubResult('❌ فشل تفعيل استقبال الرسائل. رد ميتا:\n' + (d.message || 'خطأ غير معروف') + '\n\nانسخ هذا النص كامل وأرسله لي.', 'err');
+      igToast('❌ فشل — راجع الصندوق', true);
     }
-  } catch (_) {
+  } catch (e) {
+    igShowSubResult('❌ تعذر الاتصال بالخادم: ' + (e && e.message ? e.message : '') + '\nحاول تحديث الصفحة وأعد المحاولة.', 'err');
     igToast('❌ تعذر الاتصال', true);
   } finally {
     if (btn) btn.disabled = false;
