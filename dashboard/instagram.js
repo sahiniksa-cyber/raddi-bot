@@ -34,8 +34,47 @@ async function igLoadStatus() {
     setTxt('igStReplies', Number(d.repliesCount || 0));
     setTxt('igStUser', connected ? ('@' + (d.username || '')) : '—');
     setTxt('igStModel', String(d.model || '—').substring(0, 10));
-    if (connected) igLoadInbox();
+    if (connected) { igLoadInbox(); igCheckSubscription(); }
   } catch (_) { /* non-fatal */ }
+}
+
+// Surface whether Instagram is actually subscribed to the `messages` webhook —
+// if not, Meta never delivers DMs (the #1 reason the bot "doesn't reply").
+async function igCheckSubscription() {
+  const warn = document.getElementById('igSubWarn');
+  if (!warn) return;
+  try {
+    const r = await fetch('/api/instagram/subscription');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.connected && d.hasMessages === false) {
+      warn.textContent = '⚠️ استقبال الرسائل غير مفعّل — اضغط "🔔 تفعيل استقبال الرسائل"';
+      warn.style.display = '';
+    } else {
+      warn.style.display = 'none';
+    }
+  } catch (_) { /* non-fatal */ }
+}
+
+async function igResubscribe() {
+  const btn = document.getElementById('igResubBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/instagram/resubscribe', { method: 'POST' });
+    const d = await r.json();
+    if (d.success && d.hasMessages) {
+      igToast('✅ تم تفعيل استقبال الرسائل — جرّب ترسل DM الحين');
+    } else if (d.success) {
+      igToast('تم إرسال الطلب، لكن لسّه ما تأكّد تفعيل الرسائل. جرّب فصل وإعادة الربط.', true);
+    } else {
+      igToast('❌ ' + (d.message || 'فشل التفعيل'), true);
+    }
+  } catch (_) {
+    igToast('❌ تعذر الاتصال', true);
+  } finally {
+    if (btn) btn.disabled = false;
+    igCheckSubscription();
+  }
 }
 
 async function igDisconnect() {

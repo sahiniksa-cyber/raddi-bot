@@ -42,6 +42,28 @@ test('subscribeToMessages posts subscribed_fields=messages', async () => {
   assert.strictEqual(r.success, true);
 });
 
+test('getSubscribedApps extracts subscribed fields and flags messages presence', async () => {
+  const fetchImpl = async (url) => {
+    assert.ok(url.includes('me/subscribed_apps'));
+    return { ok: true, text: async () => JSON.stringify({ data: [{ subscribed_fields: ['messages', 'comments'] }] }) };
+  };
+  const r = await graph.getSubscribedApps({ token: 'LONG' }, { env, fetchImpl });
+  assert.deepStrictEqual(r.fields, ['messages', 'comments']);
+  assert.strictEqual(r.hasMessages, true);
+});
+
+test('getSubscribedApps handles object-form fields and reports missing messages', async () => {
+  const fetchImpl = async () => ({ ok: true, text: async () => JSON.stringify({ data: [{ subscribed_fields: [{ name: 'comments' }] }] }) });
+  const r = await graph.getSubscribedApps({ token: 'LONG' }, { env, fetchImpl });
+  assert.deepStrictEqual(r.fields, ['comments']);
+  assert.strictEqual(r.hasMessages, false);
+});
+
+test('getSubscribedApps throws on error response', async () => {
+  const fetchImpl = async () => ({ ok: false, status: 400, text: async () => 'bad token' });
+  await assert.rejects(() => graph.getSubscribedApps({ token: 'x' }, { env, fetchImpl }), /ig_subscribed_apps_failed/);
+});
+
 test('getProfile requests user_id and username', async () => {
   const fetchImpl = async (url) => {
     assert.ok(url.includes('fields=user_id%2Cusername') || url.includes('fields=user_id,username'));

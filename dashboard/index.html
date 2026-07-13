@@ -1019,9 +1019,11 @@ body{background-attachment:scroll}
     <div class="bot-ctrl-info">
       <div class="bcdot on"></div>
       <span class="bc-label" id="igStatusText">…</span>
+      <span class="bc-label" id="igSubWarn" style="color:#d97706;display:none"></span>
     </div>
     <div class="ctrl-btns" style="flex-wrap:wrap;gap:10px">
       <label style="display:flex;align-items:center;gap:7px;font-weight:700;cursor:pointer;font-size:13px;white-space:nowrap"><input type="checkbox" id="igCfgEnabled" style="width:17px;height:17px"> تشغيل الرد الآلي</label>
+      <button class="ghost-btn" id="igResubBtn" style="font-size:12px;padding:6px 12px;white-space:nowrap" onclick="igResubscribe()">🔔 تفعيل استقبال الرسائل</button>
       <button class="ghost-btn" style="font-size:12px;padding:6px 12px;white-space:nowrap" onclick="igDisconnect()">فصل الحساب</button>
       <button class="ghost-btn" style="font-size:12px;padding:6px 12px;white-space:nowrap" onclick="igCloseSettings()">← رجوع للواتساب</button>
     </div>

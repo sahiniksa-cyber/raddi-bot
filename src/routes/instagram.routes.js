@@ -125,7 +125,14 @@ function createInstagramRoutes(deps = {}) {
         token: long.accessToken,
         expiresAt: long.expiresAt,
       });
-      try { await graph.subscribeToMessages({ token: long.accessToken }, { env }); } catch (_) { /* retryable later */ }
+      // Subscribe the account to the `messages` webhook field. If THIS fails,
+      // Meta never delivers DMs — so log the outcome instead of swallowing it.
+      try {
+        const sub = await graph.subscribeToMessages({ token: long.accessToken }, { env });
+        console.log(`${new Date().toISOString()} [instagram-oauth] subscribed to messages for user=${req.session.userId}: ${JSON.stringify(sub)}`);
+      } catch (e) {
+        console.error(`${new Date().toISOString()} [instagram-oauth] subscribeToMessages FAILED for user=${req.session.userId}: ${e.message}`);
+      }
       res.redirect('/#instagram');
     } catch (err) { next(err); }
   });
@@ -168,6 +175,38 @@ function createInstagramRoutes(deps = {}) {
       await accounts.disconnectAccount(req.session.userId, { database: db });
       res.json({ success: true });
     } catch (err) { next(err); }
+  });
+
+  // ── Webhook subscription status ────────────────────────────────────────────
+  // Reports whether the account is subscribed to the `messages` field. If not,
+  // Meta won't deliver DMs — the #1 reason "the bot never receives messages".
+  router.get('/api/instagram/subscription', guard, requireAuth, async (req, res, next) => {
+    try {
+      const token = await accounts.getAccountToken(req.session.userId, { database: db });
+      if (!token) return res.json({ connected: false, hasMessages: false, fields: [] });
+      const sub = await graph.getSubscribedApps({ token }, { env });
+      res.json({ connected: true, hasMessages: sub.hasMessages, fields: sub.fields });
+    } catch (err) {
+      res.json({ connected: true, hasMessages: false, fields: [], error: err.message });
+    }
+  });
+
+  // ── Re-subscribe to the `messages` webhook field ───────────────────────────
+  // Self-serve fix when the subscription didn't take at connect time. Surfaces
+  // Meta's actual response/error instead of swallowing it.
+  router.post('/api/instagram/resubscribe', guard, requireAuth, async (req, res) => {
+    try {
+      const token = await accounts.getAccountToken(req.session.userId, { database: db });
+      if (!token) return res.status(400).json({ success: false, message: 'اربط حساب إنستقرام أولاً' });
+      const result = await graph.subscribeToMessages({ token }, { env });
+      let after = null;
+      try { after = await graph.getSubscribedApps({ token }, { env }); } catch (_) { /* best-effort */ }
+      console.log(`${new Date().toISOString()} [instagram-resubscribe] user=${req.session.userId} result=${JSON.stringify(result)} fields=${after ? after.fields.join(',') : '?'}`);
+      res.json({ success: true, result, hasMessages: after ? after.hasMessages : null, fields: after ? after.fields : [] });
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [instagram-resubscribe] FAILED user=${req.session.userId}: ${err.message}`);
+      res.status(502).json({ success: false, message: err.message });
+    }
   });
 
   // ── Config (seeded from WhatsApp on first read) ───────────────────────────

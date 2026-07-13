@@ -30,6 +30,23 @@ async function subscribeToMessages({ token }, { env = process.env, fetchImpl = f
   return res.json();
 }
 
+// Read which webhook fields the connected Instagram account is subscribed to.
+// If `messages` is missing here, Meta will NOT deliver DM webhooks — this is the
+// single most useful check for "the bot never receives messages".
+async function getSubscribedApps({ token }, { env = process.env, fetchImpl = fetch } = {}) {
+  const params = new URLSearchParams({ access_token: token });
+  const res = await fetchImpl(`https://graph.instagram.com/me/subscribed_apps?${params.toString()}`);
+  const text = await res.text();
+  if (!res.ok) throw new Error(`ig_subscribed_apps_failed: ${res.status} ${text}`);
+  let json = {};
+  try { json = JSON.parse(text); } catch (_) { json = {}; }
+  const fields = [];
+  for (const row of (json.data || [])) {
+    for (const f of (row.subscribed_fields || [])) fields.push(typeof f === 'string' ? f : f.name);
+  }
+  return { raw: json, fields, hasMessages: fields.includes('messages') };
+}
+
 async function getProfile({ token }, { env = process.env, fetchImpl = fetch } = {}) {
   const params = new URLSearchParams({ fields: 'user_id,username', access_token: token });
   const res = await fetchImpl(`https://graph.instagram.com/me?${params.toString()}`);
@@ -47,4 +64,4 @@ async function getUserProfile({ token, igsid }, { env = process.env, fetchImpl =
   return res.json();
 }
 
-module.exports = { sendDirectMessage, subscribeToMessages, getProfile, getUserProfile };
+module.exports = { sendDirectMessage, subscribeToMessages, getSubscribedApps, getProfile, getUserProfile };
