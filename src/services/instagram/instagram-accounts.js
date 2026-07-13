@@ -101,6 +101,18 @@ async function listConnectedAccounts(deps = {}) {
   return res.rows;
 }
 
+// Corrects the stored ig_user_id for a merchant. Used to self-heal when the id
+// Meta sends in the webhook (entry.id) differs from the profile.user_id captured
+// at OAuth time — ig_user_id is ONLY used to route inbound webhooks, so aligning
+// it to what Meta actually sends is safe and makes future lookups match directly.
+async function setIgUserId(userId, igUserId, deps = {}) {
+  const database = deps.database || db;
+  await database.query(
+    `UPDATE instagram_accounts SET ig_user_id = $2 WHERE user_id = $1`,
+    [userId, igUserId],
+  );
+}
+
 module.exports = {
   encodeToken,
   decodeToken,
@@ -110,4 +122,5 @@ module.exports = {
   findUserIdByIgAccount,
   disconnectAccount,
   listConnectedAccounts,
+  setIgUserId,
 };

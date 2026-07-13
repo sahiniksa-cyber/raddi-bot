@@ -61,22 +61,48 @@ function createInstagramRoutes(deps = {}) {
     // Acknowledge immediately so a slow DB never times out Meta's delivery.
     res.sendStatus(200);
     if (!enabled()) return;
+    const ts = () => new Date().toISOString();
     try {
       const body = JSON.parse(req.body.toString('utf8'));
       const items = ingest.extractMessages(body);
+      const inbound = items.filter((it) => !it.echo && it.text);
+      // Always log receipt so Railway logs prove whether Meta is delivering at all.
+      console.log(`${ts()} [instagram-webhook] received: ${items.length} event(s), ${inbound.length} inbound text — ids=${[...new Set(items.map((i) => i.igAccountId))].join(',')}`);
       for (const item of items) {
         if (item.echo || !item.text) continue;
-        const userId = await accounts.findUserIdByIgAccount(item.igAccountId);
-        if (userId) {
-          await ingest.ingestWebhookEntry(userId, item);
-          // Resolve the @username so the inbox shows handles, not numeric ids.
-          if (typeof ingest.ensureUsername === 'function') {
-            await ingest.ensureUsername(userId, item.participantId).catch(() => {});
+        let userId = await accounts.findUserIdByIgAccount(item.igAccountId, { database: db });
+        if (!userId) {
+          // The id Meta sends (entry.id) can differ from the profile.user_id saved
+          // at OAuth time — that would drop the message SILENTLY. If exactly one
+          // merchant is connected, adopt it and heal the stored id so it routes
+          // now and matches directly next time. (Multi-merchant → log only, safe.)
+          try {
+            const connected = await accounts.listConnectedAccounts({ database: db });
+            if (connected.length === 1) {
+              userId = connected[0].user_id;
+              if (typeof accounts.setIgUserId === 'function') {
+                await accounts.setIgUserId(userId, item.igAccountId, { database: db }).catch(() => {});
+              }
+              console.warn(`${ts()} [instagram-webhook] no exact match for igAccountId=${item.igAccountId}; adopted sole connected account user=${userId} and healed ig_user_id`);
+            }
+          } catch (e) {
+            console.error(`${ts()} [instagram-webhook] fallback lookup failed: ${e.message}`);
           }
+          if (!userId) {
+            console.warn(`${ts()} [instagram-webhook] NO MATCHING ACCOUNT for igAccountId=${item.igAccountId} — message from ${item.participantId} dropped`);
+            continue;
+          }
+        } else {
+          console.log(`${ts()} [instagram-webhook] igAccountId=${item.igAccountId} → user=${userId}; ingesting message from ${item.participantId}`);
+        }
+        await ingest.ingestWebhookEntry(userId, item);
+        // Resolve the @username so the inbox shows handles, not numeric ids.
+        if (typeof ingest.ensureUsername === 'function') {
+          await ingest.ensureUsername(userId, item.participantId).catch(() => {});
         }
       }
     } catch (err) {
-      console.error(`${new Date().toISOString()} [instagram-webhook] ${err.message}`);
+      console.error(`${ts()} [instagram-webhook] ${err.message}`);
     }
   });
 
