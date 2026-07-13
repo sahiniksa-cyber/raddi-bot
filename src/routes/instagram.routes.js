@@ -191,18 +191,46 @@ function createInstagramRoutes(deps = {}) {
     }
   });
 
-  // ── Re-subscribe to the `messages` webhook field ───────────────────────────
-  // Self-serve fix when the subscription didn't take at connect time. Surfaces
-  // Meta's actual response/error instead of swallowing it.
+  // ── Re-subscribe to the `messages` webhook field (account + APP level) ──────
+  // Self-serve fix. Subscribes BOTH levels and surfaces Meta's actual state/error
+  // for each — because DM delivery needs the APP subscribed to instagram/messages
+  // AND the account subscribed, and either can silently be missing.
   router.post('/api/instagram/resubscribe', guard, requireAuth, async (req, res) => {
+    const out = { success: true };
     try {
       const token = await accounts.getAccountToken(req.session.userId, { database: db });
       if (!token) return res.status(400).json({ success: false, message: 'اربط حساب إنستقرام أولاً' });
-      const result = await graph.subscribeToMessages({ token }, { env });
-      let after = null;
-      try { after = await graph.getSubscribedApps({ token }, { env }); } catch (_) { /* best-effort */ }
-      console.log(`${new Date().toISOString()} [instagram-resubscribe] user=${req.session.userId} result=${JSON.stringify(result)} fields=${after ? after.fields.join(',') : '?'}`);
-      res.json({ success: true, result, hasMessages: after ? after.hasMessages : null, fields: after ? after.fields : [] });
+
+      // 1) Account level (subscribed_apps on the IG account).
+      try {
+        await graph.subscribeToMessages({ token }, { env });
+        const after = await graph.getSubscribedApps({ token }, { env });
+        out.accountHasMessages = after.hasMessages;
+        out.accountFields = after.fields;
+      } catch (e) { out.accountError = e.message; }
+
+      // 2) App level (the APP itself subscribed to the instagram object's messages
+      //    field). Needs app credentials — present in the server env.
+      const appId = env.INSTAGRAM_APP_ID;
+      const appSecret = env.INSTAGRAM_APP_SECRET;
+      const verifyToken = env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN;
+      if (appId && appSecret && verifyToken) {
+        const callbackUrl = `https://${req.get('host')}/instagram/webhook`;
+        out.callbackUrl = callbackUrl;
+        try {
+          await graph.subscribeAppToInstagram({ appId, appSecret, callbackUrl, verifyToken, fields: 'messages' }, { env });
+          const appAfter = await graph.getAppSubscriptions({ appId, appSecret }, { env });
+          out.appHasMessages = appAfter.hasMessages;
+          out.appFields = appAfter.fields;
+          out.appActive = appAfter.active;
+        } catch (e) { out.appError = e.message; }
+      } else {
+        out.appError = 'مفاتيح التطبيق ناقصة في الخادم (INSTAGRAM_APP_ID / SECRET / WEBHOOK_VERIFY_TOKEN)';
+      }
+
+      out.hasMessages = Boolean(out.accountHasMessages && out.appHasMessages);
+      console.log(`${new Date().toISOString()} [instagram-resubscribe] user=${req.session.userId} account=${out.accountHasMessages} app=${out.appHasMessages} acctErr=${out.accountError || '-'} appErr=${out.appError || '-'}`);
+      res.json(out);
     } catch (err) {
       console.error(`${new Date().toISOString()} [instagram-resubscribe] FAILED user=${req.session.userId}: ${err.message}`);
       res.status(502).json({ success: false, message: err.message });
