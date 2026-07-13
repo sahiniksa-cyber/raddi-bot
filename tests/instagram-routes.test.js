@@ -94,6 +94,52 @@ test('POST webhook 200 + ingests on good signature', async () => {
   assert.equal(ingested, 1);
 });
 
+test('POST webhook self-heals to the sole connected account when the id does not match', async () => {
+  let ingested = 0; let healed = null;
+  const secret = 'S';
+  const payload = { object: 'instagram', entry: [{ id: 'WEBHOOK_ID_999', messaging: [{ sender: { id: 'C' }, message: { mid: 'm2', text: 'hi' } }] }] };
+  const raw = Buffer.from(JSON.stringify(payload));
+  const sig = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_SECRET: secret },
+    {
+      ingest: {
+        extractMessages: () => [{ igAccountId: 'WEBHOOK_ID_999', participantId: 'C', mid: 'm2', text: 'hi', echo: false }],
+        ingestWebhookEntry: async () => { ingested++; },
+      },
+      accounts: {
+        findUserIdByIgAccount: async () => null,                       // stored id doesn't match
+        listConnectedAccounts: async () => [{ user_id: 'u1', ig_user_id: 'OLD_ID' }], // exactly one merchant
+        setIgUserId: async (uid, id) => { healed = { uid, id }; },
+      },
+    },
+  );
+  const res = await req(app, 'POST', '/instagram/webhook', { headers: { 'X-Hub-Signature-256': sig }, body: raw });
+  assert.equal(res.status, 200);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ingested, 1);                                          // message routed despite the mismatch
+  assert.deepEqual(healed, { uid: 'u1', id: 'WEBHOOK_ID_999' });      // stored id healed to what Meta sends
+});
+
+test('POST webhook drops the message (no ingest) when the account is ambiguous', async () => {
+  let ingested = 0;
+  const secret = 'S';
+  const payload = { object: 'instagram', entry: [{ id: 'X', messaging: [{ sender: { id: 'C' }, message: { mid: 'm3', text: 'hi' } }] }] };
+  const raw = Buffer.from(JSON.stringify(payload));
+  const sig = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_SECRET: secret },
+    {
+      ingest: { extractMessages: () => [{ igAccountId: 'X', participantId: 'C', mid: 'm3', text: 'hi', echo: false }], ingestWebhookEntry: async () => { ingested++; } },
+      accounts: { findUserIdByIgAccount: async () => null, listConnectedAccounts: async () => [{ user_id: 'a' }, { user_id: 'b' }] },
+    },
+  );
+  const res = await req(app, 'POST', '/instagram/webhook', { headers: { 'X-Hub-Signature-256': sig }, body: raw });
+  assert.equal(res.status, 200);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ingested, 0);   // >1 connected → no safe unique target → dropped (logged)
+});
+
 test('API routes return 503 when INSTAGRAM_ENABLED is not true', async () => {
   const app = makeApp({ INSTAGRAM_ENABLED: 'false' });
   const res = await req(app, 'GET', '/api/instagram/status');
