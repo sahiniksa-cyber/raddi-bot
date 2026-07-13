@@ -1028,6 +1028,10 @@ body{background-attachment:scroll}
       <button class="ghost-btn" style="font-size:12px;padding:6px 12px;white-space:nowrap" onclick="igCloseSettings()">← رجوع للواتساب</button>
     </div>
   </div>
+  <!-- Persistent result of the "🔔 تفعيل استقبال الرسائل" action (success text or
+       the FULL Meta error) — selectable so the merchant can copy it. JS-controlled
+       (stays hidden until there's a result). -->
+  <div id="igSubResult" style="display:none;margin:0 0 14px;padding:12px 14px;border-radius:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;user-select:text"></div>
   <div class="stats-row ig-only" style="grid-template-columns:repeat(4,1fr)">
     <div class="stat"><div class="v" id="igStActive">0</div><div class="l">محادثات نشطة</div></div>
     <div class="stat" title="إجمالي ردود البوت على إنستقرام"><div class="v" id="igStReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
