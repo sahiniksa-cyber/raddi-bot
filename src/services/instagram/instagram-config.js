@@ -17,8 +17,21 @@
 const db = require('../../db/client');
 const { DEFAULT_CONFIG } = require('../../../lib/constants');
 
+const SENSITIVE_CONFIG_KEYS = Object.freeze([
+  'openaiApiKey',
+  'openrouterApiKey',
+  'googleApiKey',
+  'anthropicApiKey',
+]);
+
+function stripSensitiveConfig(config) {
+  const clean = JSON.parse(JSON.stringify(config || {}));
+  for (const key of SENSITIVE_CONFIG_KEYS) delete clean[key];
+  return clean;
+}
+
 function seedConfigFromWhatsapp(waConfig) {
-  const base = { ...DEFAULT_CONFIG, ...(waConfig || {}) };
+  const base = stripSensitiveConfig({ ...DEFAULT_CONFIG, ...(waConfig || {}) });
   // Deep clone so subsequent Instagram edits can never mutate the WhatsApp config.
   return JSON.parse(JSON.stringify(base));
 }
@@ -34,7 +47,7 @@ async function resolveInstagramConfig(userId, deps = {}) {
     return {
       enabled: row.enabled === true,
       seededFromWhatsapp: row.seeded_from_whatsapp === true,
-      config: { ...DEFAULT_CONFIG, ...(row.config || {}) },
+      config: stripSensitiveConfig({ ...DEFAULT_CONFIG, ...(row.config || {}) }),
     };
   }
   // First open: seed from the merchant's WhatsApp config.
@@ -56,7 +69,7 @@ async function saveInstagramConfig(userId, { enabled, config }, deps = {}) {
      VALUES ($1, $2, true, $3::jsonb)
      ON CONFLICT (user_id) DO UPDATE
        SET enabled = EXCLUDED.enabled, config = EXCLUDED.config, updated_at = NOW()`,
-    [userId, enabled === true, JSON.stringify(config || {})],
+    [userId, enabled === true, JSON.stringify(stripSensitiveConfig(config))],
   );
 }
 
@@ -75,4 +88,5 @@ module.exports = {
   resolveInstagramConfig,
   saveInstagramConfig,
   setAiEnabled,
+  stripSensitiveConfig,
 };

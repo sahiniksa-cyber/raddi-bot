@@ -9,8 +9,9 @@ const { createInstagramRoutes } = require('../src/routes/instagram.routes');
 
 function makeApp(env, extraDeps = {}) {
   const app = express();
+  const session = extraDeps.session || { userId: 'u1' };
   // Attach a fake session so requireAuth-dependent routes have a userId.
-  app.use((req, _res, next) => { req.session = { userId: 'u1' }; next(); });
+  app.use((req, _res, next) => { req.session = session; next(); });
   // Mirror the production server: JSON body parsing for every route EXCEPT the
   // webhook, which needs the raw body for HMAC (handled by its own express.raw).
   app.use((req, res, next) => {
@@ -74,7 +75,7 @@ test('POST webhook rejects bad signature (401) and does not ingest', async () =>
   assert.equal(ingested, 0);
 });
 
-test('POST webhook 200 + ingests on good signature', async () => {
+test('POST webhook waits for durable ingest before returning 200', async () => {
   let ingested = 0;
   const secret = 'S';
   const payload = { object: 'instagram', entry: [{ id: 'A', messaging: [{ sender: { id: 'C' }, message: { mid: 'm1', text: 'hi' } }] }] };
@@ -92,9 +93,25 @@ test('POST webhook 200 + ingests on good signature', async () => {
   );
   const res = await req(app, 'POST', '/instagram/webhook', { headers: { 'X-Hub-Signature-256': sig }, body: raw });
   assert.equal(res.status, 200);
-  // ingest happens after the 200 is sent; give the microtask queue a tick
-  await new Promise((r) => setTimeout(r, 20));
   assert.equal(ingested, 1);
+});
+
+test('POST webhook returns 503 when durable ingest fails so Meta retries the delivery', async () => {
+  const secret = 'S';
+  const raw = Buffer.from(JSON.stringify({ object: 'instagram' }));
+  const sig = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_SECRET: secret },
+    {
+      ingest: {
+        extractMessages: () => [{ igAccountId: 'A', participantId: 'C', mid: 'm1', text: 'hi', echo: false }],
+        ingestWebhookEntry: async () => { throw new Error('redis unavailable'); },
+      },
+      accounts: { findUserIdByIgAccount: async () => 'u1' },
+    },
+  );
+  const res = await req(app, 'POST', '/instagram/webhook', { headers: { 'X-Hub-Signature-256': sig }, body: raw });
+  assert.equal(res.status, 503);
 });
 
 test('POST webhook self-heals to the sole connected account when the id does not match', async () => {
@@ -124,7 +141,7 @@ test('POST webhook self-heals to the sole connected account when the id does not
   assert.deepEqual(healed, { uid: 'u1', id: 'WEBHOOK_ID_999' });      // stored id healed to what Meta sends
 });
 
-test('POST webhook drops the message (no ingest) when the account is ambiguous', async () => {
+test('POST webhook returns 503 instead of silently dropping when the account is ambiguous', async () => {
   let ingested = 0;
   const secret = 'S';
   const payload = { object: 'instagram', entry: [{ id: 'X', messaging: [{ sender: { id: 'C' }, message: { mid: 'm3', text: 'hi' } }] }] };
@@ -138,9 +155,8 @@ test('POST webhook drops the message (no ingest) when the account is ambiguous',
     },
   );
   const res = await req(app, 'POST', '/instagram/webhook', { headers: { 'X-Hub-Signature-256': sig }, body: raw });
-  assert.equal(res.status, 200);
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(ingested, 0);   // >1 connected → no safe unique target → dropped (logged)
+  assert.equal(res.status, 503);
+  assert.equal(ingested, 0);
 });
 
 test('API routes return 503 when INSTAGRAM_ENABLED is not true', async () => {
@@ -151,15 +167,76 @@ test('API routes return 503 when INSTAGRAM_ENABLED is not true', async () => {
 });
 
 test('connect redirects to the authorize URL when enabled', async () => {
+  const session = { userId: 'u1' };
+  let stateSeen = null;
   const app = makeApp(
     { INSTAGRAM_ENABLED: 'true' },
-    { oauth: { buildAuthorizeUrl: (state) => `https://www.instagram.com/oauth/authorize?state=${state}` } },
+    { session, oauth: { buildAuthorizeUrl: (state) => { stateSeen = state; return `https://www.instagram.com/oauth/authorize?state=${state}`; } } },
   );
   const res = await req(app, 'GET', '/api/instagram/connect');
   assert.equal(res.status, 302);
+  assert.notEqual(stateSeen, 'u1');
+  assert.equal(session.instagramOauthState, stateSeen);
+});
+
+test('OAuth callback rejects a missing or mismatched state before exchanging the code', async () => {
+  let exchanges = 0;
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    {
+      session: { userId: 'u1', instagramOauthState: 'expected' },
+      oauth: { exchangeCodeForToken: async () => { exchanges++; return {}; } },
+    },
+  );
+  const res = await req(app, 'GET', '/instagram/auth/callback?code=abc&state=wrong');
+  assert.equal(res.status, 400);
+  assert.equal(exchanges, 0);
 });
 
 // ── Sandbox test-chat ───────────────────────────────────────────────────────
+
+test('manual reply rejects a closed 24-hour messaging window before storing a message', async () => {
+  let queries = 0;
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    {
+      database: {
+        query: async () => {
+          queries++;
+          return { rows: [{ participant_id: 'p1', window_open: false }], rowCount: 1 };
+        },
+      },
+      enqueueOutgoingInstagram: async () => { throw new Error('must not enqueue'); },
+    },
+  );
+  const res = await req(app, 'POST', '/api/instagram/conversations/c1/send', { body: { text: 'hello' } });
+  assert.equal(res.status, 409);
+  assert.equal(JSON.parse(res.body).error, 'instagram_window_closed');
+  assert.equal(queries, 1);
+});
+
+test('manual reply stores and enqueues only while the 24-hour window is open', async () => {
+  const calls = [];
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    {
+      database: {
+        query: async (sql) => {
+          calls.push(sql);
+          if (sql.includes('FROM instagram_conversations')) {
+            return { rows: [{ participant_id: 'p1', window_open: true }], rowCount: 1 };
+          }
+          return { rows: [{ id: 'm1' }], rowCount: 1 };
+        },
+      },
+      enqueueOutgoingInstagram: async (job) => { calls.push(job); },
+    },
+  );
+  const res = await req(app, 'POST', '/api/instagram/conversations/c1/send', { body: { text: 'hello' } });
+  assert.equal(res.status, 200);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].replyMessageId, 'm1');
+});
 
 test('test-chat returns the generated reply and grows the sandbox memory', async () => {
   const seen = [];
@@ -250,7 +327,7 @@ test('subscription status flags missing messages field', async () => {
 test('resubscribe subscribes BOTH account + app level and reports both true', async () => {
   let acct = false; let appLvl = false;
   const app = makeApp(
-    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_ID: '123', INSTAGRAM_APP_SECRET: 'sec', INSTAGRAM_WEBHOOK_VERIFY_TOKEN: 'vt' },
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_META_APP_ID: '123', INSTAGRAM_META_APP_SECRET: 'meta-sec', INSTAGRAM_WEBHOOK_VERIFY_TOKEN: 'vt', INSTAGRAM_WEBHOOK_CALLBACK_URL: 'https://jwap.net/instagram/webhook' },
     {
       accounts: { getAccountToken: async () => 'TOK' },
       graph: {
@@ -271,7 +348,7 @@ test('resubscribe subscribes BOTH account + app level and reports both true', as
 
 test('resubscribe surfaces an app-level Graph error WITHOUT failing the request (so the App-Review hint shows)', async () => {
   const app = makeApp(
-    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_ID: '123', INSTAGRAM_APP_SECRET: 'sec', INSTAGRAM_WEBHOOK_VERIFY_TOKEN: 'vt' },
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_META_APP_ID: '123', INSTAGRAM_META_APP_SECRET: 'meta-sec', INSTAGRAM_WEBHOOK_VERIFY_TOKEN: 'vt', INSTAGRAM_WEBHOOK_CALLBACK_URL: 'https://jwap.net/instagram/webhook' },
     {
       accounts: { getAccountToken: async () => 'TOK' },
       graph: {
@@ -300,7 +377,7 @@ test('resubscribe reports missing app credentials in the server env', async () =
   );
   const d = JSON.parse((await req(app, 'POST', '/api/instagram/resubscribe', { body: {} })).body);
   assert.equal(d.accountHasMessages, true);
-  assert.match(d.appError, /مفاتيح التطبيق/);
+  assert.match(d.appError, /INSTAGRAM_META_APP_ID/);
   assert.equal(d.hasMessages, false);
 });
 

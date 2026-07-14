@@ -621,10 +621,15 @@ const statements = [
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT,
     provider_message_id TEXT,
+    idempotency_key TEXT,
     status TEXT NOT NULL DEFAULT 'stored',
     raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+
+  // Existing production installs created instagram_messages before the
+  // idempotency key existed, so CREATE TABLE IF NOT EXISTS alone is not enough.
+  `ALTER TABLE instagram_messages ADD COLUMN IF NOT EXISTS idempotency_key TEXT`,
 
   `CREATE TABLE IF NOT EXISTS instagram_logs (
     id BIGSERIAL PRIMARY KEY,
@@ -647,6 +652,16 @@ const statements = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_instagram_messages_user_provider_unique
     ON instagram_messages (user_id, provider_message_id)
     WHERE provider_message_id IS NOT NULL`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_instagram_messages_user_idempotency_unique
+    ON instagram_messages (user_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL`,
+
+  // Instagram behavior settings must never duplicate plaintext AI secrets from
+  // bot_configs. Keys are resolved at runtime from the shared encrypted store.
+  `UPDATE instagram_ai_settings
+      SET config = config - 'openaiApiKey' - 'openrouterApiKey' - 'googleApiKey' - 'anthropicApiKey'
+    WHERE config ?| ARRAY['openaiApiKey','openrouterApiKey','googleApiKey','anthropicApiKey']`,
 
   `CREATE INDEX IF NOT EXISTS idx_instagram_logs_user_created
     ON instagram_logs (user_id, created_at DESC)`,

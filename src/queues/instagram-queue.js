@@ -55,9 +55,23 @@ function getQueues() {
 // Test seam: inject fake queues so unit tests never touch Redis.
 function __setQueuesForTest(fake) { queues = fake; }
 
+async function removeTerminalJob(queue, jobId) {
+  if (!jobId || typeof queue.getJob !== 'function') return;
+  const existing = await queue.getJob(jobId);
+  if (!existing || typeof existing.getState !== 'function') return;
+  const state = await existing.getState();
+  if ((state === 'completed' || state === 'failed') && typeof existing.remove === 'function') {
+    await existing.remove();
+  }
+}
+
 async function enqueueIncomingInstagram(payload, options = {}) {
   const { incomingInstagram } = getQueues();
   const jobId = options.jobKey || payload.providerMessageId || payload.messageId || undefined;
+  // Meta retries the same delivery after transient failures. BullMQ retains
+  // terminal jobs, so remove only terminal copies before re-adding. Waiting or
+  // active copies remain the deduplication barrier.
+  await removeTerminalJob(incomingInstagram, jobId);
   return incomingInstagram.add('process-incoming-instagram', payload, { jobId, delay: options.delay || 0 });
 }
 
@@ -73,4 +87,5 @@ module.exports = {
   enqueueIncomingInstagram,
   enqueueOutgoingInstagram,
   __setQueuesForTest,
+  removeTerminalJob,
 };

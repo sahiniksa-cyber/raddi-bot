@@ -69,7 +69,7 @@ async function getUserProfile({ token, igsid }, { env = process.env, fetchImpl =
 // subscribed to the `instagram` object's `messages` field or Meta delivers
 // NOTHING, even when the account's subscribed_apps lists `messages`.
 function fbVersion(env) {
-  return env.INSTAGRAM_GRAPH_VERSION || 'v21.0';
+  return env.INSTAGRAM_GRAPH_VERSION || 'v25.0';
 }
 
 async function getAppSubscriptions({ appId, appSecret }, { env = process.env, fetchImpl = fetch } = {}) {

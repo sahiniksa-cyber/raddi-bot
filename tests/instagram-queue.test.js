@@ -41,3 +41,18 @@ test('explicit jobKey overrides derived id', async () => {
   assert.strictEqual(added[0].jobId, 'ig-conversation-7');
   assert.strictEqual(added[0].delay, 5000);
 });
+
+test('a completed incoming job id is removed before the same Meta delivery is re-enqueued', async () => {
+  let removed = 0;
+  let added = 0;
+  iq.__setQueuesForTest({
+    incomingInstagram: {
+      getJob: async () => ({ getState: async () => 'completed', remove: async () => { removed++; } }),
+      add: async () => { added++; },
+    },
+    outgoingInstagram: { add: async () => {} },
+  });
+  await iq.enqueueIncomingInstagram({ providerMessageId: 'mid.retry', userId: 'u1' });
+  assert.strictEqual(removed, 1);
+  assert.strictEqual(added, 1);
+});

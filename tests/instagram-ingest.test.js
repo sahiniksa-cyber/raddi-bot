@@ -115,16 +115,34 @@ test('ensureUsername is best-effort: returns null and never throws on failure', 
   });
 });
 
-test('ingestWebhookEntry treats duplicate mid (no insert row) as duplicate, no enqueue', async () => {
+test('ingestWebhookEntry re-enqueues a duplicate mid that is still queued after a prior Redis failure', async () => {
   let enqueued = 0;
   const database = {
     query: async (sql) => {
       if (sql.includes('INSERT INTO instagram_conversations')) return { rows: [{ id: 'conv1', ai_paused: false }] };
       if (sql.includes('INSERT INTO instagram_messages')) return { rows: [] }; // ON CONFLICT DO NOTHING
+      if (sql.includes('FROM instagram_messages') && sql.includes('provider_message_id')) {
+        return { rows: [{ id: 'msg-existing', conversation_id: 'conv1', status: 'queued_for_ai' }] };
+      }
       return { rows: [] };
     },
   };
   const r = await ingestWebhookEntry('u1', { participantId: 'C', mid: 'dup', text: 'hi', echo: false }, { database, enqueueAi: async () => { enqueued++; } });
-  assert.strictEqual(enqueued, 0);
+  assert.strictEqual(enqueued, 1);
   assert.strictEqual(r.duplicate, true);
+  assert.strictEqual(r.requeued, true);
+});
+
+test('ingestWebhookEntry marks a paused conversation message as ai_paused instead of leaving it stuck', async () => {
+  const updates = [];
+  const database = {
+    query: async (sql, params) => {
+      if (sql.includes('INSERT INTO instagram_conversations')) return { rows: [{ id: 'conv1', ai_paused: true }] };
+      if (sql.includes('INSERT INTO instagram_messages')) return { rows: [{ id: 'msg1' }] };
+      if (sql.includes("SET status='ai_paused'")) updates.push(params);
+      return { rows: [] };
+    },
+  };
+  await ingestWebhookEntry('u1', { participantId: 'C', mid: 'm', text: 'hi', echo: false }, { database, enqueueAi: async () => {} });
+  assert.deepStrictEqual(updates, [['msg1', 'u1']]);
 });

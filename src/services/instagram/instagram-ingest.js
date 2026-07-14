@@ -58,10 +58,39 @@ async function ingestWebhookEntry(userId, item, deps = {}) {
      RETURNING id`,
     [conversationId, userId, item.participantId, item.text, item.mid, JSON.stringify(item)],
   );
-  if (!inserted.rows[0]) return { duplicate: true };
+  if (!inserted.rows[0]) {
+    // A previous delivery may have stored the row and then failed while Redis
+    // was unavailable. Meta will retry the webhook, so re-enqueue only while
+    // the durable row is still waiting for AI. Without this recovery seam the
+    // duplicate webhook was acknowledged but the message stayed stuck forever.
+    const existing = await database.query(
+      `SELECT id, conversation_id, status FROM instagram_messages
+        WHERE user_id = $1 AND provider_message_id = $2`,
+      [userId, item.mid],
+    );
+    const row = existing.rows[0];
+    if (row && row.status === 'queued_for_ai' && !conv.rows[0].ai_paused) {
+      await enqueueAi({
+        userId,
+        conversationId: row.conversation_id,
+        messageId: row.id,
+        participantId: item.participantId,
+        text: item.text,
+        providerMessageId: item.mid,
+      });
+      return { duplicate: true, requeued: true, messageId: row.id, conversationId: row.conversation_id };
+    }
+    return { duplicate: true };
+  }
   const messageId = inserted.rows[0].id;
 
-  if (conv.rows[0].ai_paused) return { stored: true, aiPaused: true, messageId, conversationId };
+  if (conv.rows[0].ai_paused) {
+    await database.query(
+      `UPDATE instagram_messages SET status='ai_paused' WHERE id=$1 AND user_id=$2`,
+      [messageId, userId],
+    );
+    return { stored: true, aiPaused: true, messageId, conversationId };
+  }
 
   await enqueueAi(
     {
@@ -72,7 +101,10 @@ async function ingestWebhookEntry(userId, item, deps = {}) {
       text: item.text,
       providerMessageId: item.mid,
     },
-    { jobKey: `ig-conversation-${conversationId}` },
+    // The provider message id is the durable delivery id. A fixed
+    // conversation job id remains in BullMQ after completion and used to block
+    // every later DM in the same conversation.
+    {},
   );
 
   return { stored: true, messageId, conversationId };

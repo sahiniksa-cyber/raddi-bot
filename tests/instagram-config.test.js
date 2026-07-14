@@ -20,6 +20,21 @@ test('seedConfigFromWhatsapp copies bot_configs.config verbatim', () => {
   assert.strictEqual(seeded.botInstructions, 'كن ودود');
 });
 
+test('Instagram behavior config never copies plaintext AI keys from WhatsApp', () => {
+  const seeded = seedConfigFromWhatsapp({
+    storeName: 'متجري',
+    openaiApiKey: 'sk-secret',
+    openrouterApiKey: 'or-secret',
+    googleApiKey: 'g-secret',
+    anthropicApiKey: 'a-secret',
+  });
+  assert.strictEqual(seeded.storeName, 'متجري');
+  assert.strictEqual(seeded.openaiApiKey, undefined);
+  assert.strictEqual(seeded.openrouterApiKey, undefined);
+  assert.strictEqual(seeded.googleApiKey, undefined);
+  assert.strictEqual(seeded.anthropicApiKey, undefined);
+});
+
 test('seedConfigFromWhatsapp deep-clones so later edits never alias WhatsApp', () => {
   const wa = { replyStyle: { employeeName: 'محمد' } };
   const seeded = seedConfigFromWhatsapp(wa);

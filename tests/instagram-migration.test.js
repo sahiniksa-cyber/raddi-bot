@@ -27,6 +27,8 @@ test('migration declares all instagram_* tables idempotently', () => {
 
 test('instagram_messages dedup + conversation uniqueness indexes present', () => {
   assert.ok(initSrc.includes('idx_instagram_messages_user_provider_unique'));
+  assert.ok(initSrc.includes('idx_instagram_messages_user_idempotency_unique'));
+  assert.ok(initSrc.includes('ADD COLUMN IF NOT EXISTS idempotency_key TEXT'));
   assert.ok(initSrc.includes('idx_instagram_conversations_user_participant'));
 });
 

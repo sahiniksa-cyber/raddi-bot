@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('node:crypto');
 const { verifyInstagramSignature } = require('../services/instagram/instagram-signature');
 const defaultOauth = require('../services/instagram/instagram-oauth');
 const defaultAccounts = require('../services/instagram/instagram-accounts');
@@ -65,9 +66,7 @@ function createInstagramRoutes(deps = {}) {
     if (!sigOk) {
       return res.sendStatus(401);
     }
-    // Acknowledge immediately so a slow DB never times out Meta's delivery.
-    res.sendStatus(200);
-    if (!enabled()) return;
+    if (!enabled()) return res.sendStatus(200);
     const ts = () => new Date().toISOString();
     try {
       const body = JSON.parse(req.body.toString('utf8'));
@@ -101,8 +100,7 @@ function createInstagramRoutes(deps = {}) {
             console.error(`${ts()} [instagram-webhook] fallback lookup failed: ${e.message}`);
           }
           if (!userId) {
-            console.warn(`${ts()} [instagram-webhook] NO MATCHING ACCOUNT for igAccountId=${item.igAccountId} — message from ${item.participantId} dropped`);
-            continue;
+            throw new Error(`no_matching_instagram_account:${item.igAccountId}`);
           }
         } else {
           console.log(`${ts()} [instagram-webhook] igAccountId=${item.igAccountId} → user=${userId}; ingesting message from ${item.participantId}`);
@@ -113,20 +111,38 @@ function createInstagramRoutes(deps = {}) {
           await ingest.ensureUsername(userId, item.participantId).catch(() => {});
         }
       }
+      // Return success only after the message is durable in Postgres and its AI
+      // job is accepted by Redis. A non-2xx response makes Meta retry transient
+      // failures; acknowledging before this point used to lose DMs forever.
+      return res.sendStatus(200);
     } catch (err) {
       console.error(`${ts()} [instagram-webhook] ${err.message}`);
+      db.query(
+        "INSERT INTO instagram_logs (user_id, level, event_type, detail) VALUES (NULL, 'error', 'webhook_processing_failed', $1::jsonb)",
+        [JSON.stringify({ message: err.message })],
+      ).catch(() => {});
+      return res.status(503).json({ error: 'instagram_webhook_processing_failed' });
     }
   });
 
   // ── OAuth: start ──────────────────────────────────────────────────────────
   router.get('/api/instagram/connect', guard, requireAuth, (req, res) => {
-    const state = req.session && req.session.userId;
+    const state = crypto.randomBytes(32).toString('hex');
+    req.session.instagramOauthState = state;
     res.redirect(oauth.buildAuthorizeUrl(state, { env }));
   });
 
   // ── OAuth: callback ───────────────────────────────────────────────────────
   router.get('/instagram/auth/callback', guard, requireAuth, async (req, res, next) => {
     try {
+      const expectedState = String(req.session.instagramOauthState || '');
+      const actualState = String(req.query.state || '');
+      if (!expectedState || !actualState || expectedState.length !== actualState.length ||
+          !crypto.timingSafeEqual(Buffer.from(expectedState), Buffer.from(actualState))) {
+        return res.status(400).json({ error: 'invalid_oauth_state' });
+      }
+      delete req.session.instagramOauthState;
+      if (!req.query.code) return res.status(400).json({ error: 'missing_oauth_code' });
       const short = await oauth.exchangeCodeForToken(req.query.code, { env });
       const long = await oauth.exchangeForLongLived(short.accessToken, { env });
       let profile = {};
@@ -223,11 +239,23 @@ function createInstagramRoutes(deps = {}) {
 
       // 2) App level (the APP itself subscribed to the instagram object's messages
       //    field). Needs app credentials — present in the server env.
-      const appId = env.INSTAGRAM_APP_ID;
-      const appSecret = env.INSTAGRAM_APP_SECRET;
+      // Instagram Login and the parent Meta app are different applications in
+      // this deployment. graph.facebook.com requires the PARENT Meta app
+      // credentials, never INSTAGRAM_APP_ID/SECRET used for OAuth and HMAC.
+      const appId = env.INSTAGRAM_META_APP_ID;
+      const appSecret = env.INSTAGRAM_META_APP_SECRET;
       const verifyToken = env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN;
       if (appId && appSecret && verifyToken) {
-        const callbackUrl = `https://${req.get('host')}/instagram/webhook`;
+        const configuredCallback = env.INSTAGRAM_WEBHOOK_CALLBACK_URL ||
+          (env.APP_BASE_URL ? `${String(env.APP_BASE_URL).replace(/\/$/, '')}/instagram/webhook` : '');
+        let callbackUrl = '';
+        try {
+          const parsed = new URL(configuredCallback);
+          if (parsed.protocol === 'https:') callbackUrl = parsed.toString();
+        } catch (_) { /* surfaced below */ }
+        if (!callbackUrl) {
+          out.appError = 'اضبط INSTAGRAM_WEBHOOK_CALLBACK_URL بعنوان HTTPS ثابت';
+        } else {
         out.callbackUrl = callbackUrl;
         try {
           await graph.subscribeAppToInstagram({ appId, appSecret, callbackUrl, verifyToken, fields: 'messages' }, { env });
@@ -236,8 +264,9 @@ function createInstagramRoutes(deps = {}) {
           out.appFields = appAfter.fields;
           out.appActive = appAfter.active;
         } catch (e) { out.appError = e.message; }
+        }
       } else {
-        out.appError = 'مفاتيح التطبيق ناقصة في الخادم (INSTAGRAM_APP_ID / SECRET / WEBHOOK_VERIFY_TOKEN)';
+        out.appError = 'فحص مستوى التطبيق يحتاج INSTAGRAM_META_APP_ID / INSTAGRAM_META_APP_SECRET منفصلين عن مفاتيح Instagram Login';
       }
 
       out.hasMessages = Boolean(out.accountHasMessages && out.appHasMessages);
@@ -334,10 +363,14 @@ function createInstagramRoutes(deps = {}) {
       const text = ((req.body || {}).text || '').trim();
       if (!text) return res.status(400).json({ error: 'empty_text' });
       const conv = await db.query(
-        `SELECT participant_id FROM instagram_conversations WHERE id = $1 AND user_id = $2`,
+        `SELECT participant_id, window_expires_at > NOW() AS window_open
+           FROM instagram_conversations WHERE id = $1 AND user_id = $2`,
         [req.params.id, req.session.userId],
       );
       if (!conv.rows[0]) return res.status(404).json({ error: 'not_found' });
+      if (!conv.rows[0].window_open) {
+        return res.status(409).json({ error: 'instagram_window_closed' });
+      }
       const participantId = conv.rows[0].participant_id;
       const stored = await db.query(
         `INSERT INTO instagram_messages

@@ -1,7 +1,7 @@
 'use strict';
 
 const bcrypt = require('bcryptjs');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('node:crypto');
 
 const db = require('../db/client');
 const { consumePreActivationForUser } = require('../services/admin/pre-activations');
@@ -104,7 +104,7 @@ function createAuthController() {
           );
         }
         const hash = await bcrypt.hash(password, 12);
-        const id = uuidv4();
+        const id = randomUUID();
         const result = await db.query(
           `INSERT INTO users (id, email, name, phone, password_hash, role, email_verified)
            VALUES ($1, $2, $3, $4, $5, $6, TRUE)

@@ -92,9 +92,9 @@ async function igResubscribe() {
         kind = 'ok';
         lines.push('');
         lines.push('✅ تفعيل كامل — جرّب ترسل DM جديد الحين، المفروض يرد خلال دقيقة.');
-      } else if (d.appError && /review|permission|advanced|#10|#200|#3/i.test(d.appError)) {
+      } else if (d.appError) {
         lines.push('');
-        lines.push('⚠️ يبدو إن التطبيق يحتاج App Review / Advanced Access لصلاحية الرسائل من ميتا — هذا إجراء في لوحة ميتا. صوّر لي هذا النص.');
+        lines.push('⚠️ تعذّر التحقق من اشتراك التطبيق. هذا لا يثبت أن App Review مطلوب؛ تأكد أولاً من مفاتيح تطبيق Meta الأب ومن إعداد Webhook في لوحة Meta.');
       } else {
         lines.push('');
         lines.push('صوّر لي هذا النص كامل عشان أكمل.');
@@ -154,11 +154,14 @@ async function igSend(id) {
   const text = input ? input.value.trim() : '';
   if (!text) return;
   try {
-    await fetch('/api/instagram/conversations/' + encodeURIComponent(id) + '/send', {
+    const r = await fetch('/api/instagram/conversations/' + encodeURIComponent(id) + '/send', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
     });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.message || d.error || 'send_failed');
+    if (input) input.value = '';
     igOpen(id);
-  } catch (_) { igToast('❌ تعذر الإرسال', true); }
+  } catch (e) { igToast('❌ تعذر الإرسال: ' + (e && e.message ? e.message : ''), true); }
 }
 
 function escapeHtmlIg(s) {
