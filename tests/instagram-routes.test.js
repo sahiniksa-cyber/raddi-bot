@@ -17,7 +17,10 @@ function makeApp(env, extraDeps = {}) {
     if (req.path === '/instagram/webhook') return next();
     return express.json()(req, res, next);
   });
-  app.use(createInstagramRoutes({ env, ...extraDeps }));
+  // Default DB stub so route-level diagnostic inserts (e.g. webhook breadcrumbs)
+  // never touch a real database in unit tests. Overridable via extraDeps.database.
+  const database = extraDeps.database || { query: async () => ({ rows: [], rowCount: 0 }) };
+  app.use(createInstagramRoutes({ env, ...extraDeps, database }));
   return app;
 }
 
