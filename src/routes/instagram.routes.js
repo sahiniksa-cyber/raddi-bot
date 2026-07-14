@@ -55,7 +55,14 @@ function createInstagramRoutes(deps = {}) {
   // ── Webhook receive (POST) — raw body for HMAC (mirrors Moyasar) ───────────
   router.post('/instagram/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['x-hub-signature-256'];
-    if (!verifyInstagramSignature(req.body, sig, env.INSTAGRAM_APP_SECRET)) {
+    const sigOk = verifyInstagramSignature(req.body, sig, env.INSTAGRAM_APP_SECRET);
+    // DB breadcrumb (fire-and-forget): proves whether Meta is POSTing at all and
+    // whether the HMAC signature passes — visible via the DB without Railway logs.
+    db.query(
+      "INSERT INTO instagram_logs (user_id, level, event_type, detail) VALUES (NULL, $1, 'webhook_hit', $2::jsonb)",
+      [sigOk ? 'info' : 'warn', JSON.stringify({ sigPresent: Boolean(sig), sigOk, bodyLen: req.body ? req.body.length : 0 })],
+    ).catch(() => {});
+    if (!sigOk) {
       return res.sendStatus(401);
     }
     // Acknowledge immediately so a slow DB never times out Meta's delivery.
@@ -66,8 +73,13 @@ function createInstagramRoutes(deps = {}) {
       const body = JSON.parse(req.body.toString('utf8'));
       const items = ingest.extractMessages(body);
       const inbound = items.filter((it) => !it.echo && it.text);
+      const accountIds = [...new Set(items.map((i) => i.igAccountId))];
       // Always log receipt so Railway logs prove whether Meta is delivering at all.
-      console.log(`${ts()} [instagram-webhook] received: ${items.length} event(s), ${inbound.length} inbound text — ids=${[...new Set(items.map((i) => i.igAccountId))].join(',')}`);
+      console.log(`${ts()} [instagram-webhook] received: ${items.length} event(s), ${inbound.length} inbound text — ids=${accountIds.join(',')}`);
+      db.query(
+        "INSERT INTO instagram_logs (user_id, level, event_type, detail) VALUES (NULL, 'info', 'webhook_parsed', $1::jsonb)",
+        [JSON.stringify({ itemCount: items.length, inboundCount: inbound.length, accountIds })],
+      ).catch(() => {});
       for (const item of items) {
         if (item.echo || !item.text) continue;
         let userId = await accounts.findUserIdByIgAccount(item.igAccountId, { database: db });
