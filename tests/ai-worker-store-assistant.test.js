@@ -66,3 +66,16 @@ test('storeAssistantMessage includes the job id in the provider_message_id for t
 
   assert.match(database.inserts[0].params[4], /^ai-worker:conversation-conv-9:/);
 });
+
+test('storeAssistantMessage persists the compact quality-gate audit with the outbound row', async () => {
+  const database = makeDatabase();
+  await storeAssistantMessage({
+    userId: 'user-1', conversationId: 'conv-10', sender: 's', reply: 'r',
+    jobId: 'conversation-conv-10', database,
+    qualityGateAudit: { status: 'reviewed', decision: 'repair', violations: ['unsupported_fact'], intent: 'سعر' },
+  });
+  const rawPayload = JSON.parse(database.inserts[0].params[5]);
+  assert.equal(rawPayload.qualityGate.status, 'reviewed');
+  assert.equal(rawPayload.qualityGate.decision, 'repair');
+  assert.deepEqual(rawPayload.qualityGate.violations, ['unsupported_fact']);
+});

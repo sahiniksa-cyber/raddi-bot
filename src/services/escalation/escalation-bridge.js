@@ -108,7 +108,13 @@ async function rephraseTeamAnswerWithAI({ userId, teamAnswer, deps = {} }) {
     },
   });
   const reply = String(
-    await ai.getReply([{ role: 'user', content: buildRephraseInstruction(teamAnswer) }]) || '',
+    await ai.getReply(
+      [{ role: 'user', content: buildRephraseInstruction(teamAnswer) }],
+      // This path is rephrasing an already-approved human answer, not creating
+      // a new customer-service answer from store knowledge. Reviewing it as if
+      // it were a customer question could incorrectly discard the human fact.
+      { qualityGate: false },
+    ) || '',
   ).trim();
   if (!reply) throw new Error('empty rephrase');
   return reply;

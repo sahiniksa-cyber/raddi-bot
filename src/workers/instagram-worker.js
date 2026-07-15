@@ -29,6 +29,7 @@ const { checkMessageQuota, decrementMessageQuota } = require('../services/billin
 const { logInstagram } = require('../services/instagram/instagram-logs');
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { stripEscalationMarkers } = require('./escalation-routing');
+const { compactQualityGateAudit } = require('../services/ai/reply-quality-gate');
 
 const WORKER_NAME = 'instagram-worker';
 
@@ -145,7 +146,11 @@ async function processIncoming(job, deps = {}) {
        ON CONFLICT (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL
        DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
        RETURNING id, content, status`,
-      [conversationId, userId, participantId, reply, replyKey, JSON.stringify({ kind: 'ai_reply', sourceMessageIds: pendingIds })],
+      [conversationId, userId, participantId, reply, replyKey, JSON.stringify({
+        kind: 'ai_reply',
+        sourceMessageIds: pendingIds,
+        qualityGate: compactQualityGateAudit(ai.lastDebug?.qualityGate),
+      })],
     );
   }
   const replyRow = stored.rows[0];
