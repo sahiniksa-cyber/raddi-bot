@@ -50,6 +50,17 @@ test('ai mode leaves the text untouched (the model decided)', () => {
   assert.equal(applyLineBreakFormat(t, { replyStyle: { lineBreakMode: 'ai' } }), t);
 });
 
+test('ai mode repairs a long single block when the model ignored the line setting', () => {
+  const t = 'المنتج متوفر. السعر 99 ريال. التوصيل يتم بعد تأكيد الطلب.';
+  const out = applyLineBreakFormat(t, { replyStyle: { lineBreakMode: 'ai', lineBreakWords: 8 } });
+  assert.match(out, /\n/);
+  assert.match(out, /99 ريال/);
+});
+
+test('ai mode keeps a genuinely short reply on one natural line', () => {
+  assert.equal(applyLineBreakFormat('متوفر حياك الله', { replyStyle: { lineBreakMode: 'ai' } }), 'متوفر حياك الله');
+});
+
 // ── sentence mode (deterministic) ────────────────────────────────────────
 test('sentence mode puts each sentence on its own line', () => {
   const out = applyLineBreakFormat('جملة أولى. جملة ثانية؟ جملة ثالثة!', { replyStyle: { lineBreakMode: 'sentence' } });
@@ -78,6 +89,12 @@ test('topic mode normalises any blank-line run to exactly count newlines', () =>
   const out = applyLineBreakFormat('الموضوع الأول\n\n\n\nالموضوع الثاني', { replyStyle: { lineBreakMode: 'topic', lineBreakCount: 2 } });
   assert.equal(out, 'الموضوع الأول\n\nالموضوع الثاني');
 });
+
+test('topic mode creates topic gaps when the model returned one long block', () => {
+  const out = applyLineBreakFormat('السعر 99 ريال. التوصيل خلال يومين.', { replyStyle: { lineBreakMode: 'topic', lineBreakCount: 2 } });
+  assert.match(out, /\n\n/);
+});
+
 
 // ── protection: the escalation marker must never be split ─────────────────
 test('does not break the escalation marker even in sentence mode', () => {

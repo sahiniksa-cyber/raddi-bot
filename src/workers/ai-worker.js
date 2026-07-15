@@ -28,6 +28,7 @@ const { checkMessageQuota } = require('../services/billing/message-quota');
 const { getPlatformSetting } = require('../services/platform/platform-settings');
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
+const { compactQualityGateAudit } = require('../services/ai/reply-quality-gate');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
 const {
@@ -425,7 +426,7 @@ async function markConversationMessagesMutedSkipped({ database = db, userId, con
   return { retired: result.rowCount || 0 };
 }
 
-async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, database = db }) {
+async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, database = db }) {
   // provider_message_id must be unique per reply (the UNIQUE constraint is on
   // (user_id, provider_message_id)). The jobId is shared across all replies for
   // the same conversation (BullMQ uses conversation-${id} as the job key for
@@ -442,7 +443,11 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
       sender,
       reply,
       providerMessageId,
-      JSON.stringify({ source: WORKER_NAME, jobId }),
+      JSON.stringify({
+        source: WORKER_NAME,
+        jobId,
+        qualityGate: compactQualityGateAudit(qualityGateAudit),
+      }),
     ],
   );
 
@@ -998,6 +1003,7 @@ async function processAiReply(job) {
       sender: conversation.sender,
       reply: customerReply,
       jobId: job.id,
+      qualityGateAudit: ai.lastDebug?.qualityGate,
     });
     const replyDelayMs = resolveReplyDelayMs(config);
 
