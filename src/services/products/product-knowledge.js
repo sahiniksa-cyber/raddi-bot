@@ -195,4 +195,5 @@ module.exports = {
   findRelevantProducts,
   normalizeProductText,
   parsePromptProducts,
+  scoreProduct,
 };

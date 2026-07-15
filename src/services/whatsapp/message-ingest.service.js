@@ -155,13 +155,15 @@ function ownerPauseExpiry(minutes, nowMs) {
 class MessageIngestService {
   constructor({ logger = console, queue = { enqueueAiReply }, database = db, bridge = escalationBridge,
                 configLoader = defaultConfigLoader,
-                promptEdit = null, enqueueOutgoing = enqueueOutgoingWhatsapp, buildPromptEditAiClient = null } = {}) {
+                promptEdit = null, enqueueOutgoing = enqueueOutgoingWhatsapp, buildPromptEditAiClient = null,
+                campaignSegmentation = null } = {}) {
     this.logger = logger;
     this.queue = queue;
     this.db = database;
     this.bridge = bridge;
     this.configLoader = configLoader;
     this.enqueueOutgoing = enqueueOutgoing;
+    this.campaignSegmentation = campaignSegmentation;
     this.buildPromptEditAiClient = buildPromptEditAiClient
       || ((userId) => defaultBuildPromptEditAiClient(userId, logger));
     // Injectable handler: a function ({ userId, msg }) => resultObject|null.
@@ -330,6 +332,19 @@ class MessageIngestService {
       });
       return { conversationId, messageId, phoneNumber: storedPhoneNumber };
     });
+
+    // Campaign classification is a side channel on its own queue. It must
+    // never slow down or break the normal customer-reply path. The worker reads
+    // the complete recent conversation so a later "تم الطلب" message can move
+    // an earlier product-interest row automatically.
+    if (typeof this.campaignSegmentation === 'function') {
+      Promise.resolve(this.campaignSegmentation({
+        userId,
+        conversationId: saved.conversationId,
+        sender,
+        messageId: saved.messageId,
+      })).catch(error => this.logger.warn?.('campaign-segmentation', `enqueue failed: ${error.message}`));
+    }
 
     // Resolve the per-merchant message-grouping window (debounce) AND the
     // do-not-reply list from the same config read. Fail-open: any config error

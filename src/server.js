@@ -42,6 +42,7 @@ const { createHealthRoutes } = require('./routes/health.routes');
 const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { createInstagramRoutes } = require('./routes/instagram.routes');
+const { createCampaignRoutes } = require('./routes/campaign.routes');
 const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
 const { getBillingSettings } = require('./services/billing/billing-settings');
@@ -55,6 +56,8 @@ const {
   buildLearnStyleRequest,
 } = require('./services/ai/meta-prompts');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
+const { createCampaignWorker } = require('./workers/campaign-worker');
+const { closeCampaignQueue } = require('./queues/campaign-queue');
 const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
 const { getQueues } = require('./queues/message-queue');
 const { HealthMonitor, setActiveMonitor } = require('./services/monitoring/health-monitor');
@@ -271,6 +274,7 @@ function createApp() {
     '/api/send-message',
     '/api/clear',
     '/api/bot/',
+    '/api/campaigns',
   ];
   const CSRF_SKIP_PATHS = new Set([
     // Add explicit webhook paths here, e.g. '/api/billing/webhook/moyasar'
@@ -333,6 +337,7 @@ function createApp() {
   app.use('/fonts', express.static(path.join(process.cwd(), 'dashboard/fonts')));
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
   app.get('/instagram.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'instagram.js')));
+  app.get('/campaigns.js', requireAuth, (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'campaigns.js')));
   // Public legal pages required by Meta to publish the app. No auth: they must
   // be reachable by Meta's reviewers and by end users.
   app.get('/privacy', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'privacy.html')));
@@ -364,6 +369,7 @@ function createApp() {
   app.use(createDashboardRoutes(routeDeps));
   app.use('/api', createBillingApiGate({ settings: billingSettings }));
   app.use(createQueueRoutes(routeDeps));
+  app.use(createCampaignRoutes({ ...routeDeps, database: db }));
   // Instagram module (isolated; every route self-guards on INSTAGRAM_ENABLED).
   // The webhook is in RAW_BODY_PATHS above and mounts its own express.raw.
   app.use(createInstagramRoutes(routeDeps));
@@ -923,6 +929,7 @@ async function main() {
   const app = createStartupApp(startupState);
   const server = app.listen(PORT, () => console.log(`${new Date().toISOString()} [server] Jwab health listening on port ${PORT}`));
   let outgoingWorker = null;
+  let campaignWorker = null;
   let aiRecoveryTimer = null;
   let healthMonitor = null;
 
@@ -947,6 +954,8 @@ async function main() {
       new Promise(resolve => setTimeout(resolve, releaseDeadlineMs)),
     ]).catch(() => {});
     await outgoingWorker?.close?.().catch(() => {});
+    await campaignWorker?.close?.().catch(() => {});
+    await closeCampaignQueue().catch(() => {});
     await redis.closeShared().catch(() => {});
     await db.close().catch(() => {});
     process.exit(exitCode);
@@ -984,6 +993,17 @@ async function main() {
     } catch (err) {
       console.error(`${new Date().toISOString()} [server] outgoing worker failed to start: ${err.message}`);
       // Don't crash — the web server should still serve healthchecks and the dashboard
+    }
+  }
+
+  // Campaigns use a dedicated single-concurrency worker. This isolation keeps
+  // bulk sends from consuming the normal customer-reply queue.
+  if (process.env.CAMPAIGN_WORKER_DISABLED !== 'true') {
+    try {
+      campaignWorker = createCampaignWorker({ getUserBot });
+      console.log(`${new Date().toISOString()} [server] campaign worker started`);
+    } catch (err) {
+      console.error(`${new Date().toISOString()} [server] campaign worker failed to start: ${err.message}`);
     }
   }
 

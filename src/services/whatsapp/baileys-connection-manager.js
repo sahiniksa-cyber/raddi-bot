@@ -16,6 +16,7 @@ const {
 const db = require('../../db/client');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
+const { enqueueCampaignSegmentation } = require('../../queues/campaign-queue');
 const { isOriginalMessageStale } = require('../../../lib/message-staleness');
 const { usePostgresBaileysAuthState, BaileysPostgresAuthState } = require('./baileys-postgres-auth');
 
@@ -149,12 +150,16 @@ function timestampToMs(timestamp) {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
+function createDefaultIngestService(logger) {
+  return new MessageIngestService({ logger, campaignSegmentation: enqueueCampaignSegmentation });
+}
+
 class BaileysConnectionManager extends EventEmitter {
   constructor({
     userId,
     dataDir,
     logger = console,
-    ingestService = new MessageIngestService({ logger }),
+    ingestService = createDefaultIngestService(logger),
     database = db,
   }) {
     super();
@@ -309,7 +314,12 @@ class BaileysConnectionManager extends EventEmitter {
       // key.id (used by getMessage on retry receipts to short-circuit the
       // "Bad MAC" cascade).
       this.client = {
-        sendMessage: async (target, text) => sock.sendMessage(normalizeOutboundJid(target), { text: String(text || '') }),
+        sendMessage: async (target, content) => sock.sendMessage(
+          normalizeOutboundJid(target),
+          content && typeof content === 'object' && !Buffer.isBuffer(content)
+            ? content
+            : { text: String(content || '') },
+        ),
         sendPresenceUpdate: async (state, target) => sock.sendPresenceUpdate(state, normalizeOutboundJid(target)),
         getState: async () => (this.ready ? 'CONNECTED' : this.status.toUpperCase()),
       };
