@@ -61,7 +61,11 @@ test('instagram queues are separate names from WhatsApp queues', () => {
 
 test('instagram migration tables do not FK into whatsapp tables', () => {
   const init = read('src/db/migrations/init.js');
-  const block = init.slice(init.indexOf('Instagram DM module'));
+  const start = init.indexOf('Instagram DM module');
+  // Stop at the next isolated module. Slicing to EOF made this test attribute
+  // unrelated campaign-table foreign keys to Instagram.
+  const nextModule = init.indexOf('Campaign center', start);
+  const block = init.slice(start, nextModule === -1 ? undefined : nextModule);
   assert.ok(!block.includes('REFERENCES whatsapp_sessions'));
   assert.ok(!block.includes('REFERENCES conversations'));
   assert.ok(!block.includes('REFERENCES messages'));

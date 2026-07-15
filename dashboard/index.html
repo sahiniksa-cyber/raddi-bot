@@ -859,6 +859,7 @@ body{background-attachment:scroll}
     <button class="tab" onclick="goTab('settings')" id="tab-settings"><i data-lucide="settings"></i> الإعدادات</button>
     <button class="tab" onclick="goTab('train')" id="tab-train"><i data-lucide="graduation-cap"></i> دربني</button>
     <button class="tab" onclick="goTab('conversations')" id="tab-conversations"><i data-lucide="message-circle"></i> المحادثات</button>
+    <button class="tab" onclick="goTab('campaigns')" id="tab-campaigns"><i data-lucide="send"></i> الحملات</button>
     <button class="tab" onclick="goTab('pricing')" id="tab-pricing"><i data-lucide="badge-check"></i> التفعيل</button>
     <button class="tab" onclick="goTab('instagram')" id="tab-instagram" style="display:none"><i data-lucide="instagram"></i> إنستقرام</button>
     <button class="tab" onclick="goTab('account')" id="tab-account"><i data-lucide="user"></i> حسابي</button>
@@ -1625,6 +1626,145 @@ body{background-attachment:scroll}
 </div>
 
 <!-- ══ ACCOUNT VIEW ══ -->
+<div class="view" id="view-campaigns">
+<style>
+  .campaign-shell{max-width:1100px;margin:0 auto;padding:24px 16px;direction:rtl}
+  .campaign-hero{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
+  .campaign-hero h2{margin:0 0 5px;font-size:24px;color:var(--text)}
+  .campaign-layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:start}
+  .campaign-steps{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px;position:sticky;top:16px}
+  .campaign-step{width:100%;display:flex;gap:10px;align-items:center;text-align:right;border:0;background:transparent;border-radius:11px;padding:12px;color:var(--text-soft);font:700 13px var(--font);cursor:pointer}
+  .campaign-step span{width:27px;height:27px;display:grid;place-items:center;border-radius:50%;background:#f1f5f9}
+  .campaign-step.active{color:var(--green2);background:var(--green-bg)}
+  .campaign-step.active span,.campaign-step.visited span{background:var(--green);color:#fff}
+  .campaign-card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:20px}
+  .campaign-page{display:none}.campaign-page.active{display:block}
+  .campaign-title{font-size:18px;font-weight:900;margin:0 0 6px;color:var(--text)}
+  .campaign-sub{font-size:13px;color:var(--text-soft);margin:0 0 18px;line-height:1.8}
+  .campaign-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .campaign-choice{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:12px;padding:13px;margin-bottom:9px;cursor:pointer}
+  .campaign-choice input{width:18px;height:18px;margin-top:2px}
+  .campaign-actions{display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
+  .campaign-btn{border:0;border-radius:10px;padding:11px 17px;font:800 13px var(--font);cursor:pointer;background:var(--green);color:#fff}
+  .campaign-btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border)}
+  .campaign-btn.danger{background:#b91c1c}.campaign-btn:disabled{opacity:.5;cursor:not-allowed}
+  .campaign-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
+  .campaign-metric{padding:13px;border:1px solid var(--border);border-radius:12px;text-align:center;background:#f8fafc}
+  .campaign-metric strong{display:block;font-size:22px;color:var(--text)}
+  .campaign-note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:12px;border-radius:11px;font-size:12.5px;line-height:1.7;margin:12px 0}
+  .campaign-summary{white-space:pre-wrap;background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;line-height:1.8;font-size:13px}
+  .campaign-keywords{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}
+  .campaign-keyword{display:inline-flex;align-items:center;gap:7px;background:var(--green-bg);color:var(--green2);border:1px solid #a7f3d0;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800}
+  .campaign-keyword button{border:0;background:transparent;color:inherit;cursor:pointer;font-size:16px;line-height:1;padding:0}
+  .campaign-preview-row{padding:10px;border-bottom:1px solid var(--border);line-height:1.65}
+  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:145px}.campaign-grid,.campaign-metrics{grid-template-columns:1fr}.campaign-hero{align-items:flex-start;flex-direction:column}}
+</style>
+<div class="campaign-shell">
+  <div class="campaign-hero">
+    <div><h2>الحملات الإعلانية</h2><div class="hint">أنشئ جمهوراً دقيقاً، راجع الرسالة، ثم اعتمد الإرسال بنفسك.</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><select id="campaignPicker" onchange="campaignOpen(this.value)" style="min-width:210px"><option value="">الحملات المحفوظة</option></select><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
+  </div>
+  <div id="campaignFlash" style="display:none;margin-bottom:12px;padding:12px;border-radius:11px"></div>
+  <div class="campaign-layout">
+    <aside class="campaign-steps">
+      <button class="campaign-step active" data-campaign-step="audience" onclick="campaignGoStep('audience')"><span>1</span> الجمهور</button>
+      <button class="campaign-step" data-campaign-step="content" onclick="campaignGoStep('content')"><span>2</span> المحتوى</button>
+      <button class="campaign-step" data-campaign-step="timing" onclick="campaignGoStep('timing')"><span>3</span> التوقيت</button>
+      <button class="campaign-step" data-campaign-step="review" onclick="campaignGoStep('review')"><span>4</span> المراجعة والاعتماد</button>
+    </aside>
+    <main class="campaign-card">
+      <section class="campaign-page active" data-campaign-page="audience">
+        <h3 class="campaign-title">من تريد أن تصله الحملة؟</h3>
+        <p class="campaign-sub">التحديد الذكي يعتمد على محادثات العميل والدليل الموجود فيها، ولا يعتبر الطلب مؤكداً بلا رقم طلب واضح.</p>
+        <div class="campaign-grid">
+          <div><label>اسم الحملة</label><input id="campaignName" maxlength="120" placeholder="مثال: متابعة المهتمين بعرض الصيف"></div>
+          <div><label>هدف الحملة</label><input id="campaignGoal" maxlength="500" placeholder="وصف داخلي اختياري"></div>
+        </div>
+        <div class="campaign-metrics">
+          <div class="campaign-metric"><strong id="campaignInterestedCount">0</strong>مهتم بلا طلب مؤكد</div>
+          <div class="campaign-metric"><strong id="campaignOrderedCount">0</strong>طلب مؤكد</div>
+          <div class="campaign-metric"><strong id="campaignVerifyCount">0</strong>يحتاج تحقق</div>
+        </div>
+        <label class="campaign-choice"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">كل من لديه محادثة محفوظة، مع الأرقام المستوردة واليدوية.</div></div></label>
+        <label class="campaign-choice"><input type="radio" name="campaignSource" value="smart" checked><div><b>التحديد الذكي</b><div class="hint">اختر حالات العملاء والمنتج والفترة.</div></div></label>
+        <label class="campaign-choice"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار العملاء من كلمات البحث</b><div class="hint">يبحث داخل رسائل العملاء الواردة فقط، ويختار كل عميل ظهرت لديه أي كلمة من الكلمات.</div></div></label>
+        <div id="campaignKeywordOptions" hidden style="padding:4px 12px 14px">
+          <label>كلمات البحث</label>
+          <input id="campaignKeywordInput" maxlength="120" placeholder="اكتب كلمة مثل اسم المنتج ثم اضغط Enter">
+          <div class="hint" style="margin-top:6px">بعد كل كلمة اضغط Enter، ثم اكتب الكلمة التالية. يمكن إضافة حتى 50 كلمة، وتُحذف النتائج المكررة لنفس العميل.</div>
+          <div id="campaignKeywordTags" class="campaign-keywords"></div>
+          <button class="campaign-btn secondary" onclick="campaignPreviewKeywords()">تحديد العملاء ومعاينة النتائج</button>
+          <div id="campaignKeywordPreview" class="campaign-summary" style="display:none;margin-top:10px;max-height:340px;overflow:auto"></div>
+        </div>
+        <div id="campaignSmartOptions" style="padding:4px 12px 12px">
+          <div class="campaign-grid">
+            <label class="campaign-choice"><input type="checkbox" class="campaignState" value="interested_unverified" checked><div><b>مهتم ولم يظهر طلب مؤكد</b></div></label>
+            <label class="campaign-choice"><input type="checkbox" class="campaignState" value="ordered_confirmed"><div><b>طلب مؤكد</b></div></label>
+            <label class="campaign-choice"><input type="checkbox" class="campaignState" value="needs_verification"><div><b>يحتاج تحقق</b></div></label>
+          </div>
+          <div class="campaign-grid"><div><label>المنتج</label><select id="campaignProduct"><option value="">كل المنتجات</option></select></div><div><label>من تاريخ</label><input id="campaignDateFrom" type="date"></div><div><label>إلى تاريخ</label><input id="campaignDateTo" type="date"></div></div>
+          <button class="campaign-btn secondary" style="margin-top:10px" onclick="campaignAnalyze()">تحليل أحدث المحادثات</button>
+          <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
+            <a href="/api/campaigns/smart/export.xlsx" class="campaign-btn secondary" style="text-decoration:none">Excel شامل</a>
+            <a href="/api/campaigns/smart/export/interested_unverified.xlsx" class="campaign-btn secondary" style="text-decoration:none">ملف المهتمين</a>
+            <a href="/api/campaigns/smart/export/ordered_confirmed.xlsx" class="campaign-btn secondary" style="text-decoration:none">ملف الطلبات</a>
+            <a href="/api/campaigns/smart/export/needs_verification.xlsx" class="campaign-btn secondary" style="text-decoration:none">ملف يحتاج تحقق</a>
+          </div>
+          <div class="campaign-note">قاعدة البيانات هي النسخة المعتمدة. ملفات Excel تُنشأ لحظة تحميلها، لذلك يظهر فيها أي انتقال أو تعديل مباشرة ولا تبقى نسخة قديمة.</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:14px"><b>إدارة تصنيفات العملاء</b><button class="campaign-btn secondary" onclick="campaignLoadSignals()">تحديث القائمة</button></div>
+          <div id="campaignSignalTable" style="margin-top:9px;max-height:430px;overflow:auto"><div class="hint">جارٍ تحميل التصنيفات...</div></div>
+        </div>
+        <label class="campaign-choice"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل في فترة معينة</b><div class="hint">يستخدم تاريخ آخر رسالة، وحدد الفترة في حقول التاريخ أعلاه.</div></div></label>
+        <label class="campaign-choice"><input type="radio" name="campaignSource" value="contacts"><div><b>قائمة خارجية أو أرقام يدوية</b><div class="hint">يدعم CSV وExcel، ويمكنك لصق أرقام متعددة.</div></div></label>
+        <div style="padding:4px 12px">
+          <label>الأرقام (رقم في كل سطر)</label><textarea id="campaignNumbers" rows="5" dir="ltr" placeholder="9665xxxxxxxx&#10;05xxxxxxxx"></textarea>
+          <button class="campaign-btn secondary" style="margin-top:8px" onclick="campaignAddNumbers()">إضافة الأرقام</button>
+          <div style="margin-top:12px"><label>استيراد ملف</label><input id="campaignImportFile" type="file" accept=".csv,.xlsx"></div>
+          <button class="campaign-btn secondary" style="margin-top:8px" onclick="campaignImportContacts()">استيراد القائمة</button>
+        </div>
+        <div class="campaign-actions"><button class="campaign-btn" onclick="campaignSaveAndNext('content')">حفظ والمتابعة</button></div>
+      </section>
+
+      <section class="campaign-page" data-campaign-page="content">
+        <h3 class="campaign-title">محتوى الحملة</h3>
+        <p class="campaign-sub">اكتب الرسالة بأسطر واضحة، وأضف أكثر من صورة أو فيديو إذا احتجت. تستطيع إضافة روابط كاملة تبدأ بـ https:// وستُحفظ داخل النص كما هي.</p>
+        <label>نص الرسالة</label><textarea id="campaignMessage" rows="9" maxlength="10000" placeholder="اكتب الرسالة هنا..."></textarea>
+        <div style="margin-top:14px"><label>الصور والفيديوهات (حتى 10 عناصر)</label><input id="campaignMedia" type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"></div>
+        <button class="campaign-btn secondary" style="margin-top:9px" onclick="campaignUploadMedia()">رفع العناصر المختارة</button>
+        <div id="campaignMediaList" style="margin-top:12px"></div>
+        <div class="campaign-actions"><button class="campaign-btn secondary" onclick="campaignGoStep('audience')">السابق</button><button class="campaign-btn" onclick="campaignSaveAndNext('timing')">حفظ والمتابعة</button></div>
+      </section>
+
+      <section class="campaign-page" data-campaign-page="timing">
+        <h3 class="campaign-title">التوقيت والفاصل</h3>
+        <p class="campaign-sub">يتم اختيار فاصل عشوائي بين الحد الأدنى والأعلى، ولا تعمل الحملة داخل طابور ردود العملاء.</p>
+        <div class="campaign-grid"><div><label>أقل فاصل بالثواني</label><input id="campaignIntervalMin" type="number" min="30" max="3600" value="30"></div><div><label>أعلى فاصل بالثواني</label><input id="campaignIntervalMax" type="number" min="30" max="3600" value="60"></div></div>
+        <div class="campaign-note">لتقليل مخاطر الإرسال السريع، المنصة لا تقبل فاصلاً أقل من 30 ثانية حتى لو أُرسل رقم أقل عبر الواجهة البرمجية. هذا يقلل المخاطر لكنه لا يضمن منع قيود واتساب.</div>
+        <div style="margin-top:12px"><label>موعد اختياري</label><input id="campaignScheduledAt" type="datetime-local"></div>
+        <div class="campaign-note">لن يبدأ أي إرسال من هذه الصفحة. يجب الانتقال للمراجعة، إنشاء نسخة اعتماد، ثم الضغط على «أوافق وأعتمد»، وبعدها الضغط على «بدء الإرسال».</div>
+        <div class="campaign-actions"><button class="campaign-btn secondary" onclick="campaignGoStep('content')">السابق</button><button class="campaign-btn" onclick="campaignSaveAndNext('review')">حفظ والمراجعة</button></div>
+      </section>
+
+      <section class="campaign-page" data-campaign-page="review">
+        <h3 class="campaign-title">المراجعة والاعتماد</h3>
+        <p class="campaign-sub">راجع النسخة النهائية. أي تعديل بعد الاعتماد يلغيه تلقائياً ويتطلب موافقة جديدة.</p>
+        <div id="campaignReview" class="campaign-summary">احفظ الحملة لعرض الملخص.</div>
+        <div class="campaign-note" id="campaignApprovalNotice">الإرسال مقفل حتى تنشئ نسخة المراجعة وتوافق عليها صراحة.</div>
+        <div class="campaign-actions">
+          <button class="campaign-btn secondary" onclick="campaignGoStep('timing')">السابق</button>
+          <button class="campaign-btn secondary" onclick="campaignPrepareApproval()">تجهيز نسخة الاعتماد</button>
+          <button class="campaign-btn" id="campaignApproveBtn" onclick="campaignApprove()" disabled>أوافق وأعتمد</button>
+          <button class="campaign-btn danger" id="campaignStartBtn" onclick="campaignStart()" disabled>بدء الإرسال</button>
+          <button class="campaign-btn secondary" id="campaignPauseBtn" onclick="campaignAction('pause')" disabled>إيقاف مؤقت</button>
+          <button class="campaign-btn secondary" id="campaignResumeBtn" onclick="campaignAction('resume')" disabled>استئناف</button>
+          <button class="campaign-btn secondary" id="campaignCancelBtn" onclick="campaignAction('cancel')" disabled>إلغاء الحملة</button>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+</div>
+
 <div class="view" id="view-pricing">
 <div style="max-width:600px;margin:0 auto;padding:28px 16px">
   <div class="panel">
@@ -1819,6 +1959,7 @@ body{background-attachment:scroll}
 </div>
 
 <script src="/instagram.js"></script>
+<script src="/campaigns.js"></script>
 <script>
 let config = {}, lastStatus = '';
 // Which channel the shared settings form is currently editing. Default whatsapp
@@ -1881,6 +2022,7 @@ function goTab(t){
   if(t==='conversations')loadConversations();
   if(t==='train')loadLearnedReplies();
   if(t==='instagram'&&window.igOnTab)window.igOnTab();
+  if(t==='campaigns'&&window.campaignOnTab)window.campaignOnTab();
 }
 
 // ── SCREENS ──

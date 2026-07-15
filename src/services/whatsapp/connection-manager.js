@@ -8,13 +8,18 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const { findChrome, killChrome } = require('../../../lib/helpers');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
+const { enqueueCampaignSegmentation } = require('../../queues/campaign-queue');
+
+function createDefaultIngestService(logger) {
+  return new MessageIngestService({ logger, campaignSegmentation: enqueueCampaignSegmentation });
+}
 
 class EnterpriseWhatsAppConnectionManager extends EventEmitter {
   constructor({
     userId,
     dataDir,
     logger = console,
-    ingestService = new MessageIngestService({ logger }),
+    ingestService = createDefaultIngestService(logger),
     clientFactory = null,
   }) {
     super();

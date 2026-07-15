@@ -680,6 +680,178 @@ const statements = [
   `CREATE TRIGGER trg_instagram_conversations_updated_at
     BEFORE UPDATE ON instagram_conversations
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  // ── Campaign center: durable drafts, smart customer segmentation, imported
+  //    contacts, multiple media assets, approval snapshots and per-recipient
+  //    delivery state. Campaign delivery intentionally has its own queue/worker
+  //    so bulk work can never starve normal AI replies.
+  `CREATE TABLE IF NOT EXISTS campaign_contacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    normalized_phone TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    name TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, normalized_phone)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_campaign_contacts_user_updated
+    ON campaign_contacts (user_id, updated_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS customer_product_signals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+    sender TEXT NOT NULL,
+    product_key TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('interested_unverified', 'ordered_confirmed', 'needs_verification')),
+    confidence NUMERIC(5,4) NOT NULL DEFAULT 0 CHECK (confidence >= 0 AND confidence <= 1),
+    evidence_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+    evidence_text TEXT NOT NULL DEFAULT '',
+    order_reference TEXT,
+    source TEXT NOT NULL DEFAULT 'conversation',
+    first_detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (user_id, sender, product_key)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_customer_product_signals_segment
+    ON customer_product_signals (user_id, state, last_detected_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS customer_product_signal_events (
+    id BIGSERIAL PRIMARY KEY,
+    signal_id UUID NOT NULL REFERENCES customer_product_signals(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    previous_state TEXT,
+    new_state TEXT NOT NULL,
+    order_reference TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'merchant_manual',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_customer_product_signal_events_signal_created
+    ON customer_product_signal_events (signal_id, created_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS campaigns (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
+      'draft', 'ready_for_approval', 'approved', 'scheduled', 'sending',
+      'paused', 'completed', 'canceled', 'failed'
+    )),
+    message_text TEXT NOT NULL DEFAULT '',
+    audience_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+    audience_count INTEGER NOT NULL DEFAULT 0 CHECK (audience_count >= 0),
+    interval_min_seconds INTEGER NOT NULL DEFAULT 30 CHECK (interval_min_seconds BETWEEN 30 AND 3600),
+    interval_max_seconds INTEGER NOT NULL DEFAULT 60 CHECK (interval_max_seconds BETWEEN 30 AND 3600),
+    scheduled_at TIMESTAMPTZ,
+    approved_at TIMESTAMPTZ,
+    approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    approved_snapshot_hash TEXT,
+    content_version INTEGER NOT NULL DEFAULT 1,
+    sent_count INTEGER NOT NULL DEFAULT 0 CHECK (sent_count >= 0),
+    failed_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+    skipped_count INTEGER NOT NULL DEFAULT 0 CHECK (skipped_count >= 0),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_campaigns_user_created
+    ON campaigns (user_id, created_at DESC)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_campaigns_active
+    ON campaigns (status, scheduled_at)
+    WHERE status IN ('approved', 'scheduled', 'sending', 'paused')`,
+
+  // Campaign safety floor: merchants may choose any delay from 30 seconds up.
+  // The UPDATE makes this safe if an earlier local build created shorter drafts.
+  `UPDATE campaigns SET
+     interval_min_seconds = GREATEST(interval_min_seconds, 30),
+     interval_max_seconds = GREATEST(interval_max_seconds, interval_min_seconds, 30)
+   WHERE interval_min_seconds < 30 OR interval_max_seconds < 30`,
+  `ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_interval_min_seconds_check`,
+  `ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_interval_max_seconds_check`,
+  `ALTER TABLE campaigns ADD CONSTRAINT campaigns_interval_min_seconds_check CHECK (interval_min_seconds BETWEEN 30 AND 3600)`,
+  `ALTER TABLE campaigns ADD CONSTRAINT campaigns_interval_max_seconds_check CHECK (interval_max_seconds BETWEEN 30 AND 3600)`,
+
+  `CREATE TABLE IF NOT EXISTS campaign_media (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video')),
+    original_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes > 0),
+    sha256 TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (campaign_id, sort_order)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_campaign_media_campaign_order
+    ON campaign_media (campaign_id, sort_order)`,
+
+  `CREATE TABLE IF NOT EXISTS campaign_recipients (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+    sender TEXT NOT NULL,
+    normalized_phone TEXT,
+    customer_name TEXT,
+    product_key TEXT,
+    product_name TEXT,
+    customer_state TEXT,
+    confidence NUMERIC(5,4),
+    evidence_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+    evidence_text TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'conversation',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+      'pending', 'queued', 'sending', 'sent', 'failed', 'skipped', 'canceled'
+    )),
+    text_sent BOOLEAN NOT NULL DEFAULT FALSE,
+    quota_decremented BOOLEAN NOT NULL DEFAULT FALSE,
+    media_cursor INTEGER NOT NULL DEFAULT 0,
+    provider_message_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    scheduled_at TIMESTAMPTZ,
+    sent_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (campaign_id, sender)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_campaign_recipients_next
+    ON campaign_recipients (campaign_id, status, created_at)`,
+
+  `ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS text_sent BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS quota_decremented BOOLEAN NOT NULL DEFAULT FALSE`,
+
+  `CREATE TABLE IF NOT EXISTS campaign_events (
+    id BIGSERIAL PRIMARY KEY,
+    campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign_created
+    ON campaign_events (campaign_id, created_at DESC)`,
 ];
 
 async function migrate() {
