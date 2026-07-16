@@ -5,6 +5,10 @@ let campaignApproval = null;
 let campaignVisited = new Set(['audience']);
 let campaignLoadedOnce = false;
 let campaignSearchTerms = [];
+let campaignSignals = [];
+let campaignSignalsLoaded = false;
+let campaignSelectedSegment = null;
+let campaignAudienceCount = 0;
 
 function campaignFlash(message, error = false) {
   const el = document.getElementById('campaignFlash');
@@ -33,6 +37,7 @@ function campaignGoStep(step) {
     el.classList.toggle('visited', campaignVisited.has(el.dataset.campaignStep));
   });
   if (step === 'review') campaignRenderReview();
+  if (step === 'content') void campaignRefreshContentPreview();
   window.scrollTo(0, 0);
 }
 
@@ -97,8 +102,14 @@ function campaignNew() {
   document.getElementById('campaignPicker').value = '';
   document.getElementById('campaignKeywordInput').value = '';
   document.getElementById('campaignKeywordPreview').style.display = 'none';
+  campaignSelectedSegment = null;
+  campaignAudienceCount = 0;
+  document.querySelectorAll('[data-campaign-segment]').forEach(el => el.classList.remove('active'));
+  const segmentDetails = document.getElementById('campaignSegmentDetails');
+  if (segmentDetails) segmentDetails.hidden = true;
   campaignRenderKeywordTags();
   campaignToggleKeywordOptions();
+  campaignRenderContentPreview();
   campaignUpdateButtons();
   campaignGoStep('audience');
 }
@@ -129,6 +140,7 @@ function campaignFill(campaign) {
   document.getElementById('campaignMediaList').innerHTML = (campaign.media || []).map(item =>
     `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px;border-bottom:1px solid var(--border)"><span>${campaignEscape(item.original_name)} · ${campaignEscape(item.kind)}</span><button class="campaign-btn secondary" onclick="campaignDeleteMedia('${item.id}')">حذف</button></div>`
   ).join('') || '<div class="hint">لا توجد وسائط مرفوعة.</div>';
+  campaignRenderContentPreview();
   campaignUpdateButtons();
 }
 
@@ -207,7 +219,7 @@ async function campaignOpen(id) {
 async function campaignLoadList() {
   const data = await campaignApi('/api/campaigns');
   const picker = document.getElementById('campaignPicker');
-  picker.innerHTML = '<option value="">الحملات المحفوظة</option>' + data.campaigns.map(item =>
+  picker.innerHTML = '<option value="">اختر حملة محفوظة</option>' + data.campaigns.map(item =>
     `<option value="${item.id}">${campaignEscape(item.name)} · ${campaignEscape(item.status)}</option>`
   ).join('');
   if (campaignCurrent) picker.value = campaignCurrent.id;
@@ -220,49 +232,100 @@ async function campaignLoadCounts() {
   document.getElementById('campaignVerifyCount').textContent = data.counts.needs_verification || 0;
 }
 
-async function campaignLoadSignals() {
-  const table = document.getElementById('campaignSignalTable');
-  if (!table) return;
+function campaignRenderContentPreview() {
+  const messageInput = document.getElementById('campaignMessage');
+  const bubble = document.getElementById('campaignWhatsappMessage');
+  const mediaBox = document.getElementById('campaignWhatsappMedia');
+  const mediaLabel = document.getElementById('campaignWhatsappMediaLabel');
+  const audienceCount = document.getElementById('campaignContentAudienceCount');
+  const itemsCount = document.getElementById('campaignContentItemsCount');
+  if (!messageInput || !bubble || !mediaBox || !mediaLabel || !audienceCount || !itemsCount) return;
+
+  const message = messageInput.value.trim() || 'اكتب رسالتك لتظهر هنا كما ستصل للعميل.';
+  bubble.textContent = message;
+  const time = document.createElement('span');
+  time.className = 'campaign-wa-time';
+  time.textContent = 'الآن ✓✓';
+  bubble.appendChild(time);
+
+  const savedMedia = Array.isArray(campaignCurrent?.media) ? campaignCurrent.media.length : 0;
+  const selectedMedia = document.getElementById('campaignMedia')?.files?.length || 0;
+  const mediaCount = savedMedia + selectedMedia;
+  mediaBox.classList.toggle('visible', mediaCount > 0);
+  mediaLabel.textContent = mediaCount === 1 ? 'عنصر وسائط واحد' : `${mediaCount} صور أو فيديوهات`;
+  audienceCount.textContent = String(campaignAudienceCount);
+  itemsCount.textContent = mediaCount ? `نص + ${mediaCount} وسائط لكل عميل` : 'نص واحد لكل عميل';
+}
+
+async function campaignRefreshContentPreview() {
+  campaignRenderContentPreview();
+  if (!campaignCurrent?.id) return;
+  const campaignId = campaignCurrent.id;
   try {
-    const data = await campaignApi('/api/campaigns/smart/signals');
-    const rows = (data.signals || []).slice(0, 100);
-    if (!rows.length) {
-      table.innerHTML = '<div class="hint" style="padding:12px">لا توجد تصنيفات بعد. شغّل تحليل المحادثات أو انتظر وصول رسالة جديدة.</div>';
-      return;
-    }
-    const labels = { interested_unverified: 'مهتم بلا طلب مؤكد', ordered_confirmed: 'طلب مؤكد', needs_verification: 'يحتاج تحقق' };
-    table.innerHTML = rows.map(row => {
-      const id = String(row.signal_id || '');
-      const options = Object.entries(labels).map(([value, label]) => `<option value="${value}"${row.customer_state === value ? ' selected' : ''}>${label}</option>`).join('');
-      return `<div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:8px;background:#fff">
-        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px"><b>${campaignEscape(row.customer_name || row.normalized_phone || row.sender)}</b><span class="hint">${campaignEscape(row.product_name || '')}</span></div>
-        <div class="hint" style="margin-bottom:8px">الدليل: ${campaignEscape(row.evidence_text || 'لا يوجد نص دليل')}</div>
-        <div class="campaign-grid">
-          <div><label>التصنيف</label><select id="campaignSignalState-${id}">${options}</select></div>
-          <div><label>رقم الطلب (اختياري)</label><input id="campaignSignalOrder-${id}" dir="ltr" value="${campaignEscape(row.order_reference || '')}" placeholder="مثال: AB-12345"></div>
-        </div>
-        <label>ملاحظة التعديل</label><input id="campaignSignalNote-${id}" value="" placeholder="مثال: تأكد الطلب من لوحة المتجر">
-        <button class="campaign-btn secondary" onclick="campaignUpdateSignal('${id}')">حفظ التعديل</button>
-      </div>`;
-    }).join('');
-  } catch (error) {
-    table.innerHTML = `<div class="campaign-note">${campaignEscape(error.message)}</div>`;
+    const data = await campaignApi(`/api/campaigns/${campaignId}/preview`);
+    if (campaignCurrent?.id !== campaignId) return;
+    campaignAudienceCount = Number(data.count) || 0;
+    campaignRenderContentPreview();
+  } catch (_) {
+    campaignAudienceCount = 0;
+    campaignRenderContentPreview();
   }
 }
 
-async function campaignUpdateSignal(signalId) {
+function campaignCloseSegment() {
+  campaignSelectedSegment = null;
+  document.querySelectorAll('[data-campaign-segment]').forEach(el => el.classList.remove('active'));
+  const details = document.getElementById('campaignSegmentDetails');
+  if (details) details.hidden = true;
+}
+
+function campaignRenderSegmentDetails() {
+  const details = document.getElementById('campaignSegmentDetails');
+  if (!details || !campaignSelectedSegment) return;
+  const labels = {
+    interested_unverified: 'العملاء المهتمون الذين لم يطلبوا',
+    ordered_confirmed: 'العملاء الذين طلبوا المنتج',
+    needs_verification: 'العملاء الذين يحتاجون مراجعة',
+  };
+  const rows = campaignSignals.filter(row => row.customer_state === campaignSelectedSegment);
+  const content = rows.map(row => {
+    const identity = row.customer_name || row.normalized_phone || row.sender || 'عميل بدون اسم';
+    const product = row.product_name || 'لم يُحدد المنتج';
+    const evidence = row.evidence_text || 'لا توجد تفاصيل إضافية محفوظة.';
+    const order = row.order_reference ? `<span class="hint">رقم الطلب: ${campaignEscape(row.order_reference)}</span>` : '';
+    return `<div class="campaign-segment-row"><div class="campaign-segment-row-top"><b>${campaignEscape(identity)}</b><span class="hint">${campaignEscape(product)}</span></div><p>${campaignEscape(evidence)}</p>${order}</div>`;
+  }).join('');
+  details.innerHTML = `<div class="campaign-segment-head"><b>${labels[campaignSelectedSegment] || 'تفاصيل العملاء'} · ${rows.length}</b><button type="button" onclick="campaignCloseSegment()">إغلاق التفاصيل</button></div>${content || '<div class="hint">لا يوجد عملاء داخل هذا القسم حالياً.</div>'}`;
+  details.hidden = false;
+}
+
+async function campaignSelectSegment(state) {
+  if (campaignSelectedSegment === state) {
+    campaignCloseSegment();
+    return;
+  }
+  campaignSelectedSegment = state;
+  document.querySelectorAll('[data-campaign-segment]').forEach(el => el.classList.toggle('active', el.dataset.campaignSegment === state));
+  const details = document.getElementById('campaignSegmentDetails');
+  if (details) {
+    details.hidden = false;
+    details.innerHTML = '<div class="hint">جارٍ تحميل تفاصيل العملاء...</div>';
+  }
+  if (!campaignSignalsLoaded) await campaignLoadSignals();
+  else campaignRenderSegmentDetails();
+}
+
+async function campaignLoadSignals() {
   try {
-    const state = document.getElementById(`campaignSignalState-${signalId}`).value;
-    const orderReference = document.getElementById(`campaignSignalOrder-${signalId}`).value.trim();
-    const note = document.getElementById(`campaignSignalNote-${signalId}`).value.trim();
-    await campaignApi(`/api/campaigns/smart/signals/${signalId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state, orderReference, note }),
-    });
-    await Promise.all([campaignLoadCounts(), campaignLoadSignals()]);
-    campaignFlash('تم تحديث تصنيف العميل، وستظهر النتيجة الجديدة في ملفات Excel والحملات القادمة.');
-  } catch (error) { campaignFlash(error.message, true); }
+    const data = await campaignApi('/api/campaigns/smart/signals');
+    campaignSignals = (data.signals || []).slice(0, 100);
+    campaignSignalsLoaded = true;
+    campaignRenderSegmentDetails();
+  } catch (error) {
+    campaignSignalsLoaded = false;
+    const details = document.getElementById('campaignSegmentDetails');
+    if (details && campaignSelectedSegment) details.innerHTML = `<div class="campaign-note">${campaignEscape(error.message)}</div>`;
+  }
 }
 
 async function campaignLoadProducts() {
@@ -434,8 +497,11 @@ async function campaignOnTab() {
         event.preventDefault();
         if (campaignAddKeyword(event.currentTarget.value)) event.currentTarget.value = '';
       });
+      document.getElementById('campaignMessage').addEventListener('input', campaignRenderContentPreview);
+      document.getElementById('campaignMedia').addEventListener('change', campaignRenderContentPreview);
       campaignToggleKeywordOptions();
       campaignRenderKeywordTags();
+      campaignRenderContentPreview();
     }
   } catch (error) { campaignFlash(error.message, true); }
 }

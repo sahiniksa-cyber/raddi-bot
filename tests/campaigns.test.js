@@ -312,7 +312,9 @@ test('campaign UI exposes wizard, multi-media and explicit approval without stor
   assert.ok(html.includes('id="campaignStartBtn"'));
   assert.ok(html.includes('min="30"'));
   assert.ok(html.includes('/api/campaigns/smart/export/ordered_confirmed.xlsx'));
-  assert.ok(html.includes('id="campaignSignalTable"'));
+  assert.ok(html.includes('id="campaignSegmentDetails"'));
+  assert.ok(html.includes('id="campaignWhatsappMessage"'));
+  assert.ok(html.includes('id="campaignContentAudienceCount"'));
   assert.ok(js.includes('/prepare-approval'));
   assert.ok(js.includes('/approve'));
   assert.ok(js.includes('campaignAddKeyword'));
