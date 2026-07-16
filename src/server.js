@@ -208,9 +208,9 @@ function createApp() {
           // dashboard's 69 inline onclick handlers. We allow them explicitly
           // until the dashboard is refactored to addEventListener.
           scriptSrcAttr: ["'unsafe-inline'"],
-          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+          styleSrc: ["'self'", "'unsafe-inline'"],
           imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-          fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+          fontSrc: ["'self'", 'data:'],
           connectSrc: ["'self'"],
           frameAncestors: ["'none'"],
           objectSrc: ["'none'"],
@@ -335,6 +335,7 @@ function createApp() {
     }
   }
   app.use('/fonts', express.static(path.join(process.cwd(), 'dashboard/fonts')));
+  app.get('/fatima-font.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'fatima-font.css')));
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
   app.get('/instagram.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'instagram.js')));
   app.get('/campaigns.js', requireAuth, (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'campaigns.js')));

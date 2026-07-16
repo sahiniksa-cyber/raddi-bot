@@ -4,9 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>جواب — بوت الواتس أب</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/fatima-font.css">
 <style>
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Light.otf') format('opentype');font-weight:300}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Regular.otf') format('opentype');font-weight:400}
@@ -14,7 +12,7 @@
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Bold.otf') format('opentype');font-weight:700}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Balck.otf') format('opentype');font-weight:900}
 :root{
-  --font:'Noto Sans Arabic','Fatima','Segoe UI',Tahoma,sans-serif;
+  --font:'Fatima','Segoe UI',Tahoma,sans-serif;
   --green:#16a34a;--green2:#15803d;--green-light:#22c55e;
   --green-bg:#f0fdf4;--green-border:#bbf7d0;
   --bg:#f8fafc;--bg-soft:#f1f5f9;
@@ -332,7 +330,7 @@ details summary::-webkit-details-marker{display:none}
 
 /* Bento SaaS visual layer */
 :root{
-  --font:'Noto Sans Arabic','Fatima','Segoe UI',Tahoma,sans-serif;
+  --font:'Fatima','Segoe UI',Tahoma,sans-serif;
   --bg:#f9f9fb;
   --bg-soft:#eef2f6;
   --card:rgba(255,255,255,.78);
@@ -1750,6 +1748,8 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .campaign-choice{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:12px;padding:13px;margin-bottom:9px;cursor:pointer}
   .campaign-choice input{width:18px;height:18px;margin-top:2px}
+  .campaign-source-list{display:grid;gap:10px;margin-top:14px}.campaign-source-option{display:flex;align-items:flex-start;gap:11px;padding:14px;border:1px solid var(--border);border-radius:13px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.campaign-source-option:hover{border-color:var(--green-border)}.campaign-source-option:has(input:checked){border-color:var(--green);background:var(--green-bg);box-shadow:0 0 0 2px rgba(39,183,122,.08)}.campaign-source-option input{appearance:none;width:18px;height:18px;display:grid;place-items:center;flex:none;margin:2px 0 0;border:1.5px solid var(--border-strong);border-radius:50%;background:#fff}.campaign-source-option input:checked{border-color:var(--green)}.campaign-source-option input:checked::after{content:'';width:9px;height:9px;border-radius:50%;background:var(--green)}.campaign-source-option b{display:block;font-size:13.5px;font-weight:600}.campaign-source-option .hint{margin-top:4px;line-height:1.65}
+  .campaign-source-panel{padding:15px;border:1px solid var(--border);border-radius:13px;background:#f8fafc}.campaign-source-panel[hidden]{display:none!important}.campaign-import-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.campaign-target-box{padding:14px;border:1px solid var(--border);border-radius:12px;background:#fff}.campaign-target-box h4{margin:0 0 5px;font-size:13px;font-weight:600}.campaign-target-box p{margin:0 0 12px;font-size:11px;color:var(--text-soft);line-height:1.65}.campaign-file-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.campaign-file-actions .campaign-btn{padding:9px 12px;font-size:11.5px;text-decoration:none}.campaign-keyword-count{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0;padding:11px 12px;border:1px solid var(--green-border);border-radius:11px;background:var(--green-bg);font-size:12px;color:var(--green2)}.campaign-keyword-count strong{font-size:20px;font-weight:600}.campaign-date-help{margin-top:8px;padding:10px 12px;border-radius:10px;background:#fff;color:var(--text-soft);font-size:11.5px;line-height:1.7}
   .campaign-actions{display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
   .campaign-btn{border:0;border-radius:10px;padding:11px 17px;font:800 13px var(--font);cursor:pointer;background:var(--green);color:#fff}
   .campaign-btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border)}
@@ -1781,7 +1781,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-preview-help{margin-top:9px;font-size:10.5px;color:var(--text-soft);line-height:1.65}
   .campaign-saved-card{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:16px;padding:17px 18px;border:1px solid var(--border);border-radius:16px;background:#fff}.campaign-saved-copy{display:flex;align-items:flex-start;gap:10px}.campaign-saved-copy i{width:20px;height:20px;flex:none;margin-top:2px;color:var(--green2);stroke-width:1.5}.campaign-saved-copy b{display:block;font-size:14px;font-weight:600}.campaign-saved-copy p{margin:4px 0 0;font-size:11.5px;color:var(--text-soft);line-height:1.6}.campaign-saved-actions{display:flex;align-items:center;gap:8px;min-width:390px}.campaign-saved-actions select{margin:0!important;min-width:230px}
   @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{align-items:stretch;flex-direction:column}.campaign-saved-actions{min-width:0}}
-  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics{grid-template-columns:1fr}.campaign-saved-actions{align-items:stretch;flex-direction:column}.campaign-saved-actions select{min-width:0}.campaign-segment-head{align-items:flex-start;flex-direction:column}}
+  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics,.campaign-import-grid{grid-template-columns:1fr}.campaign-saved-actions{align-items:stretch;flex-direction:column}.campaign-saved-actions select{min-width:0}.campaign-segment-head{align-items:flex-start;flex-direction:column}}
 </style>
 <div class="campaign-shell">
   <div class="campaign-hero">
@@ -1798,7 +1798,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     <main class="campaign-card">
       <section class="campaign-page active" data-campaign-page="audience">
         <h3 class="campaign-title">من تريد أن تصله الحملة؟</h3>
-        <p class="campaign-sub">التحديد الذكي يعتمد على محادثات العميل والدليل الموجود فيها، ولا يعتبر الطلب مؤكداً بلا رقم طلب واضح.</p>
+        <p class="campaign-sub">اختر طريقة استهداف واحدة. الأرقام وملفات Excel هي المصدر الأساسي، ويُدمج الرقم المكرر تلقائياً بدون إنشاء عميل جديد.</p>
         <div class="campaign-grid">
           <div><label>اسم الحملة</label><input id="campaignName" maxlength="120" placeholder="مثال: متابعة المهتمين بعرض الصيف"></div>
           <div><label>هدف الحملة</label><input id="campaignGoal" maxlength="500" placeholder="وصف داخلي اختياري"></div>
@@ -1809,40 +1809,46 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
           <button type="button" class="campaign-metric" data-campaign-segment="needs_verification" onclick="campaignSelectSegment('needs_verification')"><strong id="campaignVerifyCount">0</strong><b>يحتاج مراجعة</b><span>اضغط لعرض العملاء والتفاصيل</span></button>
         </div>
         <div id="campaignSegmentDetails" class="campaign-segment-details" hidden></div>
-        <label class="campaign-choice"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">كل من لديه محادثة محفوظة، مع الأرقام المستوردة واليدوية.</div></div></label>
-        <label class="campaign-choice"><input type="radio" name="campaignSource" value="smart" checked><div><b>التحديد الذكي</b><div class="hint">اختر حالات العملاء والمنتج والفترة.</div></div></label>
-        <label class="campaign-choice"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار العملاء من كلمات البحث</b><div class="hint">يبحث داخل رسائل العملاء الواردة فقط، ويختار كل عميل ظهرت لديه أي كلمة من الكلمات.</div></div></label>
-        <div id="campaignKeywordOptions" hidden style="padding:4px 12px 14px">
-          <label>كلمات البحث</label>
-          <input id="campaignKeywordInput" maxlength="120" placeholder="اكتب كلمة مثل اسم المنتج ثم اضغط Enter">
-          <div class="hint" style="margin-top:6px">بعد كل كلمة اضغط Enter، ثم اكتب الكلمة التالية. يمكن إضافة حتى 50 كلمة، وتُحذف النتائج المكررة لنفس العميل.</div>
-          <div id="campaignKeywordTags" class="campaign-keywords"></div>
-          <button class="campaign-btn secondary" onclick="campaignPreviewKeywords()">تحديد العملاء ومعاينة النتائج</button>
-          <div id="campaignKeywordPreview" class="campaign-summary" style="display:none;margin-top:10px;max-height:340px;overflow:auto"></div>
-        </div>
-        <div id="campaignSmartOptions" style="padding:4px 12px 12px">
-          <div class="campaign-grid">
-            <label class="campaign-choice"><input type="checkbox" class="campaignState" value="interested_unverified" checked><div><b>مهتم ولم يظهر طلب مؤكد</b></div></label>
-            <label class="campaign-choice"><input type="checkbox" class="campaignState" value="ordered_confirmed"><div><b>طلب مؤكد</b></div></label>
-            <label class="campaign-choice"><input type="checkbox" class="campaignState" value="needs_verification"><div><b>يحتاج تحقق</b></div></label>
+        <div class="campaign-source-list">
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="contacts" checked><div><b>استهداف بالأرقام أو ملف Excel</b><div class="hint">أضف الأرقام يدوياً أو ارفع ملفاً يحتوي على العملاء والطلبات والاشتراكات.</div></div></label>
+          <div id="campaignContactOptions" class="campaign-source-panel" data-campaign-source-panel="contacts">
+            <div class="campaign-import-grid">
+              <div class="campaign-target-box">
+                <h4>استهداف بالأرقام</h4><p>ضع رقماً واحداً في كل سطر. الأرقام المكررة تُحذف تلقائياً.</p>
+                <textarea id="campaignNumbers" rows="6" dir="ltr" placeholder="9665xxxxxxxx&#10;05xxxxxxxx"></textarea>
+                <button class="campaign-btn secondary" onclick="campaignAddNumbers()">حفظ الأرقام</button>
+              </div>
+              <div class="campaign-target-box">
+                <h4>استيراد ملف Excel</h4><p>يمكن أن يتضمن الملف نوع السجل، المنتج، رقم الطلب، وتواريخ الاشتراك.</p>
+                <input id="campaignImportFile" type="file" accept=".csv,.xlsx">
+                <button class="campaign-btn" style="margin-top:8px" onclick="campaignImportContacts()">استيراد الملف</button>
+                <div class="campaign-file-actions">
+                  <a class="campaign-btn secondary" href="/api/campaigns/contacts/template.xlsx">تحميل نموذج Excel</a>
+                  <a class="campaign-btn secondary" href="/api/campaigns/contacts/export.xlsx">تصدير قاعدة العملاء</a>
+                </div>
+              </div>
+            </div>
+            <div id="campaignImportSummary" class="hint" style="margin-top:10px">لم يتم استيراد ملف في هذه الجلسة.</div>
           </div>
-          <div class="campaign-grid"><div><label>المنتج</label><select id="campaignProduct"><option value="">كل المنتجات</option></select></div><div><label>من تاريخ</label><input id="campaignDateFrom" type="date"></div><div><label>إلى تاريخ</label><input id="campaignDateTo" type="date"></div></div>
-          <button class="campaign-btn secondary" style="margin-top:10px" onclick="campaignAnalyze()">تحليل أحدث المحادثات</button>
-          <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
-            <a href="/api/campaigns/smart/export.xlsx" class="campaign-btn secondary" style="text-decoration:none">Excel شامل</a>
-            <a href="/api/campaigns/smart/export/interested_unverified.xlsx" class="campaign-btn secondary" style="text-decoration:none">ملف المهتمين</a>
-            <a href="/api/campaigns/smart/export/ordered_confirmed.xlsx" class="campaign-btn secondary" style="text-decoration:none">ملف الطلبات</a>
-            <a href="/api/campaigns/smart/export/needs_verification.xlsx" class="campaign-btn secondary" style="text-decoration:none">ملف يحتاج تحقق</a>
+
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار العملاء من كلمات البحث</b><div class="hint">يبحث في رسائل العملاء ويعرض العدد الحقيقي قبل الانتقال للمحتوى.</div></div></label>
+          <div id="campaignKeywordOptions" class="campaign-source-panel" data-campaign-source-panel="keywords" hidden>
+            <label>كلمات البحث</label>
+            <input id="campaignKeywordInput" maxlength="120" placeholder="اكتب كلمة مثل اسم المنتج ثم اضغط Enter">
+            <div class="hint" style="margin-top:6px">بعد كل كلمة اضغط Enter. يُحسب كل عميل مرة واحدة حتى لو كتب الكلمة أكثر من مرة.</div>
+            <div id="campaignKeywordTags" class="campaign-keywords"></div>
+            <div class="campaign-keyword-count"><span>عدد العملاء الذين ستصلهم الرسالة</span><strong id="campaignKeywordAudienceCount">—</strong></div>
+            <button class="campaign-btn secondary" onclick="campaignPreviewKeywords()">حساب العملاء وعرض النتائج</button>
+            <div id="campaignKeywordPreview" class="campaign-summary" style="display:none;margin-top:10px;max-height:340px;overflow:auto"></div>
           </div>
-          <div class="campaign-note">قاعدة البيانات هي النسخة المعتمدة. ملفات Excel تُنشأ لحظة تحميلها، لذلك يظهر فيها أي انتقال أو تعديل مباشرة ولا تبقى نسخة قديمة.</div>
-        </div>
-        <label class="campaign-choice"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل في فترة معينة</b><div class="hint">يستخدم تاريخ آخر رسالة، وحدد الفترة في حقول التاريخ أعلاه.</div></div></label>
-        <label class="campaign-choice"><input type="radio" name="campaignSource" value="contacts"><div><b>قائمة خارجية أو أرقام يدوية</b><div class="hint">يدعم CSV وExcel، ويمكنك لصق أرقام متعددة.</div></div></label>
-        <div style="padding:4px 12px">
-          <label>الأرقام (رقم في كل سطر)</label><textarea id="campaignNumbers" rows="5" dir="ltr" placeholder="9665xxxxxxxx&#10;05xxxxxxxx"></textarea>
-          <button class="campaign-btn secondary" style="margin-top:8px" onclick="campaignAddNumbers()">إضافة الأرقام</button>
-          <div style="margin-top:12px"><label>استيراد ملف</label><input id="campaignImportFile" type="file" accept=".csv,.xlsx"></div>
-          <button class="campaign-btn secondary" style="margin-top:8px" onclick="campaignImportContacts()">استيراد القائمة</button>
+
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل خلال فترة معينة</b><div class="hint">يعتمد على تاريخ آخر رسالة للعميل خلال المدة التي تحددها هنا.</div></div></label>
+          <div id="campaignConversationOptions" class="campaign-source-panel" data-campaign-source-panel="conversations" hidden>
+            <div class="campaign-grid"><div><label>بداية الفترة</label><input id="campaignDateFrom" type="date"><div class="hint">يشمل هذا اليوم من بدايته.</div></div><div><label>نهاية الفترة</label><input id="campaignDateTo" type="date"><div class="hint">يشمل هذا اليوم حتى نهايته.</div></div></div>
+            <div class="campaign-date-help">مثال: من 2026-07-01 إلى 2026-07-16 يعني كل عميل كانت آخر رسالته خلال هذه الأيام، ويجب أن تكون البداية قبل النهاية.</div>
+          </div>
+
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">يشمل جميع المحادثات المحفوظة وكل الأرقام المستوردة واليدوية، بدون تكرار.</div></div></label>
         </div>
         <div class="campaign-actions"><button class="campaign-btn" onclick="campaignSaveAndNext('content')">حفظ والمتابعة</button></div>
       </section>

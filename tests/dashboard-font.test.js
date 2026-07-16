@@ -13,18 +13,27 @@ const pages = [
   'dashboard/admin.html',
   'dashboard/admin-login.html',
 ];
-const fontStylesheet = 'https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap';
+const fontStylesheet = '/fatima-font.css';
 
-test('all dashboard pages load and use the exact Noto Sans Arabic design font', () => {
+test('all dashboard pages load and use the original Fatima Arabic font', () => {
   for (const file of pages) {
     const html = fs.readFileSync(path.join(root, file), 'utf8');
     assert.match(html, new RegExp(fontStylesheet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(html, /(?:font-family|--font):\s*['"]Noto Sans Arabic['"]/);
+    assert.match(html, /(?:font-family|--font):\s*['"]Fatima['"]/);
+    assert.doesNotMatch(html, /fonts\.googleapis\.com|Noto Sans Arabic/);
   }
 });
 
-test('content security policy allows the Noto stylesheet and font files', () => {
+test('Fatima font is self-hosted with every original weight', () => {
+  const css = fs.readFileSync(path.join(root, 'dashboard/fatima-font.css'), 'utf8');
+  for (const weight of [300, 400, 500, 700, 900]) assert.match(css, new RegExp(`font-weight:${weight}`));
+  assert.equal((css.match(/@font-face/g) || []).length, 5);
+  assert.match(css, /Fatimah Arabic Regular\.otf/);
+  assert.match(css, /Fatimah Arabic Balck\.otf/);
+});
+
+test('server serves Fatima locally and no longer allows external Google fonts', () => {
   const server = fs.readFileSync(path.join(root, 'src/server.js'), 'utf8');
-  assert.match(server, /styleSrc:[^\n]+https:\/\/fonts\.googleapis\.com/);
-  assert.match(server, /fontSrc:[^\n]+https:\/\/fonts\.gstatic\.com/);
+  assert.match(server, /app\.get\('\/fatima-font\.css'/);
+  assert.doesNotMatch(server, /fonts\.googleapis\.com|fonts\.gstatic\.com/);
 });
