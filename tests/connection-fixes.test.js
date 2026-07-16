@@ -90,6 +90,25 @@ test('FIX 1: connectionReplaced (440) close tears down the socket and bumps gene
   assert.ok(conflictEmitted, 'connection_conflict event must still be emitted');
 });
 
+test('FIX 1: restartRequired (515) resets QR backoff and schedules the first fast retry', async () => {
+  const manager = createManager();
+  manager._running = true;
+  manager._socketGeneration = 9;
+  manager._effectiveRetryCount = 15;
+  const scheduled = [];
+  manager.scheduleReconnect = (retryCount, reason, generation) => {
+    scheduled.push({ retryCount, reason, generation });
+  };
+
+  await manager.handleConnectionUpdate(makeCloseUpdate(DisconnectReason.restartRequired), 15, 9);
+
+  assert.equal(manager._effectiveRetryCount, 0, 'QR retries must not delay the post-scan restart');
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].retryCount, 0, '515 must use the first ~1 second reconnect slot');
+  assert.equal(scheduled[0].generation, 9);
+  assert.match(scheduled[0].reason, /code=515/);
+});
+
 // ---------- FIX 2 ----------
 
 test('FIX 2: empty apiKey returns a safe not-ok result without a network call', async () => {
