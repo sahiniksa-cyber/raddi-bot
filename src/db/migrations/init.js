@@ -868,6 +868,72 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign_created
     ON campaign_events (campaign_id, created_at DESC)`,
+
+  // Read-only WhatsApp history index. Historical messages are intentionally
+  // isolated from `messages`: importing them must never enqueue AI replies,
+  // appear as new inbound traffic, or trigger a campaign send.
+  `CREATE TABLE IF NOT EXISTS whatsapp_history_imports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'starting' CHECK (status IN (
+      'starting', 'running', 'completed', 'partial', 'failed', 'canceled'
+    )),
+    progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+    explicit_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    read_only BOOLEAN NOT NULL DEFAULT TRUE,
+    sync_types JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_event_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_history_imports_one_active
+    ON whatsapp_history_imports (user_id)
+    WHERE status IN ('starting', 'running')`,
+
+  `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_imports_user_created
+    ON whatsapp_history_imports (user_id, created_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS whatsapp_history_conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    last_import_id UUID REFERENCES whatsapp_history_imports(id) ON DELETE SET NULL,
+    sender TEXT NOT NULL,
+    normalized_phone TEXT,
+    customer_name TEXT NOT NULL DEFAULT '',
+    last_message_at TIMESTAMPTZ,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, sender)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_conversations_user_phone
+    ON whatsapp_history_conversations (user_id, normalized_phone)`,
+
+  `CREATE TABLE IF NOT EXISTS whatsapp_history_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    import_id UUID REFERENCES whatsapp_history_imports(id) ON DELETE SET NULL,
+    sender TEXT NOT NULL,
+    normalized_phone TEXT,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+    content TEXT NOT NULL DEFAULT '',
+    provider_message_id TEXT NOT NULL,
+    message_at TIMESTAMPTZ,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, provider_message_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_messages_user_sender_time
+    ON whatsapp_history_messages (user_id, sender, message_at DESC)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_messages_user_direction_time
+    ON whatsapp_history_messages (user_id, direction, message_at DESC)`,
 ];
 
 async function migrate() {

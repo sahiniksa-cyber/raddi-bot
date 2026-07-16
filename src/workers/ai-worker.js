@@ -598,6 +598,7 @@ async function sendInstantAutoReply({
     replyDelayMs: 0,
     replyDelayPreset: 'instant-keyword',
     source: 'auto_reply_keyword',
+    preSendReviewRequired: true,
   }, {
     jobKey: String(replyMessageId),
     delay: 0,
@@ -1026,6 +1027,8 @@ async function processAiReply(job) {
       reply: customerReply,
       replyDelayMs,
       replyDelayPreset: config.replyDelayPreset,
+      source: 'ai_reply',
+      preSendReviewRequired: true,
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,
@@ -1188,6 +1191,7 @@ async function processAiReply(job) {
           sender,
           reply: fallbackText,
           source: 'ai_failure_fallback',
+          preSendReviewRequired: true,
         }, {
           jobKey: fallbackKey,
         });

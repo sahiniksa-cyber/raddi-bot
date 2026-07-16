@@ -208,7 +208,33 @@ async function processCampaignSegmentation(job, { database = db, getUserBot } = 
 
 async function recipientMatchesKeywordAudience(database, campaign, recipient, audienceRules) {
   const rules = normalizeAudienceRules(audienceRules);
-  if (rules.source !== 'keywords' || !recipient.conversation_id) return false;
+  if (rules.source !== 'keywords') return false;
+  if (recipient.source === 'keyword_history') {
+    const params = [campaign.user_id, recipient.sender, rules.searchTerms];
+    const clauses = [
+      `user_id = $1`,
+      `sender = $2`,
+      `direction = 'inbound'`,
+      `EXISTS (
+         SELECT 1 FROM unnest($3::text[]) AS keyword(term)
+         WHERE STRPOS(LOWER(content), LOWER(keyword.term)) > 0
+       )`,
+    ];
+    if (rules.dateFrom) {
+      params.push(rules.dateFrom);
+      clauses.push(`message_at >= $${params.length}::timestamptz`);
+    }
+    if (rules.dateTo) {
+      params.push(rules.dateTo);
+      clauses.push(`message_at < ($${params.length}::date + INTERVAL '1 day')`);
+    }
+    const result = await database.query(
+      `SELECT 1 FROM whatsapp_history_messages WHERE ${clauses.join(' AND ')} LIMIT 1`,
+      params,
+    );
+    return Boolean(result.rows[0]);
+  }
+  if (!recipient.conversation_id) return false;
   const params = [campaign.user_id, recipient.conversation_id, rules.searchTerms];
   const clauses = [
     `user_id = $1`,

@@ -6,10 +6,15 @@ const assert = require('node:assert/strict');
 const AIClient = require('../lib/ai-client');
 const {
   applyGroundingFallback,
+  buildFinalPreSendReviewMessages,
   buildQualityReviewMessages,
+  cleanupFinalReplyDeterministically,
+  deterministicDuplicateGuard,
   findUnsupportedFacts,
   normalizeEmojiSuitability,
+  parseFinalPreSendReview,
   parseQualityReview,
+  reviewFinalReplyBeforeSend,
   reviewReplyQuality,
 } = require('../src/services/ai/reply-quality-gate');
 
@@ -23,6 +28,140 @@ test('parseQualityReview accepts fenced JSON and keeps only the public audit fie
   assert.equal(parsed.finalReply, 'السعر 99 ريال، والضمان غير مذكور عندي بشكل مؤكد.');
   assert.deepEqual(parsed.violations, ['unsupported_fact']);
   assert.deepEqual(parsed.unsupportedClaims, ['ضمان سنة']);
+});
+
+test('final pre-send parser allows suppress with an empty reply', () => {
+  const parsed = parseFinalPreSendReview(JSON.stringify({
+    decision: 'suppress',
+    reason: 'المعلومة أُرسلت قبل دقيقة',
+    repeated_claims: ['لا يوجد كود خصم', 'تقسيط تمارا متاح'],
+    violations: ['semantic_duplicate'],
+    final_reply: '',
+  }));
+  assert.equal(parsed.decision, 'suppress');
+  assert.equal(parsed.finalReply, '');
+  assert.equal(parsed.repeatedClaims.length, 2);
+});
+
+test('deterministic final cleanup removes the screenshot greeting continuation', () => {
+  assert.equal(
+    cleanupFinalReplyDeterministically('وعليكم السلام، هلا ومرحبا\nورحمة الله وبركاته'),
+    'وعليكم السلام، هلا ومرحبا',
+  );
+});
+
+test('final pre-send prompt sees sent replies, instant source, and semantic-duplicate rule', () => {
+  const messages = buildFinalPreSendReviewMessages({
+    draft: 'والله يا غالي، حالياً ما عندنا كود خصم شغال، لكن تقدر تستفيد من تقسيط تمارا.',
+    customerText: 'باخذ ادوبي وباخذ فريبيك',
+    history: [
+      { role: 'user', content: 'وانت عارف دايما اخذ من عندكم' },
+      { role: 'assistant', content: 'حالياً ما عندنا كود خصم، ونقدر نوفر لك تقسيط مع تمارا.' },
+    ],
+    config: { replyStyle: { lineBreakMode: 'sentence' } },
+    source: 'auto_reply_keyword',
+  });
+  assert.match(messages[0].content, /لا تكرر معلومة سبق أن أرسلها الموظف/);
+  assert.match(messages[0].content, /suppress/);
+  assert.match(messages[1].content, /حالياً ما عندنا كود خصم، ونقدر نوفر لك تقسيط مع تمارا/);
+  assert.match(messages[1].content, /auto_reply_keyword/);
+});
+
+test('final pre-send reviewer suppresses a differently-worded repeat with no new value', async () => {
+  const openai = { chat: { completions: { create: async ({ messages }) => {
+    assert.match(messages[1].content, /تقسيط تمارا/);
+    return {
+      choices: [{ message: { content: JSON.stringify({
+        decision: 'suppress',
+        reason: 'نفس معلومة الخصم وتمارا سبق إرسالها',
+        repeated_claims: ['لا يوجد كود خصم', 'تقسيط تمارا'],
+        violations: ['semantic_duplicate'],
+        final_reply: '',
+      }) } }],
+      usage: {},
+    };
+  } } } };
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: 'والله يا غالي، حالياً ما عندنا كود خصم شغال، لكن تقدر تستفيد من تقسيط تمارا.',
+    customerText: 'باخذ ادوبي وباخذ فريبيك',
+    history: [{ role: 'assistant', content: 'حالياً ما عندنا كود خصم، ونقدر نوفر لك تقسيط مع تمارا.' }],
+    config: {},
+    logger: silentLogger,
+  });
+  assert.equal(result.suppressed, true);
+  assert.equal(result.reply, '');
+  assert.equal(result.audit.decision, 'suppress');
+});
+
+test('final pre-send reviewer cannot suppress a first-contact greeting', async () => {
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'suppress', reason: 'التحية مكررة', repeated_claims: [], violations: [], final_reply: '',
+    }) } }],
+    usage: {},
+  }) } } };
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: 'وعليكم السلام، هلا ومرحبا\nورحمة الله وبركاته',
+    customerText: 'السلام عليكم',
+    history: [{ role: 'user', content: 'السلام عليكم' }],
+    config: {},
+    logger: silentLogger,
+  });
+  assert.equal(result.suppressed, false);
+  assert.equal(result.reply, 'وعليكم السلام، هلا ومرحبا');
+  assert.equal(result.audit.decision, 'repair');
+  assert.ok(result.audit.violations.includes('invalid_suppress_without_previous_assistant'));
+});
+
+test('deterministic guard suppresses a rephrased double-send when no customer turn intervened', () => {
+  const result = deterministicDuplicateGuard(
+    'حالياً ما عندنا كود خصم شغال، وتقدر تستفيد من تقسيط تمارا.',
+    [
+      { role: 'user', content: 'باخذ أدوبي وفريبيك' },
+      { role: 'assistant', content: 'ما فيه كود خصم شغال حالياً، ونوفر لك خيار تقسيط مع تمارا.' },
+    ],
+  );
+  assert.equal(result.suppress, true);
+  assert.ok(result.repeatedClaims.length >= 2);
+});
+
+test('deterministic guard does not silence a customer who asked again after the prior reply', () => {
+  const result = deterministicDuplicateGuard(
+    'حالياً ما عندنا كود خصم شغال.',
+    [
+      { role: 'assistant', content: 'ما فيه كود خصم شغال حالياً.' },
+      { role: 'user', content: 'متأكد ما فيه خصم؟' },
+    ],
+  );
+  assert.equal(result.suppress, false);
+});
+
+test('deterministic guard overrides a reviewer pass on the reported semantic double-send', async () => {
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'pass', reason: 'looks fine', repeated_claims: [], violations: [],
+      final_reply: 'حالياً ما عندنا كود خصم شغال، وتقدر تستفيد من تقسيط تمارا.',
+    }) } }],
+    usage: {},
+  }) } } };
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: 'حالياً ما عندنا كود خصم شغال، وتقدر تستفيد من تقسيط تمارا.',
+    customerText: 'باخذ أدوبي وفريبيك',
+    history: [
+      { role: 'user', content: 'باخذ أدوبي وفريبيك' },
+      { role: 'assistant', content: 'ما فيه كود خصم شغال حالياً، ونوفر لك خيار تقسيط مع تمارا.' },
+    ],
+    config: {},
+    logger: silentLogger,
+  });
+  assert.equal(result.suppressed, true);
+  assert.equal(result.audit.reason, 'deterministic_duplicate_without_new_customer_turn');
 });
 
 test('quality-review prompt treats customer text and draft as untrusted data and includes merchant sources', () => {
@@ -129,6 +268,59 @@ test('AIClient sends the draft through the reviewer before returning the custome
   assert.equal(calls, 2, 'one generation call + one quality-review call');
   assert.equal(reply, 'السعر 99 ريال');
   assert.equal(ai.lastDebug.qualityGate.decision, 'repair');
+});
+
+test('AIClient enforces the merchant line setting after the final pre-send review', async () => {
+  const ai = new AIClient(
+    { replyStyle: { lineBreakMode: 'sentence', emojiLevel: 'none' } },
+    silentLogger,
+    { record() {} },
+  );
+  ai.buildClient = () => ({
+    model: 'test-model',
+    openai: { chat: { completions: { create: async () => ({
+      choices: [{ message: { content: JSON.stringify({
+        decision: 'pass', reason: 'clean', repeated_claims: [], violations: [],
+        final_reply: 'الجملة الأولى واضحة. الجملة الثانية واضحة.',
+      }) } }],
+      usage: {},
+    }) } } },
+  });
+  const result = await ai.reviewBeforeSend({
+    draft: 'الجملة الأولى واضحة. الجملة الثانية واضحة.',
+    customerText: 'وضح لي',
+    history: [{ role: 'user', content: 'وضح لي' }],
+  });
+  assert.equal(result.reply, 'الجملة الأولى واضحة.\nالجملة الثانية واضحة.');
+});
+
+test('AIClient rechecks duplication after merchant post-processing removes the only new clause', async () => {
+  const ai = new AIClient(
+    { replyStyle: { lineBreakMode: 'connected', emojiLevel: 'none', avoidPhrases: ['اطلب من المتجر مباشرة'] } },
+    silentLogger,
+    { record() {} },
+  );
+  ai.buildClient = () => ({
+    model: 'test-model',
+    openai: { chat: { completions: { create: async () => ({
+      choices: [{ message: { content: JSON.stringify({
+        decision: 'pass', reason: 'contains a new clause', repeated_claims: [], violations: [],
+        final_reply: 'حالياً ما عندنا كود خصم شغال. اطلب من المتجر مباشرة.',
+      }) } }],
+      usage: {},
+    }) } } },
+  });
+  const result = await ai.reviewBeforeSend({
+    draft: 'حالياً ما عندنا كود خصم شغال. اطلب من المتجر مباشرة.',
+    customerText: 'باخذ أدوبي وفريبيك',
+    history: [
+      { role: 'user', content: 'باخذ أدوبي وفريبيك' },
+      { role: 'assistant', content: 'حالياً ما عندنا كود خصم شغال.' },
+    ],
+  });
+  assert.equal(result.suppressed, true);
+  assert.equal(result.reply, '');
+  assert.equal(result.audit.reason, 'final_post_process_duplicate_without_new_customer_turn');
 });
 
 test('AIClient never leaks an invented hard fact when the reviewer fails', async () => {

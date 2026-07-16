@@ -138,6 +138,7 @@ function collectInstantReplies(config = {}, text = '') {
 // greeting when a canned greeting instant-reply is already prepended in combine
 // mode (the AI tends to also greet, producing "وعليكم السلام ... وعليكم السلام").
 const GREETING_OPENER = /^[\s،,!.⁩⁦]*(?:(?:و\s*)?عليكم\s*السلام|(?:ال)?سلام\s*عليكم(?:\s*ورحمة\s*الله(?:\s*وبركاته)?)?|أهلين|اهلين|أهلاً|اهلا|مرحبتين|(?:و\s*)?مرحبا|مرحباً|هلا\s*والله|هلا\s*بك|هلا|حيّاك\s*الله|حياك\s*الله|حياك|(?:يا|يـ)\s*هلا|صباح\s*الخير|مساء\s*الخير)[\s،,!.؟…]*/i;
+const GREETING_CONTINUATION_ONLY = /^[\s،,!.⁩⁦]*(?:و?رحمة\s+الله(?:\s+وبركاته)?|وبركاته)[\s،,!.؟…]*$/i;
 
 // Combine a verbatim canned instant-reply (e.g. a greeting) with the AI's
 // answer WITHOUT duplicating the greeting: strip any leading greeting from the
@@ -149,6 +150,11 @@ function combineCannedAndAi(cannedPrefix, aiReply) {
   // Strip ALL stacked leading greetings (the AI sometimes greets more than once).
   let prev;
   do { prev = ai; ai = ai.replace(GREETING_OPENER, '').trim(); } while (ai && ai !== prev);
+  // A combined instant reply can already contain the complete greeting while
+  // the AI contributes only its orphan continuation (reported production
+  // example: "وعليكم السلام، هلا ومرحبا" + "ورحمة الله وبركاته"). That is
+  // still a duplicate greeting, not useful new content.
+  if (GREETING_CONTINUATION_ONLY.test(ai)) ai = '';
   if (!ai || ai === canned) return canned;
   return `${canned}\n${ai}`;
 }

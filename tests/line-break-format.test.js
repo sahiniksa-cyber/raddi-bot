@@ -67,6 +67,14 @@ test('sentence mode puts each sentence on its own line', () => {
   assert.equal(out, 'جملة أولى.\nجملة ثانية؟\nجملة ثالثة!');
 });
 
+test('sentence mode still creates lines when merchant settings removed sentence periods', () => {
+  const out = applyLineBreakFormat(
+    'أهلاً بك فهمت طلبك وسأشرح لك الخطوات باختصار',
+    { replyStyle: { lineBreakMode: 'sentence', lineBreakWords: 12 } },
+  );
+  assert.match(out, /\n/);
+});
+
 test('sentence mode does NOT split a decimal number', () => {
   const out = applyLineBreakFormat('السعر 5.2 ريال فقط', { replyStyle: { lineBreakMode: 'sentence' } });
   assert.equal(out, 'السعر 5.2 ريال فقط');
