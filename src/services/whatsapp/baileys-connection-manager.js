@@ -545,6 +545,20 @@ class BaileysConnectionManager extends EventEmitter {
       const reasonName = DisconnectReason[statusCode] || 'unknown';
       const rawMessage = update.lastDisconnect?.error?.message || 'closed';
       const technicalMessage = `${rawMessage} (code=${statusCode || 'unknown'} reason=${reasonName})`;
+      // A successful QR scan makes Baileys close the pre-pairing socket with
+      // restartRequired (515). QR rotations may already have increased the
+      // reconnect backoff, but carrying that delay into this required restart
+      // leaves the phone waiting long enough for WhatsApp to remove the device.
+      // Restart from the first retry slot so the authenticated socket comes up
+      // immediately without changing auth state or the other close paths.
+      if (statusCode === DisconnectReason.restartRequired) {
+        this.lastError = technicalMessage;
+        this._effectiveRetryCount = 0;
+        this.log('info', 'connection', 'Baileys pairing restart required; resetting QR backoff for immediate reconnect');
+        this.emit('disconnected', technicalMessage);
+        this.scheduleReconnect(0, technicalMessage, socketGeneration);
+        return;
+      }
       if (statusCode === DisconnectReason.loggedOut) {
         this.lastError = technicalMessage;
         this.authFailureCount++;
