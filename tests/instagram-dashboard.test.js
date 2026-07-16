@@ -9,8 +9,9 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html
 const js = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'instagram.js'), 'utf8');
 const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
 
-test('header shows a simple WhatsApp + Instagram channel switcher next to the logo', () => {
+test('sidebar shows a simple WhatsApp + Instagram channel switcher under the brand', () => {
   assert.ok(html.includes('class="chan-switch"'), 'channel switcher missing');
+  assert.ok(html.includes('class="sidebar-channel"'), 'sidebar channel area missing');
   assert.ok(html.includes('id="chan-wa"'), 'WhatsApp channel chip missing');
   assert.ok(html.includes('id="chan-ig"'), 'Instagram channel chip missing');
   assert.ok(html.includes('function selectChannel'), 'selectChannel missing');
@@ -27,8 +28,10 @@ test('the channel switcher is hidden until the Instagram feature is enabled', ()
   assert.ok(js.includes("fetch('/api/instagram/status')"), 'gate must check feature status');
 });
 
-test('nav tabs drop to their own row, centered', () => {
-  assert.ok(html.includes('.nav-tabs{order:10;flex-basis:100%;justify-content:center}'), 'centered second-row rule missing');
+test('nav tabs live in the grouped main sidebar instead of crowding the header', () => {
+  assert.ok(html.includes('id="mainSidebar"'), 'main sidebar missing');
+  assert.ok(html.includes('class="nav-section-label">العمل اليومي'), 'daily-work group missing');
+  assert.ok(!html.includes('.nav-tabs{order:10;flex-basis:100%;justify-content:center}'), 'legacy centered tab row should be removed');
 });
 
 test('WhatsApp chip goes straight to settings; Instagram chip opens the connect flow', () => {

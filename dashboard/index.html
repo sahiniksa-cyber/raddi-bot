@@ -821,57 +821,159 @@ body{background-attachment:scroll}
 .acc-arrow{margin-inline-start:auto;flex:none;width:9px;height:9px;border-right:2px solid var(--text-soft);border-bottom:2px solid var(--text-soft);transform:rotate(45deg);transition:transform .2s ease,border-color .2s ease;opacity:.75}
 .panel.collapsible:not(.collapsed)>.phdr .acc-arrow{transform:rotate(-135deg)}
 .panel.collapsible>.phdr:hover .acc-arrow{opacity:1;border-color:var(--green)}
+
+/* ── Main navigation shell ────────────────────────────────────────────────
+   The old row of eight tabs crowded the header and overflowed on phones.
+   Keep the existing tab/view IDs and goTab() contract, but present the same
+   controls in a grouped right-side drawer. Desktop can collapse to an icon
+   rail; phones use an overlay drawer. */
+.dashboard-app{min-height:100vh;padding-right:272px;transition:padding-right .18s ease}
+.main-sidebar{position:fixed;inset:0 0 0 auto;z-index:420;width:272px;display:flex;flex-direction:column;background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(15,23,42,.04);transition:width .18s ease,transform .18s ease}
+.sidebar-brand{height:76px;display:flex;align-items:center;gap:11px;padding:0 16px;border-bottom:1px solid #eef1f4;flex:none}
+.sidebar-logo-mark{width:40px;height:40px;display:grid;place-items:center;flex:none;border-radius:12px;background:#12805c;color:#fff;font-size:19px;font-weight:700}
+.sidebar-brand-copy{min-width:0;line-height:1.25}
+.sidebar-brand-copy strong{display:block;font-size:18px;font-weight:700;color:var(--text)}
+.sidebar-brand-copy span{display:block;margin-top:3px;font-size:11px;color:var(--text-soft);white-space:nowrap}
+.sidebar-collapse{width:36px;height:36px;display:grid;place-items:center;flex:none;margin-inline-start:auto;border:1px solid var(--border)!important;border-radius:10px!important;background:#fff!important;color:var(--text-soft)!important;box-shadow:none!important;padding:0!important}
+.sidebar-collapse i,.menu-toggle i,.user-pill i{width:18px;height:18px;stroke-width:1.5}
+.sidebar-channel{padding:12px 12px 0}
+.sidebar-channel .chan-switch{width:100%;margin:0;gap:6px;padding:4px;border:1px solid var(--border);border-radius:12px;background:var(--bg-soft)}
+.sidebar-channel .chan{flex:1;justify-content:center;min-width:0;padding:8px 9px;border-radius:9px;font-size:12px}
+.sidebar-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:15px 10px 18px;scrollbar-width:thin}
+.nav-tabs{display:block!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;order:initial!important;flex-basis:auto!important}
+.nav-section{margin-bottom:19px}
+.nav-section:last-child{margin-bottom:0}
+.nav-section-label{padding:0 10px 7px;font-size:10.5px;font-weight:600;color:var(--text-dim);white-space:nowrap}
+.nav-section .tab{position:relative;width:100%;min-height:43px;display:flex;align-items:center;justify-content:flex-start;gap:10px;margin:2px 0;padding:10px 11px;border-radius:11px!important;color:var(--text-soft);font-size:13px;font-weight:600;text-align:right;box-shadow:none!important}
+.nav-section .tab i[data-lucide]{width:18px;height:18px;flex:none;stroke-width:1.5}
+.nav-section .tab:hover:not(.active){background:#f7f8fa;color:var(--text)}
+.nav-section .tab.active{background:#edf9f4;color:#0f7655;box-shadow:none!important}
+.nav-section .tab.active::before{content:'';position:absolute;right:-10px;width:3px;height:22px;border-radius:0 3px 3px 0;background:#12805c}
+.tab-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar-footer{flex:none;padding:12px;border-top:1px solid #eef1f4}
+.sidebar-help{display:flex;align-items:center;gap:9px;padding:11px;border:1px solid var(--border);border-radius:12px;background:#fafbfc;color:var(--text-soft);font-size:11.5px;line-height:1.45}
+.sidebar-help i{width:17px;height:17px;flex:none;color:#12805c;stroke-width:1.5}
+.sidebar-overlay{position:fixed;inset:0;z-index:410;display:none;background:rgba(15,23,42,.34)}
+.topbar{position:sticky!important;top:0!important;z-index:390!important;width:100%!important;max-width:none!important;min-height:68px!important;height:68px!important;margin:0!important;padding:0 24px!important;border:0!important;border-bottom:1px solid var(--border)!important;border-radius:0!important;background:rgba(255,255,255,.96)!important;box-shadow:none!important;flex-wrap:nowrap!important;row-gap:0!important}
+.topbar-start{display:flex;align-items:center;gap:12px;min-width:0}
+.menu-toggle{width:40px;height:40px;display:grid;place-items:center;flex:none;padding:0!important;border:1px solid var(--border)!important;border-radius:11px!important;background:#fff!important;color:var(--text)!important;box-shadow:none!important}
+.current-page{min-width:0}
+.current-page strong{display:block;font-size:16px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.current-page span{display:block;margin-top:2px;font-size:11px;color:var(--text-soft);white-space:nowrap}
+.topbar-end{display:flex;align-items:center;gap:9px;margin-inline-start:auto}
+.topbar .conn-badge,.topbar .user-pill{min-height:40px;margin:0;border-radius:11px;background:#fff;box-shadow:none}
+.topbar .user-pill button{width:28px;height:28px;display:grid;place-items:center;padding:0;border-radius:8px;background:var(--bg-soft)}
+.topbar .user-pill button:hover{background:var(--red-bg)}
+body.nav-collapsed .main-sidebar{width:82px}
+body.nav-collapsed .dashboard-app{padding-right:82px}
+body.nav-collapsed .sidebar-brand{justify-content:center;padding:0 10px}
+body.nav-collapsed .sidebar-brand-copy,body.nav-collapsed .sidebar-channel,body.nav-collapsed .nav-section-label,body.nav-collapsed .tab-label,body.nav-collapsed .sidebar-help span{display:none!important}
+body.nav-collapsed .sidebar-collapse{position:absolute;top:87px;left:-15px;width:30px;height:30px;border-radius:999px!important;z-index:2}
+body.nav-collapsed .sidebar-collapse i{transform:rotate(180deg)}
+body.nav-collapsed .nav-section{margin-bottom:10px}
+body.nav-collapsed .nav-section .tab{justify-content:center;padding:10px;margin:4px 0}
+body.nav-collapsed .nav-section .tab.active::before{right:-10px}
+body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
+
+@media(max-width:999px){
+  .dashboard-app{padding-right:0}
+  .main-sidebar{width:min(286px,86vw);transform:translateX(105%);box-shadow:-20px 0 50px rgba(15,23,42,.16)}
+  body.nav-collapsed .dashboard-app{padding-right:0}
+  body.nav-collapsed .main-sidebar{width:min(286px,86vw)}
+  body.nav-collapsed .sidebar-brand{justify-content:flex-start;padding:0 16px}
+  body.nav-collapsed .sidebar-brand-copy,body.nav-collapsed .sidebar-channel,body.nav-collapsed .nav-section-label,body.nav-collapsed .tab-label,body.nav-collapsed .sidebar-help span{display:block!important}
+  body.nav-collapsed .sidebar-collapse{position:static;width:36px;height:36px;margin-inline-start:auto;border-radius:10px!important}
+  body.nav-collapsed .nav-section{margin-bottom:19px}
+  body.nav-collapsed .nav-section .tab{justify-content:flex-start;padding:10px 11px;margin:2px 0}
+  body.nav-collapsed .sidebar-help{justify-content:flex-start;padding:11px}
+  body.nav-mobile-open{overflow:hidden}
+  body.nav-mobile-open .main-sidebar{transform:translateX(0)}
+  body.nav-mobile-open .sidebar-overlay{display:block}
+  .sidebar-collapse i{transform:rotate(180deg)}
+  .topbar{padding:0 14px!important}
+  .current-page span{display:none}
+  .topbar .user-pill span{display:none}
+  .topbar .user-pill{padding:5px 7px}
+  .topbar .conn-badge{padding:5px 9px}
+}
+@media(max-width:480px){
+  .topbar{height:62px!important;min-height:62px!important}
+  .current-page strong{font-size:14px}
+  .topbar .conn-badge span{max-width:82px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
 </style>
 <link rel="stylesheet" href="conversations.css">
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
+<style>
+  .chan-switch{display:flex;gap:8px;align-items:center;margin-inline-start:14px}
+  .chan{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:10px;border:none;font-family:var(--font);font-weight:700;font-size:13px;cursor:pointer;color:#fff;opacity:.55;transition:opacity .15s}
+  .chan i{width:15px;height:15px;stroke-width:1.5}
+  .chan-wa{background:#25d366}
+  .chan-ig{background:#d62976}
+  .chan.active{opacity:1}
+  #igCfgBanner{border:2px solid #d62976;border-radius:14px;background:linear-gradient(135deg,rgba(254,218,117,.14),rgba(214,41,118,.10),rgba(79,91,213,.12))}
+  .ig-cfg .wa-only{display:none!important}
+  .ig-only{display:none}
+  .ig-cfg .ig-only{display:block}
+  .ig-hidden{display:none!important}
+</style>
 
+<aside class="main-sidebar" id="mainSidebar" aria-label="القائمة الرئيسية">
+  <div class="sidebar-brand">
+    <div class="sidebar-logo-mark">ج</div>
+    <div class="sidebar-brand-copy"><strong>جواب</strong><span>خدمة العملاء الذكية</span></div>
+    <button class="sidebar-collapse" id="sidebarCollapseBtn" onclick="toggleMainNav()" title="تصغير القائمة" aria-label="تصغير القائمة"><i data-lucide="panel-right-close"></i></button>
+  </div>
+
+  <!-- Hidden by default; instagram.js reveals it only when the feature is on. -->
+  <div class="sidebar-channel">
+    <div class="chan-switch" style="display:none">
+      <button class="chan chan-wa active" id="chan-wa" onclick="selectChannel('whatsapp')"><i data-lucide="message-circle"></i><span>واتساب</span></button>
+      <button class="chan chan-ig" id="chan-ig" onclick="selectChannel('instagram')"><i data-lucide="instagram"></i><span>إنستقرام</span></button>
+    </div>
+  </div>
+
+  <div class="sidebar-scroll">
+    <nav class="nav-tabs" aria-label="أقسام المنصة">
+      <div class="nav-section">
+        <div class="nav-section-label">العمل اليومي</div>
+        <button class="tab active" onclick="goTab('connect')" id="tab-connect" title="الربط وحالة واتساب"><i data-lucide="smartphone"></i><span class="tab-label">الربط وحالة واتساب</span></button>
+        <button class="tab" onclick="goTab('conversations')" id="tab-conversations" title="المحادثات"><i data-lucide="message-circle"></i><span class="tab-label">المحادثات</span></button>
+        <button class="tab" onclick="goTab('campaigns')" id="tab-campaigns" title="الحملات"><i data-lucide="send"></i><span class="tab-label">الحملات</span></button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-label">الذكاء والتخصيص</div>
+        <button class="tab" onclick="goTab('train')" id="tab-train" title="دربني"><i data-lucide="graduation-cap"></i><span class="tab-label">دربني</span></button>
+        <button class="tab" onclick="goTab('settings')" id="tab-settings" title="إعدادات الرد"><i data-lucide="settings"></i><span class="tab-label">إعدادات الرد</span></button>
+        <button class="tab" onclick="goTab('instagram')" id="tab-instagram" title="إنستقرام" style="display:none"><i data-lucide="instagram"></i><span class="tab-label">إنستقرام</span></button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-label">الحساب والمنصة</div>
+        <button class="tab" onclick="goTab('pricing')" id="tab-pricing" title="التفعيل والاشتراك"><i data-lucide="badge-check"></i><span class="tab-label">التفعيل والاشتراك</span></button>
+        <button class="tab" onclick="goTab('account')" id="tab-account" title="حسابي"><i data-lucide="user"></i><span class="tab-label">حسابي</span></button>
+      </div>
+    </nav>
+  </div>
+  <div class="sidebar-footer"><div class="sidebar-help"><i data-lucide="circle-help"></i><span>كل الأقسام موجودة هنا، ويمكن تصغير القائمة إلى أيقونات.</span></div></div>
+</aside>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeMobileNav()" aria-hidden="true"></div>
+
+<div class="dashboard-app" id="dashboardApp">
 <div class="topbar">
-  <div class="logo">جواب</div>
-
-  <!-- Channel switcher next to the logo. Hidden by default; instagram.js reveals
-       it only when the Instagram feature is enabled (INSTAGRAM_ENABLED). While
-       disabled the dashboard looks exactly like the WhatsApp-only version. -->
-  <div class="chan-switch" style="display:none">
-    <button class="chan chan-wa active" id="chan-wa" onclick="selectChannel('whatsapp')"><i data-lucide="message-circle"></i> واتساب</button>
-    <button class="chan chan-ig" id="chan-ig" onclick="selectChannel('instagram')"><i data-lucide="instagram"></i> إنستقرام</button>
+  <div class="topbar-start">
+    <button class="menu-toggle" id="mainMenuBtn" onclick="toggleMainNav()" aria-label="فتح القائمة" aria-expanded="false"><i data-lucide="menu"></i></button>
+    <div class="current-page"><strong id="currentPageTitle">الربط وحالة واتساب</strong><span>كل أدوات المنصة في قائمة واحدة مرتبة</span></div>
   </div>
-
-  <style>
-    .chan-switch{display:flex;gap:8px;align-items:center;margin-inline-start:14px}
-    .chan{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:10px;border:none;font-family:var(--font);font-weight:700;font-size:13px;cursor:pointer;color:#fff;opacity:.55;transition:opacity .15s}
-    .chan i{width:15px;height:15px}
-    .chan-wa{background:#25d366}
-    .chan-ig{background:#d62976}
-    .chan.active{opacity:1}
-    /* Tabs drop to their own row under the header, centered */
-    .topbar{flex-wrap:wrap;row-gap:10px}
-    .nav-tabs{order:10;flex-basis:100%;justify-content:center}
-    #igCfgBanner{border:2px solid #d62976;border-radius:14px;background:linear-gradient(135deg,rgba(254,218,117,.14),rgba(214,41,118,.10),rgba(79,91,213,.12))}
-    .ig-cfg .wa-only{display:none!important}
-    .ig-only{display:none}
-    .ig-cfg .ig-only{display:block}
-    .ig-hidden{display:none!important}
-  </style>
-  <div class="nav-tabs">
-    <button class="tab active" onclick="goTab('connect')" id="tab-connect"><i data-lucide="smartphone"></i> الربط</button>
-    <button class="tab" onclick="goTab('settings')" id="tab-settings"><i data-lucide="settings"></i> الإعدادات</button>
-    <button class="tab" onclick="goTab('train')" id="tab-train"><i data-lucide="graduation-cap"></i> دربني</button>
-    <button class="tab" onclick="goTab('conversations')" id="tab-conversations"><i data-lucide="message-circle"></i> المحادثات</button>
-    <button class="tab" onclick="goTab('campaigns')" id="tab-campaigns"><i data-lucide="send"></i> الحملات</button>
-    <button class="tab" onclick="goTab('pricing')" id="tab-pricing"><i data-lucide="badge-check"></i> التفعيل</button>
-    <button class="tab" onclick="goTab('instagram')" id="tab-instagram" style="display:none"><i data-lucide="instagram"></i> إنستقرام</button>
-    <button class="tab" onclick="goTab('account')" id="tab-account"><i data-lucide="user"></i> حسابي</button>
-  </div>
-  <div style="display:flex;align-items:center;gap:10px">
+  <div class="topbar-end">
     <div class="conn-badge">
       <div class="dot gray" id="sDot"></div>
       <span id="sTxt">متوقف</span>
     </div>
     <div class="user-pill">
       <span id="userNameBadge">—</span>
-      <button onclick="doLogout()" title="تسجيل الخروج">⏏</button>
+      <button onclick="doLogout()" title="تسجيل الخروج" aria-label="تسجيل الخروج"><i data-lucide="log-out"></i></button>
     </div>
   </div>
 </div>
@@ -1958,6 +2060,8 @@ body{background-attachment:scroll}
 </div>
 </div>
 
+</div><!-- /dashboard-app -->
+
 <script src="/instagram.js"></script>
 <script src="/campaigns.js"></script>
 <script>
@@ -1984,6 +2088,8 @@ function igOpenSettings(){
   document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
   if(v)v.classList.add('active');
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  const igTab=document.getElementById('tab-instagram'); if(igTab)igTab.classList.add('active');
+  updateNavigationChrome('instagram','إعدادات إنستقرام');
   // Reflect the active channel in the header chips.
   const _wa=document.getElementById('chan-wa'), _ig=document.getElementById('chan-ig');
   if(_wa&&_ig){_ig.classList.add('active');_wa.classList.remove('active');}
@@ -2004,6 +2110,49 @@ async function openInstagram(){
 let billingState = null, billingSettings = null;
 
 // ── NAV ──
+const NAV_TITLES={
+  connect:'الربط وحالة واتساب',
+  conversations:'المحادثات',
+  campaigns:'الحملات',
+  train:'دربني',
+  settings:'إعدادات الرد',
+  instagram:'إنستقرام',
+  pricing:'التفعيل والاشتراك',
+  account:'حسابي'
+};
+const NAV_COLLAPSE_KEY='jawab-main-nav-collapsed';
+function isMobileNav(){return window.matchMedia('(max-width:999px)').matches;}
+function syncMainNavAria(){
+  const btn=document.getElementById('mainMenuBtn');
+  if(!btn)return;
+  const expanded=isMobileNav()?document.body.classList.contains('nav-mobile-open'):!document.body.classList.contains('nav-collapsed');
+  btn.setAttribute('aria-expanded',String(expanded));
+}
+function toggleMainNav(){
+  if(isMobileNav()){
+    document.body.classList.toggle('nav-mobile-open');
+  }else{
+    document.body.classList.toggle('nav-collapsed');
+    try{localStorage.setItem(NAV_COLLAPSE_KEY,document.body.classList.contains('nav-collapsed')?'1':'0');}catch(_){}
+  }
+  syncMainNavAria();
+}
+function closeMobileNav(){
+  document.body.classList.remove('nav-mobile-open');
+  syncMainNavAria();
+}
+function updateNavigationChrome(tab,titleOverride=''){
+  const title=document.getElementById('currentPageTitle');
+  if(title)title.textContent=titleOverride||NAV_TITLES[tab]||'جواب';
+  if(isMobileNav())closeMobileNav();
+}
+function initMainNavigation(){
+  try{if(!isMobileNav()&&localStorage.getItem(NAV_COLLAPSE_KEY)==='1')document.body.classList.add('nav-collapsed');}catch(_){}
+  syncMainNavAria();
+  window.addEventListener('resize',()=>{document.body.classList.remove('nav-mobile-open');syncMainNavAria();});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMobileNav();});
+}
+initMainNavigation();
 function goTab(t){
   // Leaving Instagram-settings mode → restore WhatsApp as the form's channel.
   if (settingsChannel === 'instagram' && t !== 'instagram') exitIgCfgMode();
@@ -2016,6 +2165,7 @@ function goTab(t){
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   const _v=document.getElementById('view-'+t); if(_v)_v.classList.add('active');
   const _tb=document.getElementById('tab-'+t); if(_tb)_tb.classList.add('active');
+  updateNavigationChrome(t);
   // Sync the header channel chips (WhatsApp vs Instagram).
   const _wa=document.getElementById('chan-wa'), _ig=document.getElementById('chan-ig');
   if(_wa&&_ig){const isIg=(t==='instagram');_ig.classList.toggle('active',isIg);_wa.classList.toggle('active',!isIg);}
