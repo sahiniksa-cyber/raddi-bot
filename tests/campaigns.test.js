@@ -186,9 +186,11 @@ test('campaign text delivery uses the live WhatsApp client with the correct engi
   const sent = [];
   const client = { sendMessage: async (...args) => { sent.push(args); return { key: { id: 'wa-1' } }; } };
   await sendCampaignText({ whatsappEngine: 'baileys', client }, '966551234567@s.whatsapp.net', 'عرض اليوم');
+  await sendCampaignText({ whatsappEngine: 'baileys', client }, '278571713060916@lid', 'عرض لعميل LID');
   await sendCampaignText({ whatsappEngine: 'whatsapp-web', client }, '966551234567@s.whatsapp.net', 'عرض آخر');
   assert.deepEqual(sent, [
     ['966551234567@s.whatsapp.net', 'عرض اليوم'],
+    ['278571713060916@lid', 'عرض لعميل LID'],
     ['966551234567@c.us', 'عرض آخر'],
   ]);
 });
@@ -320,6 +322,41 @@ test('keyword audience searches inbound customer messages and removes duplicate 
   assert.match(calls[0].sql, /m\.direction = 'inbound'/);
   assert.match(calls[0].sql, /unnest\(\$2::text\[\]\)/);
   assert.deepEqual(calls[0].params[1], ['عدسات', 'طبية']);
+});
+
+test('keyword audience includes WhatsApp LID conversations instead of silently dropping them', async () => {
+  const calls = [];
+  const database = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: [{
+        conversation_id: 'c-lid',
+        sender: '278571713060916@lid',
+        normalized_phone: null,
+        product_name: 'عدسات',
+        evidence_text: 'أريد عدسات',
+        source: 'keyword_search',
+      }] };
+    },
+  };
+  const recipients = await resolveAudience(database, 'user-1', { source: 'keywords', searchTerms: ['عدسات'] });
+  assert.equal(recipients.length, 1);
+  assert.equal(recipients[0].sender, '278571713060916@lid');
+  assert.doesNotMatch(calls[0].sql, /c\.sender NOT LIKE '%@lid'/);
+});
+
+test('all-conversations audience includes WhatsApp LID conversations', async () => {
+  let call = 0;
+  const database = { query: async sql => {
+    call += 1;
+    if (call === 1) {
+      assert.doesNotMatch(sql, /sender NOT LIKE '%@lid'/);
+      return { rows: [{ conversation_id: 'c-lid', sender: '278571713060916@lid', normalized_phone: null, source: 'conversation' }] };
+    }
+    return { rows: [] };
+  } };
+  const recipients = await resolveAudience(database, 'user-1', { source: 'all' });
+  assert.deepEqual(recipients.map(row => row.sender), ['278571713060916@lid']);
 });
 
 test('keyword audience can be previewed before a campaign is saved', async () => {
