@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>جواب — بوت الواتس أب</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Light.otf') format('opentype');font-weight:300}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Regular.otf') format('opentype');font-weight:400}
@@ -11,7 +14,7 @@
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Bold.otf') format('opentype');font-weight:700}
 @font-face{font-family:'Fatima';src:url('fonts/Fatimah Arabic Balck.otf') format('opentype');font-weight:900}
 :root{
-  --font:'Fatima','Cairo','Segoe UI',Tahoma,sans-serif;
+  --font:'Noto Sans Arabic','Fatima','Segoe UI',Tahoma,sans-serif;
   --green:#16a34a;--green2:#15803d;--green-light:#22c55e;
   --green-bg:#f0fdf4;--green-border:#bbf7d0;
   --bg:#f8fafc;--bg-soft:#f1f5f9;
@@ -329,7 +332,7 @@ details summary::-webkit-details-marker{display:none}
 
 /* Bento SaaS visual layer */
 :root{
-  --font:'Inter','SF Pro Display','Poppins','Fatima','Segoe UI',Tahoma,sans-serif;
+  --font:'Noto Sans Arabic','Fatima','Segoe UI',Tahoma,sans-serif;
   --bg:#f9f9fb;
   --bg-soft:#eef2f6;
   --card:rgba(255,255,255,.78);
@@ -1731,17 +1734,18 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 <div class="view" id="view-campaigns">
 <style>
   .campaign-shell{max-width:1100px;margin:0 auto;padding:24px 16px;direction:rtl}
-  .campaign-hero{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
+  .campaign-hero{margin-bottom:18px}
   .campaign-hero h2{margin:0 0 5px;font-size:24px;color:var(--text)}
   .campaign-layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:start}
   .campaign-steps{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px;position:sticky;top:16px}
-  .campaign-step{width:100%;display:flex;gap:10px;align-items:center;text-align:right;border:0;background:transparent;border-radius:11px;padding:12px;color:var(--text-soft);font:700 13px var(--font);cursor:pointer}
-  .campaign-step span{width:27px;height:27px;display:grid;place-items:center;border-radius:50%;background:#f1f5f9}
+  .campaign-step{width:100%;display:flex;gap:10px;align-items:center;text-align:right;border:0;background:transparent;border-radius:11px;padding:12px;color:var(--text-soft);font:600 13px var(--font);cursor:pointer}
+  .campaign-step-number{width:27px;height:27px;display:grid;place-items:center;flex:none;border-radius:50%;background:#f1f5f9}
+  .campaign-step-copy{min-width:0}.campaign-step-copy b{display:block;font-size:13px;font-weight:600}.campaign-step-copy small{display:block;margin-top:3px;font-size:10.5px;font-weight:400;color:var(--text-dim);white-space:normal;line-height:1.5}
   .campaign-step.active{color:var(--green2);background:var(--green-bg)}
-  .campaign-step.active span,.campaign-step.visited span{background:var(--green);color:#fff}
+  .campaign-step.active .campaign-step-number,.campaign-step.visited .campaign-step-number{background:var(--green);color:#fff}
   .campaign-card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:20px}
   .campaign-page{display:none}.campaign-page.active{display:block}
-  .campaign-title{font-size:18px;font-weight:900;margin:0 0 6px;color:var(--text)}
+  .campaign-title{font-size:18px;font-weight:600;margin:0 0 6px;color:var(--text)}
   .campaign-sub{font-size:13px;color:var(--text-soft);margin:0 0 18px;line-height:1.8}
   .campaign-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .campaign-choice{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:12px;padding:13px;margin-bottom:9px;cursor:pointer}
@@ -1751,28 +1755,45 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border)}
   .campaign-btn.danger{background:#b91c1c}.campaign-btn:disabled{opacity:.5;cursor:not-allowed}
   .campaign-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
-  .campaign-metric{padding:13px;border:1px solid var(--border);border-radius:12px;text-align:center;background:#f8fafc}
-  .campaign-metric strong{display:block;font-size:22px;color:var(--text)}
+  .campaign-metric{width:100%;padding:14px;border:1px solid var(--border);border-radius:13px;text-align:right;background:#f8fafc;color:var(--text);font-family:var(--font);cursor:pointer;transition:border-color .15s,background .15s,transform .15s}
+  .campaign-metric:hover{border-color:var(--green-border);background:#f4fbf7;transform:translateY(-1px)}
+  .campaign-metric.active{border-color:var(--green);background:var(--green-bg);box-shadow:0 0 0 2px rgba(39,183,122,.1)}
+  .campaign-metric strong{display:block;font-size:22px;font-weight:600;color:var(--text)}
+  .campaign-metric b{display:block;margin-top:2px;font-size:12.5px;font-weight:600}.campaign-metric span{display:block;margin-top:5px;font-size:10.5px;color:var(--text-soft)}
+  .campaign-segment-details{margin:10px 0 16px;padding:15px;border:1px solid var(--green-border);border-radius:14px;background:#fbfefc}
+  .campaign-segment-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.campaign-segment-head b{font-size:14px;font-weight:600}.campaign-segment-head button{border:0;background:transparent;color:var(--text-soft);font-family:var(--font);cursor:pointer}
+  .campaign-segment-row{padding:11px 0;border-bottom:1px solid var(--border)}.campaign-segment-row:last-child{border-bottom:0}.campaign-segment-row-top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.campaign-segment-row p{margin:6px 0 0;font-size:12px;color:var(--text-soft);line-height:1.7}
   .campaign-note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:12px;border-radius:11px;font-size:12.5px;line-height:1.7;margin:12px 0}
   .campaign-summary{white-space:pre-wrap;background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;line-height:1.8;font-size:13px}
   .campaign-keywords{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}
   .campaign-keyword{display:inline-flex;align-items:center;gap:7px;background:var(--green-bg);color:var(--green2);border:1px solid #a7f3d0;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800}
   .campaign-keyword button{border:0;background:transparent;color:inherit;cursor:pointer;font-size:16px;line-height:1;padding:0}
   .campaign-preview-row{padding:10px;border-bottom:1px solid var(--border);line-height:1.65}
-  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:145px}.campaign-grid,.campaign-metrics{grid-template-columns:1fr}.campaign-hero{align-items:flex-start;flex-direction:column}}
+  .campaign-content-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start}
+  .campaign-send-count{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;padding:13px 14px;border:1px solid var(--green-border);border-radius:13px;background:var(--green-bg)}
+  .campaign-send-count strong{font-size:20px;font-weight:600;color:var(--green2)}.campaign-send-count span{font-size:12px;color:var(--text-soft)}
+  .campaign-whatsapp-preview{position:sticky;top:16px}.campaign-preview-label{margin-bottom:8px;font-size:12px;font-weight:600;color:var(--text-soft)}
+  .campaign-phone{overflow:hidden;border:1px solid #dbe4df;border-radius:22px;background:#efeae2;box-shadow:0 12px 30px rgba(15,23,42,.1)}
+  .campaign-wa-head{display:flex;align-items:center;gap:9px;padding:12px;background:#0b6b57;color:#fff}.campaign-wa-avatar{width:34px;height:34px;display:grid;place-items:center;border-radius:50%;background:#fff;color:#0b6b57;font-weight:600}.campaign-wa-head b{display:block;font-size:12px;font-weight:600}.campaign-wa-head small{display:block;margin-top:2px;font-size:9.5px;opacity:.8}
+  .campaign-wa-chat{min-height:310px;padding:22px 13px;background-color:#efeae2;background-image:radial-gradient(rgba(120,114,103,.08) 1px,transparent 1px);background-size:13px 13px}
+  .campaign-wa-media{display:none;height:118px;margin-bottom:7px;border-radius:8px;background:linear-gradient(135deg,#d7e9df,#a9cfbd);color:#1f6f53;align-items:center;justify-content:center;flex-direction:column;gap:5px;font-size:11px}.campaign-wa-media.visible{display:flex}.campaign-wa-media i{width:24px;height:24px;stroke-width:1.5}
+  .campaign-wa-bubble{max-width:91%;margin-right:auto;padding:8px 9px 6px;border-radius:9px 2px 9px 9px;background:#d9fdd3;color:#17221d;font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;box-shadow:0 1px 1px rgba(0,0,0,.08)}.campaign-wa-time{display:block;margin-top:3px;text-align:left;font-size:8.5px;color:#66756d}
+  .campaign-preview-help{margin-top:9px;font-size:10.5px;color:var(--text-soft);line-height:1.65}
+  .campaign-saved-card{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:16px;padding:17px 18px;border:1px solid var(--border);border-radius:16px;background:#fff}.campaign-saved-copy{display:flex;align-items:flex-start;gap:10px}.campaign-saved-copy i{width:20px;height:20px;flex:none;margin-top:2px;color:var(--green2);stroke-width:1.5}.campaign-saved-copy b{display:block;font-size:14px;font-weight:600}.campaign-saved-copy p{margin:4px 0 0;font-size:11.5px;color:var(--text-soft);line-height:1.6}.campaign-saved-actions{display:flex;align-items:center;gap:8px;min-width:390px}.campaign-saved-actions select{margin:0!important;min-width:230px}
+  @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{align-items:stretch;flex-direction:column}.campaign-saved-actions{min-width:0}}
+  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics{grid-template-columns:1fr}.campaign-saved-actions{align-items:stretch;flex-direction:column}.campaign-saved-actions select{min-width:0}.campaign-segment-head{align-items:flex-start;flex-direction:column}}
 </style>
 <div class="campaign-shell">
   <div class="campaign-hero">
-    <div><h2>الحملات الإعلانية</h2><div class="hint">أنشئ جمهوراً دقيقاً، راجع الرسالة، ثم اعتمد الإرسال بنفسك.</div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><select id="campaignPicker" onchange="campaignOpen(this.value)" style="min-width:210px"><option value="">الحملات المحفوظة</option></select><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
+    <h2>الحملات الإعلانية</h2><div class="hint">اختر القسم الذي تريد العمل عليه، ثم راجع الحملة واعتمدها بنفسك قبل أي إرسال.</div>
   </div>
   <div id="campaignFlash" style="display:none;margin-bottom:12px;padding:12px;border-radius:11px"></div>
   <div class="campaign-layout">
     <aside class="campaign-steps">
-      <button class="campaign-step active" data-campaign-step="audience" onclick="campaignGoStep('audience')"><span>1</span> الجمهور</button>
-      <button class="campaign-step" data-campaign-step="content" onclick="campaignGoStep('content')"><span>2</span> المحتوى</button>
-      <button class="campaign-step" data-campaign-step="timing" onclick="campaignGoStep('timing')"><span>3</span> التوقيت</button>
-      <button class="campaign-step" data-campaign-step="review" onclick="campaignGoStep('review')"><span>4</span> المراجعة والاعتماد</button>
+      <button class="campaign-step active" data-campaign-step="audience" onclick="campaignGoStep('audience')"><span class="campaign-step-number">1</span><span class="campaign-step-copy"><b>الجمهور</b><small>حدد العملاء المستلمين</small></span></button>
+      <button class="campaign-step" data-campaign-step="content" onclick="campaignGoStep('content')"><span class="campaign-step-number">2</span><span class="campaign-step-copy"><b>المحتوى</b><small>اكتب الرسالة وشاهد شكلها</small></span></button>
+      <button class="campaign-step" data-campaign-step="timing" onclick="campaignGoStep('timing')"><span class="campaign-step-number">3</span><span class="campaign-step-copy"><b>التوقيت</b><small>حدد موعد وفاصل الإرسال</small></span></button>
+      <button class="campaign-step" data-campaign-step="review" onclick="campaignGoStep('review')"><span class="campaign-step-number">4</span><span class="campaign-step-copy"><b>المراجعة والاعتماد</b><small>راجع ثم وافق على الإطلاق</small></span></button>
     </aside>
     <main class="campaign-card">
       <section class="campaign-page active" data-campaign-page="audience">
@@ -1782,11 +1803,12 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
           <div><label>اسم الحملة</label><input id="campaignName" maxlength="120" placeholder="مثال: متابعة المهتمين بعرض الصيف"></div>
           <div><label>هدف الحملة</label><input id="campaignGoal" maxlength="500" placeholder="وصف داخلي اختياري"></div>
         </div>
-        <div class="campaign-metrics">
-          <div class="campaign-metric"><strong id="campaignInterestedCount">0</strong>مهتم بلا طلب مؤكد</div>
-          <div class="campaign-metric"><strong id="campaignOrderedCount">0</strong>طلب مؤكد</div>
-          <div class="campaign-metric"><strong id="campaignVerifyCount">0</strong>يحتاج تحقق</div>
+        <div class="campaign-metrics" aria-label="أقسام العملاء">
+          <button type="button" class="campaign-metric" data-campaign-segment="interested_unverified" onclick="campaignSelectSegment('interested_unverified')"><strong id="campaignInterestedCount">0</strong><b>مهتم ولم يطلب</b><span>اضغط لعرض العملاء والتفاصيل</span></button>
+          <button type="button" class="campaign-metric" data-campaign-segment="ordered_confirmed" onclick="campaignSelectSegment('ordered_confirmed')"><strong id="campaignOrderedCount">0</strong><b>طلب المنتج</b><span>اضغط لعرض العملاء والتفاصيل</span></button>
+          <button type="button" class="campaign-metric" data-campaign-segment="needs_verification" onclick="campaignSelectSegment('needs_verification')"><strong id="campaignVerifyCount">0</strong><b>يحتاج مراجعة</b><span>اضغط لعرض العملاء والتفاصيل</span></button>
         </div>
+        <div id="campaignSegmentDetails" class="campaign-segment-details" hidden></div>
         <label class="campaign-choice"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">كل من لديه محادثة محفوظة، مع الأرقام المستوردة واليدوية.</div></div></label>
         <label class="campaign-choice"><input type="radio" name="campaignSource" value="smart" checked><div><b>التحديد الذكي</b><div class="hint">اختر حالات العملاء والمنتج والفترة.</div></div></label>
         <label class="campaign-choice"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار العملاء من كلمات البحث</b><div class="hint">يبحث داخل رسائل العملاء الواردة فقط، ويختار كل عميل ظهرت لديه أي كلمة من الكلمات.</div></div></label>
@@ -1813,8 +1835,6 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
             <a href="/api/campaigns/smart/export/needs_verification.xlsx" class="campaign-btn secondary" style="text-decoration:none">ملف يحتاج تحقق</a>
           </div>
           <div class="campaign-note">قاعدة البيانات هي النسخة المعتمدة. ملفات Excel تُنشأ لحظة تحميلها، لذلك يظهر فيها أي انتقال أو تعديل مباشرة ولا تبقى نسخة قديمة.</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:14px"><b>إدارة تصنيفات العملاء</b><button class="campaign-btn secondary" onclick="campaignLoadSignals()">تحديث القائمة</button></div>
-          <div id="campaignSignalTable" style="margin-top:9px;max-height:430px;overflow:auto"><div class="hint">جارٍ تحميل التصنيفات...</div></div>
         </div>
         <label class="campaign-choice"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل في فترة معينة</b><div class="hint">يستخدم تاريخ آخر رسالة، وحدد الفترة في حقول التاريخ أعلاه.</div></div></label>
         <label class="campaign-choice"><input type="radio" name="campaignSource" value="contacts"><div><b>قائمة خارجية أو أرقام يدوية</b><div class="hint">يدعم CSV وExcel، ويمكنك لصق أرقام متعددة.</div></div></label>
@@ -1829,11 +1849,27 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 
       <section class="campaign-page" data-campaign-page="content">
         <h3 class="campaign-title">محتوى الحملة</h3>
-        <p class="campaign-sub">اكتب الرسالة بأسطر واضحة، وأضف أكثر من صورة أو فيديو إذا احتجت. تستطيع إضافة روابط كاملة تبدأ بـ https:// وستُحفظ داخل النص كما هي.</p>
-        <label>نص الرسالة</label><textarea id="campaignMessage" rows="9" maxlength="10000" placeholder="اكتب الرسالة هنا..."></textarea>
-        <div style="margin-top:14px"><label>الصور والفيديوهات (حتى 10 عناصر)</label><input id="campaignMedia" type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"></div>
-        <button class="campaign-btn secondary" style="margin-top:9px" onclick="campaignUploadMedia()">رفع العناصر المختارة</button>
-        <div id="campaignMediaList" style="margin-top:12px"></div>
+        <p class="campaign-sub">اكتب الرسالة وأضف الصور أو الفيديوهات، وسترى هنا نفس ترتيب الحملة الذي يصل للعميل في واتساب. الروابط الكاملة التي تبدأ بـ https:// تبقى داخل النص كما هي.</p>
+        <div class="campaign-content-layout">
+          <div>
+            <div class="campaign-send-count"><div><strong id="campaignContentAudienceCount">0</strong><span> عدد الرسائل التي سيتم إطلاقها</span></div><span id="campaignContentItemsCount">نص واحد</span></div>
+            <label>نص الرسالة</label><textarea id="campaignMessage" rows="9" maxlength="10000" placeholder="اكتب الرسالة هنا..."></textarea>
+            <div style="margin-top:14px"><label>الصور والفيديوهات (حتى 10 عناصر)</label><input id="campaignMedia" type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"></div>
+            <button class="campaign-btn secondary" style="margin-top:9px" onclick="campaignUploadMedia()">رفع العناصر المختارة</button>
+            <div id="campaignMediaList" style="margin-top:12px"></div>
+          </div>
+          <aside class="campaign-whatsapp-preview" aria-label="معاينة الحملة في واتساب">
+            <div class="campaign-preview-label">معاينة شكل الحملة في واتساب</div>
+            <div class="campaign-phone">
+              <div class="campaign-wa-head"><div class="campaign-wa-avatar">ج</div><div><b>جواب</b><small>حساب الأعمال</small></div></div>
+              <div class="campaign-wa-chat">
+                <div id="campaignWhatsappMedia" class="campaign-wa-media"><i data-lucide="image"></i><b id="campaignWhatsappMediaLabel">صورة أو فيديو</b></div>
+                <div id="campaignWhatsappMessage" class="campaign-wa-bubble">اكتب رسالتك لتظهر هنا كما ستصل للعميل.<span class="campaign-wa-time">الآن ✓✓</span></div>
+              </div>
+            </div>
+            <div class="campaign-preview-help">المعاينة توضيحية. عند وجود أكثر من صورة أو فيديو تُرسل العناصر بالترتيب، ثم يظهر نص الحملة.</div>
+          </aside>
+        </div>
         <div class="campaign-actions"><button class="campaign-btn secondary" onclick="campaignGoStep('audience')">السابق</button><button class="campaign-btn" onclick="campaignSaveAndNext('timing')">حفظ والمتابعة</button></div>
       </section>
 
@@ -1864,6 +1900,10 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
       </section>
     </main>
   </div>
+  <section class="campaign-saved-card">
+    <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
+    <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
+  </section>
 </div>
 </div>
 

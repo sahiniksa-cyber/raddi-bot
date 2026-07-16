@@ -208,9 +208,9 @@ function createApp() {
           // dashboard's 69 inline onclick handlers. We allow them explicitly
           // until the dashboard is refactored to addEventListener.
           scriptSrcAttr: ["'unsafe-inline'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-          fontSrc: ["'self'", 'data:'],
+          fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
           connectSrc: ["'self'"],
           frameAncestors: ["'none'"],
           objectSrc: ["'none'"],
