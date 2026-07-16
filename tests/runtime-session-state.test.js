@@ -22,6 +22,22 @@ test('buildRuntimeAuthMetadata stores runtime state separately from provider aut
   });
 });
 
+test('buildRuntimeAuthMetadata keeps the last safe disconnect diagnostic', () => {
+  const lastDisconnect = {
+    at: '2026-07-16T19:48:15.000Z',
+    statusCode: 401,
+    reason: 'loggedOut',
+    auth: { registered: true, hasMe: true, keyCategories: 2 },
+  };
+  assert.deepEqual(buildRuntimeAuthMetadata({ lastDisconnect }), {
+    ready: false,
+    qrVersion: 0,
+    authFailureCount: 0,
+    heartbeatFailures: 0,
+    lastDisconnect,
+  });
+});
+
 test('persist session query preserves Baileys auth_state while updating runtime metadata', () => {
   const query = buildPersistSessionStateQuery({
     userId: 'user-1',

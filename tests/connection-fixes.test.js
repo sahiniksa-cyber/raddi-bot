@@ -10,8 +10,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { DisconnectReason } = require('@whiskeysockets/baileys');
-const { BaileysConnectionManager } = require('../src/services/whatsapp/baileys-connection-manager');
+const { DisconnectReason, proto } = require('@whiskeysockets/baileys');
+const {
+  BaileysConnectionManager,
+  shouldSyncEssentialHistoryMessage,
+} = require('../src/services/whatsapp/baileys-connection-manager');
 const { OpenAIMediaAnalyzer } = require('../src/services/ai/openai-media-analysis');
 
 function createManager(overrides = {}) {
@@ -107,6 +110,43 @@ test('FIX 1: restartRequired (515) resets QR backoff and schedules the first fas
   assert.equal(scheduled[0].retryCount, 0, '515 must use the first ~1 second reconnect slot');
   assert.equal(scheduled[0].generation, 9);
   assert.match(scheduled[0].reason, /code=515/);
+});
+
+test('FIX 1: pairing keeps identity bootstrap but skips unused heavy history sync types', () => {
+  const types = proto.HistorySync.HistorySyncType;
+  assert.equal(shouldSyncEssentialHistoryMessage({ syncType: types.INITIAL_BOOTSTRAP }), true);
+  assert.equal(shouldSyncEssentialHistoryMessage({ syncType: types.PUSH_NAME }), true);
+  assert.equal(shouldSyncEssentialHistoryMessage({ syncType: types.RECENT }), false);
+  assert.equal(shouldSyncEssentialHistoryMessage({ syncType: types.FULL }), false);
+  assert.equal(shouldSyncEssentialHistoryMessage({ syncType: types.ON_DEMAND }), false);
+  assert.equal(shouldSyncEssentialHistoryMessage({ syncType: types.NON_BLOCKING_DATA }), false);
+});
+
+test('FIX 1: the last close code and safe auth summary survive later QR rotations', async () => {
+  const manager = createManager();
+  manager._running = true;
+  manager._socketGeneration = 4;
+  manager._pairingStartedAt = '2026-07-16T19:48:00.000Z';
+  manager._authStore = {
+    cache: {
+      creds: { registered: true, me: { id: '123@s.whatsapp.net' } },
+      keys: { 'pre-key': {}, session: {} },
+    },
+  };
+  manager.scheduleReconnect = () => {};
+
+  await manager.handleConnectionUpdate(makeCloseUpdate(DisconnectReason.restartRequired), 0, 4);
+  await manager.handleConnectionUpdate({ qr: 'next-qr' }, 0, 4);
+
+  assert.equal(manager.lastDisconnect.statusCode, DisconnectReason.restartRequired);
+  assert.equal(manager.lastDisconnect.reason, 'restartRequired');
+  assert.equal(manager.lastDisconnect.pairingStartedAt, '2026-07-16T19:48:00.000Z');
+  assert.deepEqual(manager.lastDisconnect.auth, {
+    registered: true,
+    hasMe: true,
+    keyCategories: 2,
+  });
+  clearTimeout(manager._qrStuckTimer);
 });
 
 // ---------- FIX 2 ----------
