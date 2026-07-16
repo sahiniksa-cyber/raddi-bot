@@ -56,7 +56,7 @@ const {
   buildLearnStyleRequest,
 } = require('./services/ai/meta-prompts');
 const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
-const { createCampaignWorker } = require('./workers/campaign-worker');
+const { createCampaignWorker, recoverCampaignDeliveries } = require('./workers/campaign-worker');
 const { closeCampaignQueue } = require('./queues/campaign-queue');
 const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
 const { getQueues } = require('./queues/message-queue');
@@ -170,6 +170,7 @@ function createStartupApp(state = {}) {
       phase: state.phase || 'starting',
       migration: state.migration || null,
       migrationError: state.migrationError || null,
+      workers: state.workers || {},
       ts: Date.now(),
     });
   });
@@ -926,17 +927,20 @@ async function main() {
     app: null,
     ready: false,
     phase: 'starting',
+    workers: { outgoingWhatsapp: 'starting', campaignDeliveries: 'starting' },
   };
   const app = createStartupApp(startupState);
   const server = app.listen(PORT, () => console.log(`${new Date().toISOString()} [server] Jwab health listening on port ${PORT}`));
   let outgoingWorker = null;
   let campaignWorker = null;
   let aiRecoveryTimer = null;
+  let campaignRecoveryTimer = null;
   let healthMonitor = null;
 
   const shutdown = async (signal, exitCode = 0) => {
     console.log(`${new Date().toISOString()} [server] ${signal} shutdown`);
     if (aiRecoveryTimer) clearInterval(aiRecoveryTimer);
+    if (campaignRecoveryTimer) clearInterval(campaignRecoveryTimer);
     healthMonitor?.stop?.();
     server.close(() => {});
     // Release WhatsApp connection leases so the next Railway replica can
@@ -990,8 +994,11 @@ async function main() {
   if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {
     try {
       outgoingWorker = createOutgoingWhatsappWorker({ getUserBot });
+      await outgoingWorker.waitUntilReady();
+      startupState.workers.outgoingWhatsapp = 'ready';
       console.log(`${new Date().toISOString()} [server] outgoing whatsapp worker started`);
     } catch (err) {
+      startupState.workers.outgoingWhatsapp = 'failed';
       console.error(`${new Date().toISOString()} [server] outgoing worker failed to start: ${err.message}`);
       // Don't crash — the web server should still serve healthchecks and the dashboard
     }
@@ -1002,8 +1009,24 @@ async function main() {
   if (process.env.CAMPAIGN_WORKER_DISABLED !== 'true') {
     try {
       campaignWorker = createCampaignWorker({ getUserBot });
+      await campaignWorker.waitUntilReady();
+      startupState.workers.campaignDeliveries = 'ready';
       console.log(`${new Date().toISOString()} [server] campaign worker started`);
+      const recover = async () => {
+        const result = await recoverCampaignDeliveries();
+        if (result.staleSending || result.missingJobs || result.scheduled) {
+          console.log(`${new Date().toISOString()} [campaign-recovery] stale=${result.staleSending} missing=${result.missingJobs} scheduled=${result.scheduled}`);
+        }
+      };
+      await recover().catch(err => {
+        console.error(`${new Date().toISOString()} [campaign-recovery] initial pass failed: ${err.message}`);
+      });
+      campaignRecoveryTimer = setInterval(() => recover().catch(err => {
+        console.error(`${new Date().toISOString()} [campaign-recovery] failed: ${err.message}`);
+      }), Math.max(30000, parseInt(process.env.CAMPAIGN_RECOVERY_INTERVAL_MS || '60000', 10)));
+      campaignRecoveryTimer.unref?.();
     } catch (err) {
+      startupState.workers.campaignDeliveries = 'failed';
       console.error(`${new Date().toISOString()} [server] campaign worker failed to start: ${err.message}`);
     }
   }

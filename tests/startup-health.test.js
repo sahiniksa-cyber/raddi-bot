@@ -38,7 +38,7 @@ function get(server, path) {
 }
 
 test('startup app answers health before the full app is ready', async () => {
-  const app = createStartupApp({ ready: false, startedAt: 123 });
+  const app = createStartupApp({ ready: false, startedAt: 123, workers: { campaignDeliveries: 'starting' } });
   const server = await listen(app);
   try {
     const res = await get(server, '/health');
@@ -47,6 +47,7 @@ test('startup app answers health before the full app is ready', async () => {
     assert.equal(res.status, 200);
     assert.equal(body.ok, true);
     assert.equal(body.ready, false);
+    assert.equal(body.workers.campaignDeliveries, 'starting');
   } finally {
     await close(server);
   }
