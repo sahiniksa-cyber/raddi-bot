@@ -170,6 +170,26 @@ function createDefaultIngestService(logger) {
   return new MessageIngestService({ logger, campaignSegmentation: enqueueCampaignSegmentation });
 }
 
+function createBaileysClientWrapper({ sock, isReady, isReadOnly, status }) {
+  return {
+    sendMessage: async (target, content) => {
+      if (isReadOnly()) {
+        const error = new Error('WhatsApp history import is read-only; sending is disabled');
+        error.code = 'HISTORY_IMPORT_READ_ONLY';
+        throw error;
+      }
+      return sock.sendMessage(
+        normalizeOutboundJid(target),
+        content && typeof content === 'object' && !Buffer.isBuffer(content)
+          ? content
+          : { text: String(content || '') },
+      );
+    },
+    sendPresenceUpdate: async (state, target) => sock.sendPresenceUpdate(state, normalizeOutboundJid(target)),
+    getState: async () => (isReady() ? 'CONNECTED' : status().toUpperCase()),
+  };
+}
+
 class BaileysConnectionManager extends EventEmitter {
   constructor({
     userId,
@@ -177,6 +197,7 @@ class BaileysConnectionManager extends EventEmitter {
     logger = console,
     ingestService = createDefaultIngestService(logger),
     database = db,
+    historyImportService = null,
   }) {
     super();
     if (!userId) throw new Error('userId is required');
@@ -188,6 +209,9 @@ class BaileysConnectionManager extends EventEmitter {
     this.logger = logger;
     this.ingestService = ingestService;
     this.db = database;
+    this.historyImportService = historyImportService;
+    this._historyImport = { enabled: false, importId: null };
+    this._historySendLock = false;
 
     this.sock = null;
     this.client = null;
@@ -251,7 +275,23 @@ class BaileysConnectionManager extends EventEmitter {
       statusAgeMs: Date.now() - this.statusSince,
       lastProbeState: this.lastProbeState,
       lastDisconnect: this.lastDisconnect,
+      historyImportMode: this._historyImport.enabled,
+      readOnly: this._historyImport.enabled || this._historySendLock,
     };
+  }
+
+  setHistoryImportMode({ enabled = false, importId = null, service = null } = {}) {
+    if (enabled && !importId) throw new Error('importId is required for history import mode');
+    if (service) this.historyImportService = service;
+    if (enabled && !this.historyImportService) throw new Error('historyImportService is required');
+    this._historyImport = { enabled: Boolean(enabled), importId: enabled ? importId : null };
+    this._historySendLock = Boolean(enabled);
+    this.emitState(enabled ? 'history_import_enabled' : 'history_import_disabled');
+  }
+
+  setHistoryImportSendLock(enabled) {
+    this._historySendLock = Boolean(enabled);
+    this.emitState(enabled ? 'history_import_send_locked' : 'history_import_send_unlocked');
   }
 
   emitState(stage) {
@@ -270,6 +310,9 @@ class BaileysConnectionManager extends EventEmitter {
       return false;
     }
 
+    const historyImportMode = this._historyImport.enabled;
+    const historyImportId = this._historyImport.importId;
+    const historyImportService = this.historyImportService;
     this._running = true;
     this.ready = false;
     this.lastError = null;
@@ -290,10 +333,10 @@ class BaileysConnectionManager extends EventEmitter {
         auth: state,
         version: this._version,
         printQRInTerminal: false,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: historyImportMode ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome'),
         logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || 'silent' }),
-        syncFullHistory: false,
-        shouldSyncHistoryMessage: shouldSyncEssentialHistoryMessage,
+        syncFullHistory: historyImportMode,
+        shouldSyncHistoryMessage: historyImportMode ? () => true : shouldSyncEssentialHistoryMessage,
         markOnlineOnConnect: false,
         emitOwnEvents: false,
         // Connection stability: send a WebSocket keep-alive ping on an interval
@@ -333,16 +376,12 @@ class BaileysConnectionManager extends EventEmitter {
       // sendMessage returns the Baileys WAMessage so callers can record
       // key.id (used by getMessage on retry receipts to short-circuit the
       // "Bad MAC" cascade).
-      this.client = {
-        sendMessage: async (target, content) => sock.sendMessage(
-          normalizeOutboundJid(target),
-          content && typeof content === 'object' && !Buffer.isBuffer(content)
-            ? content
-            : { text: String(content || '') },
-        ),
-        sendPresenceUpdate: async (state, target) => sock.sendPresenceUpdate(state, normalizeOutboundJid(target)),
-        getState: async () => (this.ready ? 'CONNECTED' : this.status.toUpperCase()),
-      };
+      this.client = createBaileysClientWrapper({
+        sock,
+        isReady: () => this.ready,
+        isReadOnly: () => historyImportMode || this._historyImport.enabled || this._historySendLock,
+        status: () => this.status,
+      });
 
       sock.ev.on('creds.update', saveCreds);
       sock.ev.on('connection.update', (update) => {
@@ -361,9 +400,27 @@ class BaileysConnectionManager extends EventEmitter {
           this.log('info', 'message', `dropped messages.upsert from generation=${socketGeneration} current=${this._socketGeneration}`);
           return;
         }
+        if (historyImportMode) {
+          historyImportService.enqueueLiveUpsert(historyImportId, event).catch((err) => {
+            this.log('error', 'history_import', `failed to store read-only message batch: ${err.message}`, err);
+          });
+          return;
+        }
         // Pass the captured generation INTO handleMessages so the loop can
         // also bail out per-message if a reconnect happens while we iterate.
         this.handleMessages(event, socketGeneration);
+      });
+      sock.ev.on('messaging-history.set', (event) => {
+        if (!historyImportMode || socketGeneration !== this._socketGeneration) return;
+        historyImportService.enqueueHistorySet(historyImportId, event).catch((err) => {
+          this.log('error', 'history_import', `failed to store WhatsApp history: ${err.message}`, err);
+        });
+      });
+      sock.ev.on('messaging-history.status', (event) => {
+        if (!historyImportMode || socketGeneration !== this._socketGeneration) return;
+        historyImportService.recordHistoryStatus(historyImportId, event).catch((err) => {
+          this.log('error', 'history_import', `failed to store WhatsApp history status: ${err.message}`, err);
+        });
       });
       this.startQrWatchdog(retryCount);
       return true;
@@ -774,6 +831,7 @@ class BaileysConnectionManager extends EventEmitter {
 
 module.exports = {
   BaileysConnectionManager,
+  createBaileysClientWrapper,
   normalizeOutboundJid,
   extractPhoneNumber,
   toWhatsappWebMessage,

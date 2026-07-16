@@ -105,6 +105,16 @@ function createCampaignRoutes(deps = {}) {
     res.json({ success: true, ...result });
   }));
 
+  router.get('/api/campaigns/history-import', asyncHandler(async (req, res) => {
+    res.json({ success: true, historyImport: await service.historyImportStatus(userId(req)) });
+  }));
+  router.post('/api/campaigns/history-import/start', asyncHandler(async (req, res) => {
+    res.json({ success: true, historyImport: await service.startHistoryImport(userId(req)) });
+  }));
+  router.post('/api/campaigns/history-import/finish', asyncHandler(async (req, res) => {
+    res.json({ success: true, historyImport: await service.finishHistoryImport(userId(req)) });
+  }));
+
   router.get('/api/campaigns', asyncHandler(async (req, res) => {
     res.json({ success: true, campaigns: await service.list(userId(req)) });
   }));

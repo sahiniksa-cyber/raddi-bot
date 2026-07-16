@@ -21,6 +21,13 @@ test('AI that only greets (no extra content) → just the canned greeting (no du
   assert.equal(combineCannedAndAi('وعليكم السلام، حياك الله', 'هلا وعليكم السلام'), 'وعليكم السلام، حياك الله');
 });
 
+test('strips an orphan greeting continuation after an instant greeting (reported screenshot)', () => {
+  assert.equal(
+    combineCannedAndAi('وعليكم السلام، هلا ومرحبا', 'ورحمة الله وبركاته'),
+    'وعليكم السلام، هلا ومرحبا',
+  );
+});
+
 test('no canned prefix → returns AI reply unchanged', () => {
   assert.equal(combineCannedAndAi('', 'السعر 120'), 'السعر 120');
 });

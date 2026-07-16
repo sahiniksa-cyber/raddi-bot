@@ -6,6 +6,7 @@ const ExcelJS = require('exceljs');
 
 const db = require('../../db/client');
 const { checkMessageQuota } = require('../billing/message-quota');
+const { WhatsAppHistoryImportService } = require('../whatsapp/history-import.service');
 const { buildProductCatalog, normalizeProductText } = require('../products/product-knowledge');
 const {
   classifyConversationDeterministic,
@@ -274,6 +275,51 @@ async function resolveAudience(database, userId, rules = {}) {
       params,
     );
     rows.push(...result.rows);
+
+    const historyClauses = [
+      `m.user_id = $1`,
+      `m.sender = c.sender`,
+      `m.direction = 'inbound'`,
+      `EXISTS (
+         SELECT 1 FROM unnest($2::text[]) AS keyword(term)
+         WHERE STRPOS(LOWER(m.content), LOWER(keyword.term)) > 0
+       )`,
+    ];
+    const historyParams = [userId, searchTerms];
+    if (rules.dateFrom) {
+      historyParams.push(rules.dateFrom);
+      historyClauses.push(`m.message_at >= $${historyParams.length}::timestamptz`);
+    }
+    if (rules.dateTo) {
+      historyParams.push(rules.dateTo);
+      historyClauses.push(`m.message_at < ($${historyParams.length}::date + INTERVAL '1 day')`);
+    }
+    const historyResult = await database.query(
+      `SELECT NULL::uuid AS conversation_id, c.sender,
+              COALESCE(c.normalized_phone, matched.normalized_phone) AS normalized_phone,
+              c.customer_name,
+              NULL::text AS product_key, matched.matched_term AS product_name,
+              NULL::text AS customer_state, 1::numeric AS confidence,
+              NULL::uuid AS evidence_message_id, matched.content AS evidence_text,
+              'keyword_history'::text AS source
+       FROM whatsapp_history_conversations c
+       JOIN LATERAL (
+         SELECT m.normalized_phone, m.content,
+                (SELECT keyword.term FROM unnest($2::text[]) AS keyword(term)
+                 WHERE STRPOS(LOWER(m.content), LOWER(keyword.term)) > 0
+                 ORDER BY LENGTH(keyword.term) DESC LIMIT 1) AS matched_term
+         FROM whatsapp_history_messages m
+         WHERE ${historyClauses.join(' AND ')}
+         ORDER BY m.message_at DESC NULLS LAST, m.created_at DESC
+         LIMIT 1
+       ) matched ON TRUE
+       WHERE c.user_id = $1
+         AND c.sender NOT LIKE '%@g.us'
+         AND c.sender NOT LIKE '%@broadcast'
+       ORDER BY c.last_message_at DESC NULLS LAST`,
+      historyParams,
+    );
+    rows.push(...historyResult.rows);
   }
   if (source === 'conversations' || source === 'all') {
     const params = [userId];
@@ -297,6 +343,28 @@ async function resolveAudience(database, userId, rules = {}) {
       params,
     );
     rows.push(...result.rows);
+
+    const historyParams = [userId];
+    const historyClauses = [`user_id = $1`, `sender NOT LIKE '%@g.us'`, `sender NOT LIKE '%@broadcast'`];
+    if (source === 'conversations' && rules.dateFrom) {
+      historyParams.push(rules.dateFrom);
+      historyClauses.push(`last_message_at >= $${historyParams.length}::timestamptz`);
+    }
+    if (source === 'conversations' && rules.dateTo) {
+      historyParams.push(rules.dateTo);
+      historyClauses.push(`last_message_at < ($${historyParams.length}::date + INTERVAL '1 day')`);
+    }
+    const historyResult = await database.query(
+      `SELECT NULL::uuid AS conversation_id, sender, normalized_phone,
+              customer_name, NULL::text AS product_key, NULL::text AS product_name,
+              NULL::text AS customer_state, NULL::numeric AS confidence,
+              NULL::uuid AS evidence_message_id, ''::text AS evidence_text,
+              'history_conversation'::text AS source
+       FROM whatsapp_history_conversations
+       WHERE ${historyClauses.join(' AND ')} ORDER BY last_message_at DESC NULLS LAST`,
+      historyParams,
+    );
+    rows.push(...historyResult.rows);
   }
   if (source === 'contacts' && Array.isArray(rules.numbers)) {
     const numbers = normalizeAudienceRules(rules).numbers || [];
@@ -333,12 +401,77 @@ async function resolveAudience(database, userId, rules = {}) {
     // Baileys can deliver to these identifiers directly, so excluding them here
     // silently removed most real customers from campaign previews and sends.
     if (!sender || sender.includes('@g.us') || sender.includes('@broadcast')) continue;
-    if (!bySender.has(sender)) bySender.set(sender, row);
+    const phone = String(row.normalized_phone || '').replace(/\D/g, '');
+    const key = phone ? `phone:${phone}` : `sender:${sender}`;
+    if (!bySender.has(key)) {
+      bySender.set(key, row);
+      continue;
+    }
+    const current = bySender.get(key);
+    bySender.set(key, {
+      ...current,
+      normalized_phone: current.normalized_phone || row.normalized_phone,
+      customer_name: current.customer_name || row.customer_name,
+      evidence_text: current.evidence_text || row.evidence_text,
+      product_name: current.product_name || row.product_name,
+    });
   }
   return [...bySender.values()];
 }
 
 function createCampaignService({ database = db, getUserBot } = {}) {
+  const historyServiceFor = userId => new WhatsAppHistoryImportService({ database, userId });
+
+  async function historyImportStatus(userId) {
+    return historyServiceFor(userId).latestStatus();
+  }
+
+  async function startHistoryImport(userId) {
+    if (typeof getUserBot !== 'function') {
+      throw badRequest('تعذر الوصول إلى اتصال واتساب', 'WHATSAPP_CONNECTION_UNAVAILABLE');
+    }
+    const activeCampaign = await database.query(
+      `SELECT COUNT(*)::int AS count FROM campaigns
+       WHERE user_id = $1 AND status IN ('sending','scheduled')`,
+      [userId],
+    );
+    if (Number(activeCampaign.rows[0]?.count || 0) > 0) {
+      throw badRequest('أوقف الحملة الجارية أو ألغِ المجدولة قبل استيراد المحادثات. الاستيراد وضع قراءة فقط ويمنع كل إرسال.', 'CAMPAIGN_ACTIVE_DURING_HISTORY_IMPORT');
+    }
+    const bot = await getUserBot(userId);
+    if (typeof bot?.startHistoryImport !== 'function' || typeof bot?.lockHistoryImportSending !== 'function') {
+      throw badRequest('هذا الاتصال لا يدعم استيراد سجل واتساب الآمن', 'HISTORY_IMPORT_UNSUPPORTED');
+    }
+    bot.lockHistoryImportSending();
+    const service = historyServiceFor(userId);
+    let historyImport = null;
+    try {
+      historyImport = await service.beginImport();
+      return await bot.startHistoryImport(historyImport.id);
+    } catch (error) {
+      if (historyImport?.id) await service.failImport(historyImport.id, error).catch(() => {});
+      bot.unlockHistoryImportSending?.();
+      throw error;
+    }
+  }
+
+  async function finishHistoryImport(userId) {
+    if (typeof getUserBot !== 'function') {
+      throw badRequest('تعذر الوصول إلى اتصال واتساب', 'WHATSAPP_CONNECTION_UNAVAILABLE');
+    }
+    const service = historyServiceFor(userId);
+    const status = await service.latestStatus();
+    if (!WhatsAppHistoryImportService.isActiveStatus(status.status)) {
+      throw badRequest('لا يوجد استيراد محادثات قيد التشغيل', 'HISTORY_IMPORT_NOT_ACTIVE');
+    }
+    const bot = await getUserBot(userId);
+    if (typeof bot?.finishHistoryImport !== 'function') {
+      throw badRequest('هذا الاتصال لا يدعم إنهاء استيراد السجل', 'HISTORY_IMPORT_UNSUPPORTED');
+    }
+    await bot.finishHistoryImport(status.id);
+    return service.latestStatus();
+  }
+
   async function list(userId) {
     const result = await database.query(
       `SELECT * FROM campaigns WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
@@ -810,6 +943,14 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     if (!bot?.client?.sendMessage || !bot.connection?.ready || bot.connection?.status !== 'connected') {
       throw badRequest('واتساب غير متصل. شغّل البوت وتأكد أن الحالة «متصل» قبل بدء الحملة', 'WHATSAPP_NOT_CONNECTED');
     }
+    const activeHistoryImport = await database.query(
+      `SELECT COUNT(*)::int AS count FROM whatsapp_history_imports
+       WHERE user_id = $1 AND status IN ('starting','running')`,
+      [userId],
+    );
+    if (Number(activeHistoryImport.rows[0]?.count || 0) > 0) {
+      throw badRequest('استيراد محادثات واتساب يعمل الآن بوضع القراءة فقط. أنهِ الاستيراد قبل إطلاق أي حملة.', 'HISTORY_IMPORT_READ_ONLY');
+    }
     const pendingResult = await database.query(
       `SELECT COUNT(*)::int AS count FROM campaign_recipients WHERE campaign_id = $1 AND status = 'pending'`,
       [campaignId],
@@ -972,6 +1113,8 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     exportContacts,
     get,
     importContacts,
+    finishHistoryImport,
+    historyImportStatus,
     list,
     listSignals,
     normalizePhone,
@@ -981,6 +1124,7 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     segmentCounts,
     setStatus,
     start,
+    startHistoryImport,
     update,
     updateSignal,
   };

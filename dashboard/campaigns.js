@@ -9,6 +9,7 @@ let campaignSignals = [];
 let campaignSignalsLoaded = false;
 let campaignSelectedSegment = null;
 let campaignAudienceCount = 0;
+let campaignHistoryPollTimer = null;
 
 function campaignFlash(message, error = false) {
   const el = document.getElementById('campaignFlash');
@@ -245,12 +246,79 @@ async function campaignPreviewKeywords() {
     const preview = document.getElementById('campaignKeywordPreview');
     document.getElementById('campaignKeywordAudienceCount').textContent = String(data.count);
     const rows = (data.recipients || []).map(row => {
-      const identity = row.customer_name || row.normalized_phone || row.sender;
-      return `<div class="campaign-preview-row"><b>${campaignEscape(identity)}</b><div class="hint">الكلمة المطابقة: ${campaignEscape(row.product_name || '')}</div><div>${campaignEscape(row.evidence_text || '')}</div></div>`;
+      const number = row.normalized_phone || row.sender;
+      const name = row.customer_name ? ` · ${campaignEscape(row.customer_name)}` : '';
+      return `<div class="campaign-preview-row"><b dir="ltr">${campaignEscape(number)}</b>${name}<div class="hint">الكلمة المطابقة: ${campaignEscape(row.product_name || '')}</div><div>${campaignEscape(row.evidence_text || '')}</div></div>`;
     }).join('');
     preview.innerHTML = `<b>تم تحديد ${data.count} عميل بدون تكرار.</b>${data.count > 100 ? '<div class="hint">يظهر أول 100 عميل فقط هنا، بينما الاعتماد يشمل جميع المطابقين.</div>' : ''}${rows || '<div class="hint">لا يوجد عميل مطابق حالياً.</div>'}`;
     preview.style.display = 'block';
     campaignFlash(`تم فحص الرسائل وتحديد ${data.count} عميل مطابق.`);
+  } catch (error) { campaignFlash(error.message, true); }
+}
+
+function campaignRenderHistoryImport(status = {}) {
+  const active = ['starting', 'running'].includes(status.status);
+  const labels = {
+    not_started: 'لم يبدأ',
+    starting: 'يبدأ الآن',
+    running: status.explicit_complete ? 'اكتمل الاستلام' : 'جارٍ الاستيراد',
+    completed: 'مكتمل',
+    partial: 'محفوظ جزئياً',
+    failed: 'تعذر الاستيراد',
+    canceled: 'ملغي',
+  };
+  const badge = document.getElementById('campaignHistoryBadge');
+  if (!badge) return;
+  badge.textContent = labels[status.status] || status.status || 'غير معروف';
+  document.getElementById('campaignHistoryChats').textContent = String(Number(status.conversations_total) || 0);
+  document.getElementById('campaignHistoryNumbers').textContent = String(Number(status.numbers_total) || 0);
+  document.getElementById('campaignHistoryMessages').textContent = String(Number(status.inbound_messages_total) || 0);
+  document.getElementById('campaignHistoryStart').disabled = active;
+  document.getElementById('campaignHistoryFinish').disabled = !active;
+  const note = document.getElementById('campaignHistoryNote');
+  if (status.last_error) {
+    note.textContent = `تعذر الاستيراد: ${status.last_error}`;
+  } else if (active && status.explicit_complete) {
+    note.textContent = 'وصلت إشارة اكتمال السجل من واتساب. اضغط «إنهاء الاستيراد» لحفظ الحالة وإبقاء الاتصال متوقفاً بدون إرسال.';
+  } else if (active) {
+    note.textContent = `الاستيراد يعمل بوضع القراءة فقط${status.progress ? ` — التقدم المعلن ${status.progress}%` : ''}. لا توجد ردود آلية أو حملات أو رسائل صادرة الآن.`;
+  } else if (status.status === 'completed') {
+    note.textContent = 'تم حفظ السجل الذي سلّمه واتساب وأصبح قابلاً للبحث. اكتب كلمات البحث واضغط حساب العملاء لعرض الأرقام.';
+  } else if (status.status === 'partial') {
+    note.textContent = 'تم حفظ البيانات المستلمة، لكن واتساب لم يرسل إشارة اكتمال السجل. نتائج البحث تشمل المحادثات المحفوظة فقط.';
+  } else {
+    note.textContent = 'الاستيراد منفصل تماماً عن صندوق الرسائل الحي. بعد إنهائه استخدم كلمات البحث ثم راجع العدد والأرقام قبل اعتماد الحملة.';
+  }
+
+  if (active && !campaignHistoryPollTimer) {
+    campaignHistoryPollTimer = window.setInterval(() => campaignLoadHistoryImport().catch(() => {}), 3000);
+  } else if (!active && campaignHistoryPollTimer) {
+    window.clearInterval(campaignHistoryPollTimer);
+    campaignHistoryPollTimer = null;
+  }
+}
+
+async function campaignLoadHistoryImport() {
+  const data = await campaignApi('/api/campaigns/history-import');
+  campaignRenderHistoryImport(data.historyImport || {});
+  return data.historyImport;
+}
+
+async function campaignStartHistoryImport() {
+  try {
+    const confirmed = window.confirm('سيتم تشغيل اتصال واتساب بوضع قراءة فقط لإحضار المحادثات. خلال الاستيراد لن يعمل الرد الآلي ولن تُرسل أي حملة أو رسالة. هل تريد البدء؟');
+    if (!confirmed) return;
+    const data = await campaignApi('/api/campaigns/history-import/start', { method: 'POST' });
+    campaignRenderHistoryImport(data.historyImport || {});
+    campaignFlash('بدأ استيراد المحادثات بوضع القراءة فقط. لن تُرسل أي رسالة.');
+  } catch (error) { campaignFlash(error.message, true); }
+}
+
+async function campaignFinishHistoryImport() {
+  try {
+    const data = await campaignApi('/api/campaigns/history-import/finish', { method: 'POST' });
+    campaignRenderHistoryImport(data.historyImport || {});
+    campaignFlash('تم إنهاء الاستيراد وحفظ المحادثات، واتصال واتساب متوقف الآن بدون إرسال.');
   } catch (error) { campaignFlash(error.message, true); }
 }
 
@@ -518,8 +586,9 @@ function campaignBindControls() {
 
 async function campaignOnTab() {
   campaignBindControls();
-  const [listResult] = await Promise.allSettled([campaignLoadList(), campaignLoadCounts(), campaignLoadSignals()]);
+  const [listResult, , , historyResult] = await Promise.allSettled([campaignLoadList(), campaignLoadCounts(), campaignLoadSignals(), campaignLoadHistoryImport()]);
   if (listResult.status === 'rejected') campaignFlash(`تعذر تحميل الحملات المحفوظة: ${listResult.reason.message}`, true);
+  if (historyResult.status === 'rejected') campaignFlash(`تعذر تحميل حالة استيراد المحادثات: ${historyResult.reason.message}`, true);
 }
 
 window.campaignOnTab = campaignOnTab;

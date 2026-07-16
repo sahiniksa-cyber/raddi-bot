@@ -99,6 +99,7 @@ test('FIX 2: sendInstantAutoReply marks inbound messages answered before returni
   assert.deepEqual(markedAnswered, ['msg-1', 'msg-2'], 'all batched inbound messages must be marked answered');
   assert.equal(enqueued.length, 1);
   assert.equal(enqueued[0].source, 'auto_reply_keyword');
+  assert.equal(enqueued[0].preSendReviewRequired, true, 'instant replies must pass the final send-boundary review');
   assert.equal(result.replyMessageId, 'reply-msg-1');
   assert.equal(result.source, 'auto_reply_keyword');
 });

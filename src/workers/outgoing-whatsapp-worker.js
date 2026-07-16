@@ -9,6 +9,7 @@ const { normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
 const { checkMessageQuota, decrementMessageQuota } = require('../services/billing/message-quota');
 const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
 const { recordThreadMessage } = require('../services/escalation/escalation-bridge');
+const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-review');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -118,7 +119,7 @@ async function skipStaleOutgoingJob(job, { replyMessageId }) {
   return true;
 }
 
-async function processOutgoingWhatsapp(job, { getUserBot }) {
+async function processOutgoingWhatsapp(job, { getUserBot, reviewBeforeSend = reviewOutgoingReplyBeforeSend }) {
   const payload = job.data || {};
   const userId = payload.userId;
   const sender = payload.sender;
@@ -135,7 +136,7 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   // if it fails so the customer doesn't fall through the cracks silently.
   if (sender.endsWith('@lid')) {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid sender detected: jid=${sender} replyMessageId=${replyMessageId} userId=${userId}`);
-    return handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot });
+    return handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot, reviewBeforeSend });
   }
 
   if (await skipStaleOutgoingJob(job, { replyMessageId })) {
@@ -241,9 +242,30 @@ async function processOutgoingWhatsapp(job, { getUserBot }) {
   // Best-effort typing indicator — never block the send if it fails. Route
   // through bot.client so the wrapper resolves the live socket; capturing
   // bot.sock here would pin a dead reference across reconnects.
+  let preSend;
+  try {
+    preSend = await reviewBeforeSend({
+      database: db,
+      bot,
+      payload,
+      userId,
+      conversationId: payload.conversationId,
+      replyMessageId,
+      draft: reply,
+    });
+  } catch (err) {
+    err.code = err.code || 'PRE_SEND_REVIEW_FAILED';
+    throw err;
+  }
+  if (preSend.suppressed) {
+    return completeSuppressedOutgoing(job, { replyMessageId, lid: false });
+  }
+  const finalReply = String(preSend.reply || '').trim();
+  if (!finalReply) throw new Error('pre-send review returned no sendable reply');
+
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
-  const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply, providerMessageId });
+  const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
   await recordWhatsappMessageId(userId, replyMessageId, sendResult?.key?.id);
 
   // Escalation bridge: remember which customer this team-bound message is
@@ -311,7 +333,7 @@ function isSocketOpen(bot) {
   return ws.readyState === 1;
 }
 
-async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot }) {
+async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot, reviewBeforeSend = reviewOutgoingReplyBeforeSend }) {
   // Try a best-effort send first. Some sessions can deliver to @lid even though
   // it's unreliable in general — better to attempt than to silently drop.
   let sendError = null;
@@ -361,7 +383,27 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     });
     if (!isSocketOpen(bot)) throw new Error('socket_not_open');
     if (!bot?.client?.sendMessage) throw new Error('no_send_channel_for_lid');
-    const lidResult = await bot.client.sendMessage(sender, reply);
+    let preSend;
+    try {
+      preSend = await reviewBeforeSend({
+        database: db,
+        bot,
+        payload,
+        userId,
+        conversationId: payload.conversationId,
+        replyMessageId,
+        draft: reply,
+      });
+    } catch (err) {
+      err.code = err.code || 'PRE_SEND_REVIEW_FAILED';
+      throw err;
+    }
+    if (preSend.suppressed) {
+      return completeSuppressedOutgoing(job, { replyMessageId, lid: true });
+    }
+    const finalReply = String(preSend.reply || '').trim();
+    if (!finalReply) throw new Error('pre-send review returned no sendable reply');
+    const lidResult = await bot.client.sendMessage(sender, finalReply);
     await recordWhatsappMessageId(userId, replyMessageId, lidResult?.key?.id);
     // Same rule as the main path: a successful send consumes one quota unit.
     // Without this, @lid customers (the majority on privacy-masked numbers)
@@ -389,6 +431,10 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send succeeded jid=${sender}`);
     return { sent: true, replyMessageId, lid: true };
   } catch (err) {
+    // Review failures are retriable and must never be converted into the
+    // legacy @lid "best effort skipped" result. BullMQ retries the job; no
+    // unreviewed text reaches WhatsApp.
+    if (err?.code === 'PRE_SEND_REVIEW_FAILED') throw err;
     sendError = err;
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send failed jid=${sender}: ${err.message}`);
   }
@@ -405,6 +451,22 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
   });
 
   return { skipped: true, reason: 'sender_is_lid_only', lid: true };
+}
+
+async function completeSuppressedOutgoing(job, { replyMessageId, lid = false } = {}) {
+  const message = 'suppressed by final pre-send review because it added no new value';
+  await markReplyMessage(replyMessageId, 'canceled', {
+    sentBy: WORKER_NAME,
+    suppressedAt: new Date().toISOString(),
+    error: message,
+  });
+  await updateJobStatus(job.id, {
+    status: 'completed',
+    finished_at: new Date(),
+    attempts: job.attemptsMade + 1,
+    last_error: message,
+  });
+  return { skipped: true, reason: 'pre_send_suppressed', replyMessageId, lid };
 }
 
 async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
@@ -744,6 +806,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 }
 
 module.exports = {
+  completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
   isConversationOwnerPaused,
