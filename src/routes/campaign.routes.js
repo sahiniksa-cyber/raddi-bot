@@ -111,6 +111,9 @@ function createCampaignRoutes(deps = {}) {
   router.post('/api/campaigns', asyncHandler(async (req, res) => {
     res.status(201).json({ success: true, campaign: await service.create(userId(req), req.body || {}) });
   }));
+  router.post('/api/campaigns/audience/preview', asyncHandler(async (req, res) => {
+    res.json({ success: true, ...(await service.previewAudience(userId(req), req.body?.audienceRules || {})) });
+  }));
   router.get('/api/campaigns/:id', asyncHandler(async (req, res) => {
     res.json({ success: true, campaign: await service.get(userId(req), req.params.id) });
   }));
