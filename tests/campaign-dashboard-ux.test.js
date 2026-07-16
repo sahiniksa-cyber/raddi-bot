@@ -19,22 +19,24 @@ test('campaign sections are descriptive and remain directly clickable', () => {
 });
 
 test('customer categories open clear read-only details without classification management', () => {
-  for (const segment of ['interested_unverified', 'ordered_confirmed', 'needs_verification']) {
+  for (const segment of ['ordered_confirmed', 'needs_verification']) {
     assert.match(campaignMarkup, new RegExp(`data-campaign-segment="${segment}"[^>]+campaignSelectSegment\\('${segment}'\\)`));
   }
+  assert.doesNotMatch(campaignMarkup, /data-campaign-segment="interested_unverified"|مهتم ولم يطلب/);
   assert.match(campaignMarkup, /id="campaignSegmentDetails"/);
   assert.doesNotMatch(campaignMarkup, /campaignSignalTable|campaignUpdateSignal/);
   assert.doesNotMatch(campaignMarkup, /إدارة تصنيفات العملاء/);
 });
 
-test('audience targeting puts numbers and Excel first and removes smart selection', () => {
+test('audience targeting uses four clickable cards and keeps manual numbers first', () => {
   const contacts = campaignMarkup.indexOf('value="contacts"');
   const keywords = campaignMarkup.indexOf('value="keywords"');
   const conversations = campaignMarkup.indexOf('value="conversations"');
   assert.ok(contacts > 0 && contacts < keywords && keywords < conversations);
   assert.match(campaignMarkup, /id="campaignContactOptions"/);
   assert.match(campaignMarkup, /id="campaignNumbers"/);
-  assert.match(campaignMarkup, /id="campaignImportFile"/);
+  assert.match(campaignMarkup, /class="campaign-source-list"/);
+  assert.equal((campaignMarkup.match(/class="campaign-source-option"/g) || []).length, 4);
   assert.doesNotMatch(campaignMarkup, /name="campaignSource" value="smart"|>التحديد الذكي</);
 });
 
@@ -52,12 +54,11 @@ test('conversation date range is contained inside its own clear option', () => {
   assert.match(campaignMarkup, /يجب أن تكون البداية قبل النهاية/);
 });
 
-test('Excel targeting offers template, export and import in the same panel', () => {
+test('Excel targeting controls are hidden while campaign-specific numbers remain available', () => {
   const panel = campaignMarkup.split('id="campaignContactOptions"')[1].split('data-campaign-source-panel="keywords"')[0];
-  assert.match(panel, /id="campaignImportFile"/);
-  assert.match(panel, /\/api\/campaigns\/contacts\/template\.xlsx/);
-  assert.match(panel, /\/api\/campaigns\/contacts\/export\.xlsx/);
-  assert.match(panel, /id="campaignImportSummary"/);
+  assert.match(panel, /id="campaignNumbers"/);
+  assert.match(panel, /id="campaignNumbersCount"/);
+  assert.doesNotMatch(panel, /campaignImportFile|استيراد ملف Excel|\/api\/campaigns\/contacts\/template\.xlsx|\/api\/campaigns\/contacts\/export\.xlsx|campaignImportSummary/);
 });
 
 test('content section shows send count and a WhatsApp campaign preview', () => {

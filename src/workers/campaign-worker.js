@@ -93,6 +93,13 @@ async function sendMedia(bot, sender, media) {
   return bot.client.sendMessage(target, payload);
 }
 
+async function sendCampaignText(bot, sender, message) {
+  const target = bot.whatsappEngine === 'whatsapp-web'
+    ? String(sender).replace(/@s\.whatsapp\.net$/i, '@c.us')
+    : sender;
+  return bot.client.sendMessage(target, message);
+}
+
 async function recordOutbound(database, campaign, recipient, providerMessageIds) {
   const existing = await database.query(
     `SELECT 1 FROM messages WHERE user_id = $1 AND raw_payload->>'campaignRecipientId' = $2 LIMIT 1`,
@@ -292,10 +299,7 @@ async function processCampaignRecipient(job, { database = db, getUserBot } = {})
     }
     if (!recipient.text_sent) {
       if (String(campaign.message_text || '').trim()) {
-        const target = bot.whatsappEngine === 'whatsapp-web'
-          ? String(recipient.sender).replace(/@s\.whatsapp\.net$/i, '@c.us')
-          : recipient.sender;
-        const result = await bot.client.sendMessage(target, campaign.message_text);
+        const result = await sendCampaignText(bot, recipient.sender, campaign.message_text);
         const id = providerId(result);
         if (id) ids.push(id);
       }
@@ -339,13 +343,23 @@ async function processCampaignRecipient(job, { database = db, getUserBot } = {})
 
 function createCampaignWorker({ getUserBot, database = db } = {}) {
   if (typeof getUserBot !== 'function') throw new Error('getUserBot is required');
-  return new Worker(
+  const worker = new Worker(
     CAMPAIGN_QUEUE_NAME,
     job => job.name === 'refresh-campaign-segmentation'
       ? processCampaignSegmentation(job, { database, getUserBot })
       : processCampaignRecipient(job, { database, getUserBot }),
     { connection: createRedisConnection(), concurrency: 1, lockDuration: 120000 },
   );
+  worker.on('completed', job => {
+    console.log(`${new Date().toISOString()} [campaign-worker] completed ${job?.id || 'unknown'}`);
+  });
+  worker.on('failed', (job, error) => {
+    console.error(`${new Date().toISOString()} [campaign-worker] failed ${job?.id || 'unknown'}: ${error.message}`);
+  });
+  worker.on('error', error => {
+    console.error(`${new Date().toISOString()} [campaign-worker] error: ${error.message}`);
+  });
+  return worker;
 }
 
 module.exports = {
@@ -354,5 +368,6 @@ module.exports = {
   processCampaignRecipient,
   recipientMatchesKeywordAudience,
   randomDelayMs,
+  sendCampaignText,
   scheduleNextRecipient,
 };

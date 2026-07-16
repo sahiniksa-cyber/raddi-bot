@@ -20,7 +20,12 @@ const {
   resolveAudience,
   snapshotHash,
 } = require('../src/services/campaigns/campaign-service');
-const { processCampaignSegmentation, randomDelayMs, recipientMatchesKeywordAudience } = require('../src/workers/campaign-worker');
+const {
+  processCampaignSegmentation,
+  randomDelayMs,
+  recipientMatchesKeywordAudience,
+  sendCampaignText,
+} = require('../src/workers/campaign-worker');
 const { hasValidSignature } = require('../src/services/campaigns/media-store');
 const AIClient = require('../lib/ai-client');
 const ExcelJS = require('exceljs');
@@ -147,6 +152,59 @@ test('manual campaign phone normalization supports Saudi local and international
   assert.equal(normalizePhone('+966551234567'), '966551234567');
   assert.equal(normalizePhone('00966551234567'), '966551234567');
   assert.equal(normalizePhone('abc'), '');
+});
+
+test('manual numbers are stored as an exact deduplicated audience for one campaign', async () => {
+  const rules = normalizeAudienceRules({
+    source: 'contacts',
+    numbers: ['055 123 4567', '+966551234567', '0559999999'],
+  });
+  assert.deepEqual(rules.numbers, ['966551234567', '966559999999']);
+  const database = { query: async () => { throw new Error('global contacts must not be queried'); } };
+  const recipients = await resolveAudience(database, 'user-1', rules);
+  assert.deepEqual(recipients.map(row => row.sender), [
+    '966551234567@s.whatsapp.net',
+    '966559999999@s.whatsapp.net',
+  ]);
+  assert.ok(recipients.every(row => row.source === 'campaign_numbers'));
+});
+
+test('manual number audience refuses an empty or invalid selection', () => {
+  assert.throws(
+    () => normalizeAudienceRules({ source: 'contacts', numbers: ['not-a-phone'] }),
+    /أضف رقم جوال صحيحاً واحداً على الأقل/,
+  );
+  assert.throws(
+    () => normalizeAudienceRules({ source: 'contacts', numbers: ['0551234567', 'wrong'] }),
+    /يوجد 1 رقم غير صالح/,
+  );
+});
+
+test('campaign text delivery uses the live WhatsApp client with the correct engine address', async () => {
+  const sent = [];
+  const client = { sendMessage: async (...args) => { sent.push(args); return { key: { id: 'wa-1' } }; } };
+  await sendCampaignText({ whatsappEngine: 'baileys', client }, '966551234567@s.whatsapp.net', 'عرض اليوم');
+  await sendCampaignText({ whatsappEngine: 'whatsapp-web', client }, '966551234567@s.whatsapp.net', 'عرض آخر');
+  assert.deepEqual(sent, [
+    ['966551234567@s.whatsapp.net', 'عرض اليوم'],
+    ['966551234567@c.us', 'عرض آخر'],
+  ]);
+});
+
+test('campaign start refuses immediately when WhatsApp is not connected', async () => {
+  const campaign = {
+    id: 'campaign-1', user_id: 'user-1', status: 'approved',
+    approved_at: new Date(), approved_snapshot_hash: 'approved-hash',
+  };
+  const database = { query: async () => ({ rows: [campaign] }) };
+  const service = createCampaignService({
+    database,
+    getUserBot: async () => ({ client: { sendMessage: async () => {} }, connection: { ready: false, status: 'reconnecting' } }),
+  });
+  await assert.rejects(
+    () => service.start('user-1', 'campaign-1'),
+    error => error.code === 'WHATSAPP_NOT_CONNECTED' && /واتساب غير متصل/.test(error.message),
+  );
 });
 
 test('approval snapshot hash is stable across object key order and changes with recipients', () => {
@@ -392,14 +450,14 @@ test('campaign UI exposes wizard, multi-media and explicit approval without stor
   assert.ok(html.includes('name="campaignSource" value="all"'));
   assert.ok(html.includes('name="campaignSource" value="conversations"'));
   assert.ok(html.includes('name="campaignSource" value="keywords"'));
+  assert.ok(html.includes('class="campaign-source-list"'));
+  assert.ok(html.includes('id="campaignNumbersCount"'));
   assert.ok(html.includes('id="campaignKeywordInput"'));
   assert.ok(html.includes('id="campaignKeywordPreview"'));
   assert.ok(html.includes('id="campaignMedia" type="file" multiple'));
   assert.ok(html.includes('id="campaignApproveBtn"'));
   assert.ok(html.includes('id="campaignStartBtn"'));
   assert.ok(html.includes('min="30"'));
-  assert.ok(html.includes('/api/campaigns/contacts/template.xlsx'));
-  assert.ok(html.includes('/api/campaigns/contacts/export.xlsx'));
   assert.ok(html.includes('id="campaignSegmentDetails"'));
   assert.ok(html.includes('id="campaignWhatsappMessage"'));
   assert.ok(html.includes('id="campaignContentAudienceCount"'));
@@ -409,6 +467,7 @@ test('campaign UI exposes wizard, multi-media and explicit approval without stor
   assert.ok(js.includes('campaignPreviewKeywords'));
   assert.ok(js.includes("window.confirm('هل تريد بدء إرسال الحملة المعتمدة الآن؟')"));
   const campaignMarkup = html.split('id="view-campaigns"')[1].split('id="view-pricing"')[0];
+  assert.doesNotMatch(campaignMarkup, /campaignImportFile|استيراد ملف Excel|مهتم ولم يطلب/);
   assert.doesNotMatch(`${campaignMarkup}\n${js}`, /salla|(?:^|\s)سلة(?:\s|$)/i);
 });
 
@@ -427,6 +486,7 @@ test('campaign backend is mounted with a dedicated queue and worker', () => {
   assert.ok(worker.includes('quota_decremented'));
   assert.ok(worker.includes('media_cursor'));
   assert.ok(worker.includes('smart_segment_changed'));
+  assert.ok(worker.includes("worker.on('error'"));
   assert.ok(fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'whatsapp', 'message-ingest.service.js'), 'utf8').includes('campaignSegmentation'));
 });
 

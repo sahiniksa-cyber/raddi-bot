@@ -81,9 +81,31 @@ function normalizeAudienceRules(value = {}) {
   };
   const dateFrom = date(input.dateFrom, 'تاريخ البداية');
   const dateTo = date(input.dateTo, 'تاريخ النهاية');
+  const hasExplicitNumbers = Array.isArray(input.numbers);
+  const numbers = [];
+  const seenNumbers = new Set();
+  let invalidNumberCount = 0;
+  if (hasExplicitNumbers) {
+    for (const raw of input.numbers) {
+      const phone = normalizePhone(raw);
+      if (!phone) { invalidNumberCount += 1; continue; }
+      if (seenNumbers.has(phone)) continue;
+      seenNumbers.add(phone);
+      numbers.push(phone);
+      if (numbers.length === 10000) break;
+    }
+  }
   if (dateFrom && dateTo && dateFrom > dateTo) throw badRequest('تاريخ البداية يجب أن يسبق تاريخ النهاية');
   if (source === 'keywords' && searchTerms.length === 0) throw badRequest('أضف كلمة بحث واحدة على الأقل واضغط Enter');
-  return { source, states, productKeys, searchTerms, dateFrom, dateTo };
+  if (source === 'contacts' && hasExplicitNumbers && numbers.length === 0) {
+    throw badRequest('أضف رقم جوال صحيحاً واحداً على الأقل');
+  }
+  if (source === 'contacts' && invalidNumberCount > 0) {
+    throw badRequest(`يوجد ${invalidNumberCount} رقم غير صالح. صحح الأرقام ثم حاول مرة أخرى`);
+  }
+  const normalized = { source, states, productKeys, searchTerms, dateFrom, dateTo };
+  if (source === 'contacts' && hasExplicitNumbers) normalized.numbers = numbers;
+  return normalized;
 }
 
 function campaignPublic(row) {
@@ -277,7 +299,22 @@ async function resolveAudience(database, userId, rules = {}) {
     );
     rows.push(...result.rows);
   }
-  if (source === 'contacts' || source === 'all') {
+  if (source === 'contacts' && Array.isArray(rules.numbers)) {
+    const numbers = normalizeAudienceRules(rules).numbers || [];
+    rows.push(...numbers.map(phone => ({
+      conversation_id: null,
+      sender: senderFromPhone(phone),
+      normalized_phone: phone,
+      customer_name: '',
+      product_key: null,
+      product_name: null,
+      customer_state: null,
+      confidence: null,
+      evidence_message_id: null,
+      evidence_text: '',
+      source: 'campaign_numbers',
+    })));
+  } else if (source === 'contacts' || source === 'all') {
     const result = await database.query(
       `SELECT NULL::uuid AS conversation_id, sender, normalized_phone, name AS customer_name,
               NULL::text AS product_key, product_name,
@@ -760,6 +797,11 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     const campaign = await getOwnedCampaign(database, userId, campaignId);
     if (campaign.status !== 'approved') throw badRequest('يجب اعتماد الحملة قبل بدء الإرسال', 'CAMPAIGN_NOT_APPROVED');
     if (!campaign.approved_at || !campaign.approved_snapshot_hash) throw badRequest('اعتماد الحملة غير مكتمل');
+    if (typeof getUserBot !== 'function') throw badRequest('تعذر التحقق من اتصال واتساب', 'WHATSAPP_CONNECTION_UNAVAILABLE');
+    const bot = await getUserBot(userId);
+    if (!bot?.client?.sendMessage || !bot.connection?.ready || bot.connection?.status !== 'connected') {
+      throw badRequest('واتساب غير متصل. شغّل البوت وتأكد أن الحالة «متصل» قبل بدء الحملة', 'WHATSAPP_NOT_CONNECTED');
+    }
     const pendingResult = await database.query(
       `SELECT COUNT(*)::int AS count FROM campaign_recipients WHERE campaign_id = $1 AND status = 'pending'`,
       [campaignId],

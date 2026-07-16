@@ -44,6 +44,8 @@ function campaignGoStep(step) {
 function campaignFormPayload() {
   const source = document.querySelector('input[name="campaignSource"]:checked')?.value || 'contacts';
   const scheduled = document.getElementById('campaignScheduledAt')?.value;
+  const numbers = String(document.getElementById('campaignNumbers')?.value || '')
+    .split(/[\n,;]+/).map(value => value.trim()).filter(Boolean);
   return {
     name: document.getElementById('campaignName').value.trim(),
     goal: document.getElementById('campaignGoal').value.trim(),
@@ -55,6 +57,7 @@ function campaignFormPayload() {
       searchTerms: [...campaignSearchTerms],
       dateFrom: document.getElementById('campaignDateFrom')?.value || null,
       dateTo: document.getElementById('campaignDateTo')?.value || null,
+      numbers,
     },
     intervalMinSeconds: Math.max(30, Number(document.getElementById('campaignIntervalMin').value) || 30),
     intervalMaxSeconds: Math.max(30, Number(document.getElementById('campaignIntervalMax').value) || 60),
@@ -99,8 +102,6 @@ function campaignNew() {
   document.getElementById('campaignKeywordInput').value = '';
   document.getElementById('campaignKeywordPreview').style.display = 'none';
   document.getElementById('campaignKeywordAudienceCount').textContent = '—';
-  const importSummary = document.getElementById('campaignImportSummary');
-  if (importSummary) importSummary.textContent = 'لم يتم استيراد ملف في هذه الجلسة.';
   campaignSelectedSegment = null;
   campaignAudienceCount = 0;
   document.querySelectorAll('[data-campaign-segment]').forEach(el => el.classList.remove('active'));
@@ -108,6 +109,7 @@ function campaignNew() {
   if (segmentDetails) segmentDetails.hidden = true;
   campaignRenderKeywordTags();
   campaignToggleKeywordOptions();
+  campaignUpdateNumbersCount();
   campaignRenderContentPreview();
   campaignUpdateButtons();
   campaignGoStep('audience');
@@ -130,6 +132,7 @@ function campaignFill(campaign) {
   const sourceInput = document.querySelector(`input[name="campaignSource"][value="${source}"]`)
     || document.querySelector('input[name="campaignSource"][value="contacts"]');
   if (sourceInput) sourceInput.checked = true;
+  document.getElementById('campaignNumbers').value = Array.isArray(rules.numbers) ? rules.numbers.join('\n') : '';
   document.getElementById('campaignDateFrom').value = rules.dateFrom || '';
   document.getElementById('campaignDateTo').value = rules.dateTo || '';
   document.getElementById('campaignKeywordInput').value = '';
@@ -137,6 +140,7 @@ function campaignFill(campaign) {
   document.getElementById('campaignKeywordAudienceCount').textContent = '—';
   campaignRenderKeywordTags();
   campaignToggleKeywordOptions();
+  campaignUpdateNumbersCount();
   document.getElementById('campaignMediaList').innerHTML = (campaign.media || []).map(item =>
     `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px;border-bottom:1px solid var(--border)"><span>${campaignEscape(item.original_name)} · ${campaignEscape(item.kind)}</span><button class="campaign-btn secondary" onclick="campaignDeleteMedia('${item.id}')">حذف</button></div>`
   ).join('') || '<div class="hint">لا توجد وسائط مرفوعة.</div>';
@@ -153,6 +157,22 @@ function campaignToggleKeywordOptions() {
   document.querySelectorAll('[data-campaign-source-panel]').forEach(panel => {
     panel.hidden = panel.dataset.campaignSourcePanel !== source;
   });
+}
+
+function campaignUpdateNumbersCount() {
+  const input = document.getElementById('campaignNumbers');
+  const count = document.getElementById('campaignNumbersCount');
+  if (!input || !count) return;
+  const numbers = new Set(input.value.split(/[\n,;]+/).map(campaignNormalizePhone).filter(Boolean));
+  count.textContent = `${numbers.size} رقم صالح`;
+}
+
+function campaignNormalizePhone(value) {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('0') && digits.length >= 9) digits = `966${digits.slice(1)}`;
+  if (!digits.startsWith('966') && digits.length === 9 && digits.startsWith('5')) digits = `966${digits}`;
+  return digits.length >= 8 && digits.length <= 15 ? digits : '';
 }
 
 function campaignResetKeywordPreview() {
@@ -237,7 +257,6 @@ async function campaignLoadList() {
 
 async function campaignLoadCounts() {
   const data = await campaignApi('/api/campaigns/smart/counts');
-  document.getElementById('campaignInterestedCount').textContent = data.counts.interested_unverified || 0;
   document.getElementById('campaignOrderedCount').textContent = data.counts.ordered_confirmed || 0;
   document.getElementById('campaignVerifyCount').textContent = data.counts.needs_verification || 0;
 }
@@ -349,31 +368,6 @@ async function campaignLoadSignals() {
   }
 }
 
-async function campaignAddNumbers() {
-  try {
-    const numbers = document.getElementById('campaignNumbers').value.split(/[\n,;]+/).map(value => value.trim()).filter(Boolean);
-    const result = await campaignApi('/api/campaigns/contacts/manual', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numbers }) });
-    document.getElementById('campaignNumbers').value = '';
-    const summary = document.getElementById('campaignImportSummary');
-    if (summary) summary.textContent = `تم حفظ ${result.added} رقم فريد${result.duplicates ? ` ودمج ${result.duplicates} رقم مكرر` : ''}${result.invalid.length ? `، وهناك ${result.invalid.length} رقم غير صالح` : ''}.`;
-    campaignFlash(`تم حفظ ${result.added} رقم بدون تكرار${result.duplicates ? `، وتجاهل ${result.duplicates} مكرر` : ''}${result.invalid.length ? `، وتعذر قراءة ${result.invalid.length}` : ''}.`);
-  } catch (error) { campaignFlash(error.message, true); }
-}
-
-async function campaignImportContacts() {
-  try {
-    const input = document.getElementById('campaignImportFile');
-    if (!input.files[0]) throw new Error('اختر ملف CSV أو Excel');
-    const form = new FormData(); form.append('file', input.files[0]);
-    const result = await campaignApi('/api/campaigns/contacts/import', { method: 'POST', body: form });
-    input.value = '';
-    await Promise.all([campaignLoadCounts(), campaignLoadSignals()]);
-    const summary = document.getElementById('campaignImportSummary');
-    if (summary) summary.textContent = `حُفظ ${result.added} عميل فريد · طلبات: ${result.ordered || 0} · اشتراكات: ${result.subscriptions || 0}${result.duplicates ? ` · صفوف مكررة مدمجة: ${result.duplicates}` : ''}${result.invalid.length ? ` · صفوف تحتاج تصحيح: ${result.invalid.length}` : ''}.`;
-    campaignFlash(`تم استيراد ${result.added} عميل بدون تكرار، منها ${result.ordered || 0} طلب و${result.subscriptions || 0} اشتراك${result.invalid.length ? `، وهناك ${result.invalid.length} صف غير صالح` : ''}.`);
-  } catch (error) { campaignFlash(error.message, true); }
-}
-
 async function campaignUploadMedia() {
   try {
     if (!campaignCurrent) await campaignSave();
@@ -402,8 +396,8 @@ async function campaignRenderReview() {
   if (!campaignCurrent) { el.textContent = 'احفظ الحملة أولاً لعرض الملخص.'; return; }
   try {
     const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/preview`);
-    const sourceLabels = { contacts: 'الأرقام أو ملف Excel', all: 'كل العملاء', conversations: 'من تواصل في الفترة المحددة', smart: 'قائمة عملاء محفوظة سابقاً', keywords: 'كلمات البحث' };
-    const source = sourceLabels[campaignCurrent.audience_rules?.source] || 'الأرقام أو ملف Excel';
+    const sourceLabels = { contacts: 'الأرقام المحددة', all: 'كل العملاء', conversations: 'من تواصل في الفترة المحددة', smart: 'قائمة عملاء محفوظة سابقاً', keywords: 'كلمات البحث' };
+    const source = sourceLabels[campaignCurrent.audience_rules?.source] || 'الأرقام المحددة';
     const terms = campaignCurrent.audience_rules?.source === 'keywords' ? `\nكلمات البحث: ${(campaignCurrent.audience_rules.searchTerms || []).join('، ')}` : '';
     el.textContent = `الحملة: ${campaignCurrent.name}\nالجمهور: ${source}${terms}\nعدد المستلمين الحالي: ${data.count}\nالفاصل: ${campaignCurrent.interval_min_seconds}–${campaignCurrent.interval_max_seconds} ثانية\nالوسائط: ${(campaignCurrent.media || []).length}\n\nالرسالة:\n${campaignCurrent.message_text || '(بدون نص)'}`;
   } catch (error) { el.textContent = error.message; }
@@ -501,6 +495,7 @@ async function campaignOnTab() {
       });
       document.getElementById('campaignMessage').addEventListener('input', campaignRenderContentPreview);
       document.getElementById('campaignMedia').addEventListener('change', campaignRenderContentPreview);
+      document.getElementById('campaignNumbers').addEventListener('input', campaignUpdateNumbersCount);
       campaignToggleKeywordOptions();
       campaignRenderKeywordTags();
       campaignRenderContentPreview();

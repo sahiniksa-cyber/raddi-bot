@@ -1748,13 +1748,12 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .campaign-choice{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:12px;padding:13px;margin-bottom:9px;cursor:pointer}
   .campaign-choice input{width:18px;height:18px;margin-top:2px}
-  .campaign-source-list{display:grid;gap:10px;margin-top:14px}.campaign-source-option{display:flex;align-items:flex-start;gap:11px;padding:14px;border:1px solid var(--border);border-radius:13px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}.campaign-source-option:hover{border-color:var(--green-border)}.campaign-source-option:has(input:checked){border-color:var(--green);background:var(--green-bg);box-shadow:0 0 0 2px rgba(39,183,122,.08)}.campaign-source-option input{appearance:none;width:18px;height:18px;display:grid;place-items:center;flex:none;margin:2px 0 0;border:1.5px solid var(--border-strong);border-radius:50%;background:#fff}.campaign-source-option input:checked{border-color:var(--green)}.campaign-source-option input:checked::after{content:'';width:9px;height:9px;border-radius:50%;background:var(--green)}.campaign-source-option b{display:block;font-size:13.5px;font-weight:600}.campaign-source-option .hint{margin-top:4px;line-height:1.65}
-  .campaign-source-panel{padding:15px;border:1px solid var(--border);border-radius:13px;background:#f8fafc}.campaign-source-panel[hidden]{display:none!important}.campaign-import-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.campaign-target-box{padding:14px;border:1px solid var(--border);border-radius:12px;background:#fff}.campaign-target-box h4{margin:0 0 5px;font-size:13px;font-weight:600}.campaign-target-box p{margin:0 0 12px;font-size:11px;color:var(--text-soft);line-height:1.65}.campaign-file-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.campaign-file-actions .campaign-btn{padding:9px 12px;font-size:11.5px;text-decoration:none}.campaign-keyword-count{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0;padding:11px 12px;border:1px solid var(--green-border);border-radius:11px;background:var(--green-bg);font-size:12px;color:var(--green2)}.campaign-keyword-count strong{font-size:20px;font-weight:600}.campaign-date-help{margin-top:8px;padding:10px 12px;border-radius:10px;background:#fff;color:var(--text-soft);font-size:11.5px;line-height:1.7}
+  .campaign-source-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}.campaign-source-option{position:relative;display:flex;align-items:flex-start;gap:12px;min-height:122px;padding:17px;border:1px solid var(--border);border-radius:16px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s,transform .15s,box-shadow .15s}.campaign-source-option:hover{border-color:var(--green-border);transform:translateY(-1px)}.campaign-source-option:has(input:checked){border-color:var(--green);background:var(--green-bg);box-shadow:0 0 0 2px rgba(39,183,122,.08)}.campaign-source-option input{appearance:none;width:20px;height:20px;display:grid;place-items:center;flex:none;margin:1px 0 0;border:1.5px solid var(--border-strong);border-radius:6px;background:#fff}.campaign-source-option input:checked{border-color:var(--green);background:var(--green)}.campaign-source-option input:checked::after{content:'✓';color:#fff;font:600 13px var(--font)}.campaign-source-option b{display:block;font-size:14px;font-weight:600}.campaign-source-option .hint{margin-top:6px;line-height:1.7}.campaign-source-open{display:block;margin-top:10px;color:var(--green2);font-size:11px;font-weight:600}.campaign-source-panels{margin-top:12px}.campaign-source-panel{padding:16px;border:1px solid var(--green-border);border-radius:14px;background:#f8fcfa}.campaign-source-panel[hidden]{display:none!important}.campaign-target-box{padding:14px;border:1px solid var(--border);border-radius:12px;background:#fff}.campaign-target-box h4{margin:0 0 5px;font-size:13px;font-weight:600}.campaign-target-box p{margin:0 0 12px;font-size:11px;color:var(--text-soft);line-height:1.65}.campaign-number-status{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;padding:10px 12px;border-radius:10px;background:#fff;color:var(--text-soft);font-size:11.5px}.campaign-number-status strong{color:var(--green2);font-size:15px;font-weight:600}.campaign-keyword-count{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0;padding:11px 12px;border:1px solid var(--green-border);border-radius:11px;background:var(--green-bg);font-size:12px;color:var(--green2)}.campaign-keyword-count strong{font-size:20px;font-weight:600}.campaign-date-help{margin-top:8px;padding:10px 12px;border-radius:10px;background:#fff;color:var(--text-soft);font-size:11.5px;line-height:1.7}
   .campaign-actions{display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
   .campaign-btn{border:0;border-radius:10px;padding:11px 17px;font:800 13px var(--font);cursor:pointer;background:var(--green);color:#fff}
   .campaign-btn.secondary{background:#fff;color:var(--text);border:1px solid var(--border)}
   .campaign-btn.danger{background:#b91c1c}.campaign-btn:disabled{opacity:.5;cursor:not-allowed}
-  .campaign-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
+  .campaign-metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}
   .campaign-metric{width:100%;padding:14px;border:1px solid var(--border);border-radius:13px;text-align:right;background:#f8fafc;color:var(--text);font-family:var(--font);cursor:pointer;transition:border-color .15s,background .15s,transform .15s}
   .campaign-metric:hover{border-color:var(--green-border);background:#f4fbf7;transform:translateY(-1px)}
   .campaign-metric.active{border-color:var(--green);background:var(--green-bg);box-shadow:0 0 0 2px rgba(39,183,122,.1)}
@@ -1781,7 +1780,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-preview-help{margin-top:9px;font-size:10.5px;color:var(--text-soft);line-height:1.65}
   .campaign-saved-card{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:16px;padding:17px 18px;border:1px solid var(--border);border-radius:16px;background:#fff}.campaign-saved-copy{display:flex;align-items:flex-start;gap:10px}.campaign-saved-copy i{width:20px;height:20px;flex:none;margin-top:2px;color:var(--green2);stroke-width:1.5}.campaign-saved-copy b{display:block;font-size:14px;font-weight:600}.campaign-saved-copy p{margin:4px 0 0;font-size:11.5px;color:var(--text-soft);line-height:1.6}.campaign-saved-actions{display:flex;align-items:center;gap:8px;min-width:390px}.campaign-saved-actions select{margin:0!important;min-width:230px}
   @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{align-items:stretch;flex-direction:column}.campaign-saved-actions{min-width:0}}
-  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics,.campaign-import-grid{grid-template-columns:1fr}.campaign-saved-actions{align-items:stretch;flex-direction:column}.campaign-saved-actions select{min-width:0}.campaign-segment-head{align-items:flex-start;flex-direction:column}}
+  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-source-option{min-height:108px}.campaign-saved-actions{align-items:stretch;flex-direction:column}.campaign-saved-actions select{min-width:0}.campaign-segment-head{align-items:flex-start;flex-direction:column}}
 </style>
 <div class="campaign-shell">
   <div class="campaign-hero">
@@ -1798,40 +1797,31 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     <main class="campaign-card">
       <section class="campaign-page active" data-campaign-page="audience">
         <h3 class="campaign-title">من تريد أن تصله الحملة؟</h3>
-        <p class="campaign-sub">اختر طريقة استهداف واحدة. الأرقام وملفات Excel هي المصدر الأساسي، ويُدمج الرقم المكرر تلقائياً بدون إنشاء عميل جديد.</p>
+        <p class="campaign-sub">اختر طريقة استهداف واحدة من البطاقات التالية. الضغط على البطاقة يفتح إعداداتها، ويُحذف أي رقم مكرر تلقائياً.</p>
         <div class="campaign-grid">
           <div><label>اسم الحملة</label><input id="campaignName" maxlength="120" placeholder="مثال: متابعة المهتمين بعرض الصيف"></div>
           <div><label>هدف الحملة</label><input id="campaignGoal" maxlength="500" placeholder="وصف داخلي اختياري"></div>
         </div>
         <div class="campaign-metrics" aria-label="أقسام العملاء">
-          <button type="button" class="campaign-metric" data-campaign-segment="interested_unverified" onclick="campaignSelectSegment('interested_unverified')"><strong id="campaignInterestedCount">0</strong><b>مهتم ولم يطلب</b><span>اضغط لعرض العملاء والتفاصيل</span></button>
           <button type="button" class="campaign-metric" data-campaign-segment="ordered_confirmed" onclick="campaignSelectSegment('ordered_confirmed')"><strong id="campaignOrderedCount">0</strong><b>طلب المنتج</b><span>اضغط لعرض العملاء والتفاصيل</span></button>
           <button type="button" class="campaign-metric" data-campaign-segment="needs_verification" onclick="campaignSelectSegment('needs_verification')"><strong id="campaignVerifyCount">0</strong><b>يحتاج مراجعة</b><span>اضغط لعرض العملاء والتفاصيل</span></button>
         </div>
         <div id="campaignSegmentDetails" class="campaign-segment-details" hidden></div>
-        <div class="campaign-source-list">
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="contacts" checked><div><b>استهداف بالأرقام أو ملف Excel</b><div class="hint">أضف الأرقام يدوياً أو ارفع ملفاً يحتوي على العملاء والطلبات والاشتراكات.</div></div></label>
+        <div class="campaign-source-list" aria-label="طرق استهداف الحملة">
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="contacts" checked><div><b>استهداف بالأرقام</b><div class="hint">أدخل أرقام هذه الحملة فقط، رقمًا واحدًا في كل سطر.</div><span class="campaign-source-open">اضغط لفتح الأرقام</span></div></label>
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار بكلمات البحث</b><div class="hint">يبحث في رسائل العملاء ويعرض العدد الحقيقي قبل الإرسال.</div><span class="campaign-source-open">اضغط لفتح كلمات البحث</span></div></label>
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل خلال فترة</b><div class="hint">حدد بداية ونهاية الفترة حسب تاريخ آخر رسالة للعميل.</div><span class="campaign-source-open">اضغط لتحديد الفترة</span></div></label>
+          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">يشمل جميع العملاء المسجلين في المحادثات وقاعدة العملاء، بدون تكرار.</div><span class="campaign-source-open">اضغط لاختيار الجميع</span></div></label>
+        </div>
+        <div class="campaign-source-panels">
           <div id="campaignContactOptions" class="campaign-source-panel" data-campaign-source-panel="contacts">
-            <div class="campaign-import-grid">
-              <div class="campaign-target-box">
-                <h4>استهداف بالأرقام</h4><p>ضع رقماً واحداً في كل سطر. الأرقام المكررة تُحذف تلقائياً.</p>
-                <textarea id="campaignNumbers" rows="6" dir="ltr" placeholder="9665xxxxxxxx&#10;05xxxxxxxx"></textarea>
-                <button class="campaign-btn secondary" onclick="campaignAddNumbers()">حفظ الأرقام</button>
-              </div>
-              <div class="campaign-target-box">
-                <h4>استيراد ملف Excel</h4><p>يمكن أن يتضمن الملف نوع السجل، المنتج، رقم الطلب، وتواريخ الاشتراك.</p>
-                <input id="campaignImportFile" type="file" accept=".csv,.xlsx">
-                <button class="campaign-btn" style="margin-top:8px" onclick="campaignImportContacts()">استيراد الملف</button>
-                <div class="campaign-file-actions">
-                  <a class="campaign-btn secondary" href="/api/campaigns/contacts/template.xlsx">تحميل نموذج Excel</a>
-                  <a class="campaign-btn secondary" href="/api/campaigns/contacts/export.xlsx">تصدير قاعدة العملاء</a>
-                </div>
-              </div>
+            <div class="campaign-target-box">
+              <h4>أرقام مستلمي هذه الحملة</h4><p>ضع رقماً واحداً في كل سطر. لن تُضاف أرقام قديمة من حملات أخرى، والأرقام المكررة تُحذف تلقائياً.</p>
+              <textarea id="campaignNumbers" rows="6" dir="ltr" placeholder="9665xxxxxxxx&#10;05xxxxxxxx"></textarea>
+              <div class="campaign-number-status"><span>سيُحفظ هذا الجمهور مع الحملة عند الضغط على «حفظ والمتابعة».</span><strong id="campaignNumbersCount">0 رقم صالح</strong></div>
             </div>
-            <div id="campaignImportSummary" class="hint" style="margin-top:10px">لم يتم استيراد ملف في هذه الجلسة.</div>
           </div>
 
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار العملاء من كلمات البحث</b><div class="hint">يبحث في رسائل العملاء ويعرض العدد الحقيقي قبل الانتقال للمحتوى.</div></div></label>
           <div id="campaignKeywordOptions" class="campaign-source-panel" data-campaign-source-panel="keywords" hidden>
             <label>كلمات البحث</label>
             <input id="campaignKeywordInput" maxlength="120" placeholder="اكتب كلمة مثل اسم المنتج ثم اضغط Enter">
@@ -1842,13 +1832,15 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
             <div id="campaignKeywordPreview" class="campaign-summary" style="display:none;margin-top:10px;max-height:340px;overflow:auto"></div>
           </div>
 
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل خلال فترة معينة</b><div class="hint">يعتمد على تاريخ آخر رسالة للعميل خلال المدة التي تحددها هنا.</div></div></label>
           <div id="campaignConversationOptions" class="campaign-source-panel" data-campaign-source-panel="conversations" hidden>
             <div class="campaign-grid"><div><label>بداية الفترة</label><input id="campaignDateFrom" type="date"><div class="hint">يشمل هذا اليوم من بدايته.</div></div><div><label>نهاية الفترة</label><input id="campaignDateTo" type="date"><div class="hint">يشمل هذا اليوم حتى نهايته.</div></div></div>
             <div class="campaign-date-help">مثال: من 2026-07-01 إلى 2026-07-16 يعني كل عميل كانت آخر رسالته خلال هذه الأيام، ويجب أن تكون البداية قبل النهاية.</div>
           </div>
 
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">يشمل جميع المحادثات المحفوظة وكل الأرقام المستوردة واليدوية، بدون تكرار.</div></div></label>
+          <div class="campaign-source-panel" data-campaign-source-panel="all" hidden>
+            <b>تم اختيار كل العملاء</b>
+            <div class="hint" style="margin-top:6px">سيظهر العدد الفعلي قبل الاعتماد، ولن يتكرر العميل إذا كان موجوداً في أكثر من مصدر.</div>
+          </div>
         </div>
         <div class="campaign-actions"><button class="campaign-btn" onclick="campaignSaveAndNext('content')">حفظ والمتابعة</button></div>
       </section>
