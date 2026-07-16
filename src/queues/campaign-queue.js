@@ -21,8 +21,7 @@ function getCampaignQueue() {
   return queue;
 }
 
-async function enqueueCampaignRecipient({ campaignId, recipientId, delay = 0 } = {}) {
-  const campaignQueue = getCampaignQueue();
+async function enqueueCampaignRecipient({ campaignId, recipientId, delay = 0, campaignQueue = getCampaignQueue() } = {}) {
   const jobId = `campaign-${recipientId}`;
   const existing = await campaignQueue.getJob(jobId);
   if (existing) {

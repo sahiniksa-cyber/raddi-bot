@@ -23,7 +23,9 @@ const {
 const {
   processCampaignSegmentation,
   randomDelayMs,
+  recoverCampaignDeliveries,
   recipientMatchesKeywordAudience,
+  scheduleNextRecipient,
   sendCampaignText,
 } = require('../src/workers/campaign-worker');
 const { hasValidSignature } = require('../src/services/campaigns/media-store');
@@ -223,6 +225,50 @@ test('campaign interval jitter always stays inside the configured range', () => 
     assert.ok(delay <= 60000);
     assert.equal(delay % 1000, 0);
   }
+});
+
+test('campaign scheduler never queues a second recipient while one is in flight', async () => {
+  const added = [];
+  const client = { query: async sql => {
+    if (/SELECT \* FROM campaigns/.test(sql)) return { rows: [{ id: 'campaign-1', status: 'sending' }] };
+    if (/status IN \('queued','sending'\)/.test(sql)) return { rows: [{ count: 1 }] };
+    throw new Error(`unexpected query: ${sql}`);
+  } };
+  const database = { transaction: async fn => fn(client) };
+  const result = await scheduleNextRecipient('campaign-1', {
+    database,
+    campaignQueue: { add: async (...args) => added.push(args) },
+  });
+  assert.equal(result, null);
+  assert.equal(added.length, 0);
+});
+
+test('campaign recovery restores a queued recipient whose Redis job disappeared', async () => {
+  const added = [];
+  const queue = {
+    getJob: async () => null,
+    add: async (name, data, options) => { added.push({ name, data, options }); return { id: options.jobId }; },
+  };
+  const database = {
+    query: async (sql) => {
+      if (/UPDATE campaign_recipients r SET/.test(sql)) return { rows: [] };
+      if (/SELECT r\.id, r\.campaign_id/.test(sql)) return { rows: [{ id: 'recipient-1', campaign_id: 'campaign-1' }] };
+      if (/recovered_missing_queue_job/.test(sql)) return { rows: [{ id: 'recipient-1' }] };
+      if (/SELECT id, status, scheduled_at FROM campaigns/.test(sql)) return { rows: [{ id: 'campaign-1', status: 'sending', scheduled_at: null }] };
+      throw new Error(`unexpected outer query: ${sql}`);
+    },
+    transaction: async fn => fn({ query: async sql => {
+      if (/SELECT \* FROM campaigns/.test(sql)) return { rows: [{ id: 'campaign-1', status: 'sending' }] };
+      if (/status IN \('queued','sending'\)/.test(sql)) return { rows: [{ count: 0 }] };
+      if (/status = 'pending'/.test(sql)) return { rows: [{ id: 'recipient-1' }] };
+      if (/UPDATE campaign_recipients SET status = 'queued'/.test(sql)) return { rows: [] };
+      throw new Error(`unexpected transaction query: ${sql}`);
+    } }),
+  };
+  const result = await recoverCampaignDeliveries({ database, campaignQueue: queue, staleMs: 120000 });
+  assert.deepEqual(result, { staleSending: 0, missingJobs: 1, scheduled: 1 });
+  assert.equal(added.length, 1);
+  assert.equal(added[0].options.jobId, 'campaign-recipient-1');
 });
 
 test('campaign service clamps merchant intervals below 30 seconds', async () => {

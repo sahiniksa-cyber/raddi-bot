@@ -19,6 +19,8 @@ const {
   validateAiSignals,
 } = require('../services/campaigns/smart-segmentation');
 
+const CAMPAIGN_RECOVERY_STALE_MS = Math.max(120000, parseInt(process.env.CAMPAIGN_RECOVERY_STALE_MS || '300000', 10));
+
 function providerId(result) {
   return String(result?.key?.id || result?.id?._serialized || result?.id || '').trim();
 }
@@ -29,11 +31,17 @@ function randomDelayMs(campaign) {
   return (min + Math.floor(Math.random() * (max - min + 1))) * 1000;
 }
 
-async function scheduleNextRecipient(campaignId, { database = db, delay = 0 } = {}) {
+async function scheduleNextRecipient(campaignId, { database = db, delay = 0, campaignQueue } = {}) {
   const selected = await database.transaction(async client => {
     const campaignResult = await client.query(`SELECT * FROM campaigns WHERE id = $1 FOR UPDATE`, [campaignId]);
     const campaign = campaignResult.rows[0];
     if (!campaign || !['approved', 'scheduled', 'sending'].includes(campaign.status)) return null;
+    const inFlight = await client.query(
+      `SELECT COUNT(*)::int AS count FROM campaign_recipients
+       WHERE campaign_id = $1 AND status IN ('queued','sending')`,
+      [campaignId],
+    );
+    if (Number(inFlight.rows[0]?.count || 0) > 0) return null;
     const recipientResult = await client.query(
       `SELECT id FROM campaign_recipients
        WHERE campaign_id = $1 AND status = 'pending'
@@ -42,18 +50,11 @@ async function scheduleNextRecipient(campaignId, { database = db, delay = 0 } = 
     );
     const recipient = recipientResult.rows[0];
     if (!recipient) {
-      const active = await client.query(
-        `SELECT COUNT(*)::int AS count FROM campaign_recipients
-         WHERE campaign_id = $1 AND status IN ('queued','sending')`,
+      await client.query(
+        `UPDATE campaigns SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND status IN ('approved','scheduled','sending')`,
         [campaignId],
       );
-      if (Number(active.rows[0]?.count || 0) === 0) {
-        await client.query(
-          `UPDATE campaigns SET status = 'completed', completed_at = NOW(), updated_at = NOW()
-           WHERE id = $1 AND status IN ('approved','scheduled','sending')`,
-          [campaignId],
-        );
-      }
       return null;
     }
     await client.query(
@@ -65,7 +66,7 @@ async function scheduleNextRecipient(campaignId, { database = db, delay = 0 } = 
   });
   if (!selected) return null;
   try {
-    await enqueueCampaignRecipient({ campaignId, recipientId: selected, delay });
+    await enqueueCampaignRecipient({ campaignId, recipientId: selected, delay, campaignQueue });
     return selected;
   } catch (error) {
     await database.query(
@@ -74,6 +75,57 @@ async function scheduleNextRecipient(campaignId, { database = db, delay = 0 } = 
     ).catch(() => {});
     throw error;
   }
+}
+
+async function recoverCampaignDeliveries({ database = db, campaignQueue, staleMs = CAMPAIGN_RECOVERY_STALE_MS } = {}) {
+  const queue = campaignQueue || require('../queues/campaign-queue').getCampaignQueue();
+  const staleAfterMs = Math.max(120000, Number(staleMs) || CAMPAIGN_RECOVERY_STALE_MS);
+  const summary = { staleSending: 0, missingJobs: 0, scheduled: 0 };
+
+  const stale = await database.query(
+    `UPDATE campaign_recipients r SET status = 'pending',
+       last_error = 'recovered_stale_sending', updated_at = NOW()
+     FROM campaigns c
+     WHERE c.id = r.campaign_id
+       AND c.status IN ('scheduled','sending')
+       AND r.status = 'sending'
+       AND r.updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+     RETURNING r.id`,
+    [staleAfterMs],
+  );
+  summary.staleSending = stale.rows.length;
+
+  const queued = await database.query(
+    `SELECT r.id, r.campaign_id FROM campaign_recipients r
+     JOIN campaigns c ON c.id = r.campaign_id
+     WHERE c.status IN ('scheduled','sending') AND r.status = 'queued'
+     ORDER BY r.updated_at ASC LIMIT 1000`,
+  );
+  for (const recipient of queued.rows) {
+    const job = await queue.getJob(`campaign-${recipient.id}`).catch(() => null);
+    const state = job ? await job.getState().catch(() => null) : null;
+    if (job && ['waiting', 'delayed', 'active', 'prioritized', 'waiting-children'].includes(state)) continue;
+    if (job) await job.remove().catch(() => {});
+    const reset = await database.query(
+      `UPDATE campaign_recipients SET status = 'pending', last_error = 'recovered_missing_queue_job', updated_at = NOW()
+       WHERE id = $1 AND status = 'queued' RETURNING id`,
+      [recipient.id],
+    );
+    summary.missingJobs += reset.rows.length;
+  }
+
+  const activeCampaigns = await database.query(
+    `SELECT id, status, scheduled_at FROM campaigns
+     WHERE status IN ('scheduled','sending') ORDER BY updated_at ASC LIMIT 1000`,
+  );
+  for (const campaign of activeCampaigns.rows) {
+    const delay = campaign.status === 'scheduled' && campaign.scheduled_at
+      ? Math.max(0, new Date(campaign.scheduled_at).getTime() - Date.now())
+      : 0;
+    const selected = await scheduleNextRecipient(campaign.id, { database, delay, campaignQueue: queue });
+    if (selected) summary.scheduled += 1;
+  }
+  return summary;
 }
 
 async function sendMedia(bot, sender, media) {
@@ -366,6 +418,7 @@ module.exports = {
   createCampaignWorker,
   processCampaignSegmentation,
   processCampaignRecipient,
+  recoverCampaignDeliveries,
   recipientMatchesKeywordAudience,
   randomDelayMs,
   sendCampaignText,
