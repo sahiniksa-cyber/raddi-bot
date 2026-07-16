@@ -37,6 +37,9 @@ test('audience targeting uses four clickable cards and keeps manual numbers firs
   assert.match(campaignMarkup, /id="campaignNumbers"/);
   assert.match(campaignMarkup, /class="campaign-source-list"/);
   assert.equal((campaignMarkup.match(/class="campaign-source-option"/g) || []).length, 4);
+  for (const source of ['contacts', 'keywords', 'conversations', 'all']) {
+    assert.match(campaignMarkup, new RegExp(`campaignSelectSource\\('${source}'\\)`));
+  }
   assert.doesNotMatch(campaignMarkup, /name="campaignSource" value="smart"|>التحديد الذكي</);
 });
 
@@ -45,6 +48,8 @@ test('keyword targeting exposes the real recipient count', () => {
   assert.match(campaignMarkup, /عدد العملاء الذين ستصلهم الرسالة/);
   assert.match(js, /campaignKeywordAudienceCount/);
   assert.match(js, /textContent = String\(data\.count\)/);
+  assert.match(campaignMarkup, /campaignAddKeywordFromInput\(\)/);
+  assert.match(js, /\/api\/campaigns\/audience\/preview/);
 });
 
 test('conversation date range is contained inside its own clear option', () => {
@@ -76,6 +81,67 @@ test('saved campaigns are explained below the campaign workflow', () => {
   assert.ok(savedIndex > workflowEnd);
   assert.match(campaignMarkup, /افتح حملة سابقة لإكمالها أو تعديلها/);
   assert.equal((campaignMarkup.match(/id="campaignPicker"/g) || []).length, 1);
+  assert.match(campaignMarkup, /campaign-saved-actions\{display:grid/);
+  assert.match(campaignMarkup, /campaign-saved-card\{margin:16px 236px 0 0/);
+});
+
+test('every inline campaign control points to an implemented function', () => {
+  const handlers = [...campaignMarkup.matchAll(/on(?:click|change)="(campaign[A-Za-z0-9_]+)\(/g)].map(match => match[1]);
+  assert.ok(handlers.length > 15);
+  for (const handler of new Set(handlers)) assert.match(js, new RegExp(`function\\s+${handler}\\s*\\(`), handler);
+});
+
+test('keyword controls bind and source cards open even when background loading fails', async () => {
+  const listeners = new Map();
+  const node = (id, extra = {}) => ({
+    id, value: '', checked: false, hidden: false, style: {}, textContent: '', innerHTML: '', files: [],
+    classList: { toggle() {}, remove() {} },
+    addEventListener(type, handler) { listeners.set(`${id}:${type}`, handler); },
+    ...extra,
+  });
+  const sources = ['contacts', 'keywords', 'conversations', 'all'].map(value => node(`source-${value}`, { value, checked: value === 'contacts' }));
+  const panels = sources.map(source => node(`panel-${source.value}`, { dataset: { campaignSourcePanel: source.value } }));
+  const nodes = {
+    campaignFlash: node('campaignFlash'),
+    campaignKeywordInput: node('campaignKeywordInput'),
+    campaignKeywordTags: node('campaignKeywordTags'),
+    campaignKeywordAudienceCount: node('campaignKeywordAudienceCount'),
+    campaignKeywordPreview: node('campaignKeywordPreview'),
+    campaignMessage: node('campaignMessage'),
+    campaignMedia: node('campaignMedia'),
+    campaignNumbers: node('campaignNumbers'),
+  };
+  const document = {
+    getElementById: id => nodes[id] || null,
+    querySelector(selector) {
+      const value = selector.match(/value="([^"]+)"/)?.[1];
+      if (value) return sources.find(source => source.value === value) || null;
+      if (selector === 'input[name="campaignSource"]:checked') return sources.find(source => source.checked) || null;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '[data-campaign-source-panel]') return panels;
+      if (selector === 'input[name="campaignSource"]') return sources;
+      if (selector.startsWith('#view-campaigns ')) return [nodes.campaignKeywordInput, nodes.campaignMessage, nodes.campaignMedia, nodes.campaignNumbers];
+      return [];
+    },
+  };
+  const context = vm.createContext({
+    document,
+    fetch: async () => { throw new Error('background unavailable'); },
+    window: { setTimeout() {}, scrollTo() {} },
+    console,
+  });
+  new vm.Script(js, { filename: 'dashboard/campaigns.js' }).runInContext(context);
+  vm.runInContext("campaignSelectSource('keywords')", context);
+  assert.equal(sources.find(source => source.value === 'keywords').checked, true);
+  assert.equal(panels.find(panel => panel.dataset.campaignSourcePanel === 'keywords').hidden, false);
+  await vm.runInContext('campaignOnTab()', context);
+  assert.equal(typeof listeners.get('campaignKeywordInput:keydown'), 'function');
+  nodes.campaignKeywordInput.value = 'عدسات طبية';
+  vm.runInContext('campaignAddKeywordFromInput()', context);
+  assert.equal(nodes.campaignKeywordInput.value, '');
+  assert.match(nodes.campaignKeywordTags.innerHTML, /عدسات طبية/);
 });
 
 test('campaign dashboard script remains syntactically valid', () => {

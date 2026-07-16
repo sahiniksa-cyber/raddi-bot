@@ -9,6 +9,28 @@ function dashboardHtml() {
   return fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
 }
 
+test('every named inline dashboard control resolves to an implemented function', () => {
+  const html = dashboardHtml();
+  const dashboardDir = path.join(__dirname, '..', 'dashboard');
+  const externalScripts = fs.readdirSync(dashboardDir)
+    .filter(file => file.endsWith('.js'))
+    .map(file => fs.readFileSync(path.join(dashboardDir, file), 'utf8'))
+    .join('\n');
+  const code = `${html}\n${externalScripts}`;
+  const languageKeywords = new Set(['if', 'return', 'void']);
+  const handlers = [...html.matchAll(/on(?:click|change|input|submit|keydown)="\s*([A-Za-z_$][\w$]*)\s*\(/g)]
+    .map(match => match[1])
+    .filter(name => !languageKeywords.has(name));
+
+  assert.ok(new Set(handlers).size >= 60, 'expected broad dashboard control coverage');
+  for (const handler of new Set(handlers)) {
+    const escaped = handler.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const implemented = new RegExp(`function\\s+${escaped}\\s*\\(`).test(code)
+      || new RegExp(`(?:window\\.)?${escaped}\\s*=\\s*(?:async\\s*)?\\(?`).test(code);
+    assert.equal(implemented, true, `missing dashboard handler: ${handler}`);
+  }
+});
+
 test('dashboard exposes conversations as a top-level tab', () => {
   const html = dashboardHtml();
 

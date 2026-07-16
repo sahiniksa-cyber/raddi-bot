@@ -690,6 +690,12 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     return { count: recipients.length, recipients: recipients.slice(0, 100) };
   }
 
+  async function previewAudience(userId, audienceRules = {}) {
+    const rules = normalizeAudienceRules(audienceRules);
+    const recipients = await resolveAudience(database, userId, rules);
+    return { count: recipients.length, recipients: recipients.slice(0, 100) };
+  }
+
   async function buildSnapshot(client, campaign) {
     const recipients = await resolveAudience(client, campaign.user_id, safeJson(campaign.audience_rules, {}));
     const media = await client.query(
@@ -969,6 +975,7 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     normalizePhone,
     prepareApproval,
     preview,
+    previewAudience,
     segmentCounts,
     setStatus,
     start,

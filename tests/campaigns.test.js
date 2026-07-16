@@ -276,6 +276,16 @@ test('keyword audience searches inbound customer messages and removes duplicate 
   assert.deepEqual(calls[0].params[1], ['عدسات', 'طبية']);
 });
 
+test('keyword audience can be previewed before a campaign is saved', async () => {
+  const database = { query: async () => ({ rows: [
+    { conversation_id: 'c1', sender: '96651@s.whatsapp.net', product_name: 'عدسات', evidence_text: 'أريد عدسات', source: 'keyword_search' },
+  ] }) };
+  const service = createCampaignService({ database, getUserBot: async () => ({}) });
+  const result = await service.previewAudience('user-1', { source: 'keywords', searchTerms: ['عدسات'] });
+  assert.equal(result.count, 1);
+  assert.equal(result.recipients[0].sender, '96651@s.whatsapp.net');
+});
+
 test('campaign worker rechecks keyword evidence immediately before delivery', async () => {
   const calls = [];
   const database = {
@@ -480,6 +490,7 @@ test('campaign backend is mounted with a dedicated queue and worker', () => {
   assert.ok(server.includes('createCampaignWorker'));
   assert.ok(routes.includes('/api/campaigns/contacts/template.xlsx'));
   assert.ok(routes.includes('/api/campaigns/contacts/export.xlsx'));
+  assert.ok(routes.includes('/api/campaigns/audience/preview'));
   assert.ok(queue.includes("'campaign-deliveries'"));
   assert.ok(queue.includes('refresh-campaign-segmentation'));
   assert.ok(worker.includes('concurrency: 1'));

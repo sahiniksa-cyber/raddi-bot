@@ -1764,6 +1764,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-segment-row{padding:11px 0;border-bottom:1px solid var(--border)}.campaign-segment-row:last-child{border-bottom:0}.campaign-segment-row-top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.campaign-segment-row p{margin:6px 0 0;font-size:12px;color:var(--text-soft);line-height:1.7}
   .campaign-note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:12px;border-radius:11px;font-size:12.5px;line-height:1.7;margin:12px 0}
   .campaign-summary{white-space:pre-wrap;background:#f8fafc;border:1px solid var(--border);border-radius:12px;padding:14px;line-height:1.8;font-size:13px}
+  .campaign-keyword-entry{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}.campaign-keyword-entry .campaign-btn{white-space:nowrap}
   .campaign-keywords{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}
   .campaign-keyword{display:inline-flex;align-items:center;gap:7px;background:var(--green-bg);color:var(--green2);border:1px solid #a7f3d0;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800}
   .campaign-keyword button{border:0;background:transparent;color:inherit;cursor:pointer;font-size:16px;line-height:1;padding:0}
@@ -1778,9 +1779,9 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-wa-media{display:none;height:118px;margin-bottom:7px;border-radius:8px;background:linear-gradient(135deg,#d7e9df,#a9cfbd);color:#1f6f53;align-items:center;justify-content:center;flex-direction:column;gap:5px;font-size:11px}.campaign-wa-media.visible{display:flex}.campaign-wa-media i{width:24px;height:24px;stroke-width:1.5}
   .campaign-wa-bubble{max-width:91%;margin-right:auto;padding:8px 9px 6px;border-radius:9px 2px 9px 9px;background:#d9fdd3;color:#17221d;font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;box-shadow:0 1px 1px rgba(0,0,0,.08)}.campaign-wa-time{display:block;margin-top:3px;text-align:left;font-size:8.5px;color:#66756d}
   .campaign-preview-help{margin-top:9px;font-size:10.5px;color:var(--text-soft);line-height:1.65}
-  .campaign-saved-card{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:16px;padding:17px 18px;border:1px solid var(--border);border-radius:16px;background:#fff}.campaign-saved-copy{display:flex;align-items:flex-start;gap:10px}.campaign-saved-copy i{width:20px;height:20px;flex:none;margin-top:2px;color:var(--green2);stroke-width:1.5}.campaign-saved-copy b{display:block;font-size:14px;font-weight:600}.campaign-saved-copy p{margin:4px 0 0;font-size:11.5px;color:var(--text-soft);line-height:1.6}.campaign-saved-actions{display:flex;align-items:center;gap:8px;min-width:390px}.campaign-saved-actions select{margin:0!important;min-width:230px}
-  @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{align-items:stretch;flex-direction:column}.campaign-saved-actions{min-width:0}}
-  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-source-option{min-height:108px}.campaign-saved-actions{align-items:stretch;flex-direction:column}.campaign-saved-actions select{min-width:0}.campaign-segment-head{align-items:flex-start;flex-direction:column}}
+  .campaign-saved-card{margin:16px 236px 0 0;padding:18px;border:1px solid var(--border);border-radius:16px;background:#fff}.campaign-saved-copy{display:flex;align-items:flex-start;gap:10px}.campaign-saved-copy i{width:20px;height:20px;flex:none;margin-top:2px;color:var(--green2);stroke-width:1.5}.campaign-saved-copy b{display:block;font-size:14px;font-weight:600}.campaign-saved-copy p{margin:4px 0 0;font-size:11.5px;color:var(--text-soft);line-height:1.6}.campaign-saved-actions{display:grid;grid-template-columns:minmax(220px,380px) auto;justify-content:start;align-items:center;gap:9px;margin-top:14px}.campaign-saved-actions select{width:100%;min-width:0;margin:0!important}.campaign-saved-actions .campaign-btn{white-space:nowrap}
+  @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{margin-right:236px}}
+  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-source-option{min-height:108px}.campaign-saved-card{margin-right:0}.campaign-saved-actions,.campaign-keyword-entry{grid-template-columns:1fr}.campaign-saved-actions .campaign-btn,.campaign-keyword-entry .campaign-btn{width:100%}.campaign-segment-head{align-items:flex-start;flex-direction:column}}
 </style>
 <div class="campaign-shell">
   <div class="campaign-hero">
@@ -1808,10 +1809,10 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
         </div>
         <div id="campaignSegmentDetails" class="campaign-segment-details" hidden></div>
         <div class="campaign-source-list" aria-label="طرق استهداف الحملة">
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="contacts" checked><div><b>استهداف بالأرقام</b><div class="hint">أدخل أرقام هذه الحملة فقط، رقمًا واحدًا في كل سطر.</div><span class="campaign-source-open">اضغط لفتح الأرقام</span></div></label>
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار بكلمات البحث</b><div class="hint">يبحث في رسائل العملاء ويعرض العدد الحقيقي قبل الإرسال.</div><span class="campaign-source-open">اضغط لفتح كلمات البحث</span></div></label>
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل خلال فترة</b><div class="hint">حدد بداية ونهاية الفترة حسب تاريخ آخر رسالة للعميل.</div><span class="campaign-source-open">اضغط لتحديد الفترة</span></div></label>
-          <label class="campaign-source-option"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">يشمل جميع العملاء المسجلين في المحادثات وقاعدة العملاء، بدون تكرار.</div><span class="campaign-source-open">اضغط لاختيار الجميع</span></div></label>
+          <label class="campaign-source-option" onclick="campaignSelectSource('contacts')"><input type="radio" name="campaignSource" value="contacts" checked><div><b>استهداف بالأرقام</b><div class="hint">أدخل أرقام هذه الحملة فقط، رقمًا واحدًا في كل سطر.</div><span class="campaign-source-open">اضغط لفتح الأرقام</span></div></label>
+          <label class="campaign-source-option" onclick="campaignSelectSource('keywords')"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار بكلمات البحث</b><div class="hint">يبحث في رسائل العملاء ويعرض العدد الحقيقي قبل الإرسال.</div><span class="campaign-source-open">اضغط لفتح كلمات البحث</span></div></label>
+          <label class="campaign-source-option" onclick="campaignSelectSource('conversations')"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل خلال فترة</b><div class="hint">حدد بداية ونهاية الفترة حسب تاريخ آخر رسالة للعميل.</div><span class="campaign-source-open">اضغط لتحديد الفترة</span></div></label>
+          <label class="campaign-source-option" onclick="campaignSelectSource('all')"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">يشمل جميع العملاء المسجلين في المحادثات وقاعدة العملاء، بدون تكرار.</div><span class="campaign-source-open">اضغط لاختيار الجميع</span></div></label>
         </div>
         <div class="campaign-source-panels">
           <div id="campaignContactOptions" class="campaign-source-panel" data-campaign-source-panel="contacts">
@@ -1824,11 +1825,11 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 
           <div id="campaignKeywordOptions" class="campaign-source-panel" data-campaign-source-panel="keywords" hidden>
             <label>كلمات البحث</label>
-            <input id="campaignKeywordInput" maxlength="120" placeholder="اكتب كلمة مثل اسم المنتج ثم اضغط Enter">
+            <div class="campaign-keyword-entry"><input id="campaignKeywordInput" maxlength="120" placeholder="اكتب كلمة مثل اسم المنتج"><button type="button" class="campaign-btn secondary" onclick="campaignAddKeywordFromInput()">إضافة الكلمة</button></div>
             <div class="hint" style="margin-top:6px">بعد كل كلمة اضغط Enter. يُحسب كل عميل مرة واحدة حتى لو كتب الكلمة أكثر من مرة.</div>
             <div id="campaignKeywordTags" class="campaign-keywords"></div>
             <div class="campaign-keyword-count"><span>عدد العملاء الذين ستصلهم الرسالة</span><strong id="campaignKeywordAudienceCount">—</strong></div>
-            <button class="campaign-btn secondary" onclick="campaignPreviewKeywords()">حساب العملاء وعرض النتائج</button>
+            <button type="button" class="campaign-btn secondary" onclick="campaignPreviewKeywords()">حساب العملاء وعرض النتائج</button>
             <div id="campaignKeywordPreview" class="campaign-summary" style="display:none;margin-top:10px;max-height:340px;overflow:auto"></div>
           </div>
 

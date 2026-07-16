@@ -159,6 +159,14 @@ function campaignToggleKeywordOptions() {
   });
 }
 
+function campaignSelectSource(source) {
+  const input = document.querySelector(`input[name="campaignSource"][value="${source}"]`);
+  if (!input) return;
+  document.querySelectorAll('input[name="campaignSource"]').forEach(option => { option.checked = option === input; });
+  campaignToggleKeywordOptions();
+  campaignMarkDirty();
+}
+
 function campaignUpdateNumbersCount() {
   const input = document.getElementById('campaignNumbers');
   const count = document.getElementById('campaignNumbersCount');
@@ -211,6 +219,12 @@ function campaignAddKeyword(rawValue) {
   return true;
 }
 
+function campaignAddKeywordFromInput() {
+  const input = document.getElementById('campaignKeywordInput');
+  if (!input) return;
+  if (campaignAddKeyword(input.value)) input.value = '';
+}
+
 function campaignRemoveKeyword(index) {
   campaignSearchTerms.splice(index, 1);
   campaignRenderKeywordTags();
@@ -223,8 +237,11 @@ async function campaignPreviewKeywords() {
     const source = document.querySelector('input[name="campaignSource"]:checked')?.value;
     if (source !== 'keywords') throw new Error('اختر جمهور كلمات البحث أولاً');
     if (!campaignSearchTerms.length) throw new Error('أضف كلمة بحث واحدة على الأقل واضغط Enter');
-    await campaignSave();
-    const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/preview`);
+    const data = await campaignApi('/api/campaigns/audience/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audienceRules: campaignFormPayload().audienceRules }),
+    });
     const preview = document.getElementById('campaignKeywordPreview');
     document.getElementById('campaignKeywordAudienceCount').textContent = String(data.count);
     const rows = (data.recipients || []).map(row => {
@@ -479,28 +496,30 @@ function campaignMarkDirty() {
   document.getElementById('campaignApprovalNotice').textContent = 'هناك تعديلات غير محفوظة. احفظها ثم أنشئ اعتماداً جديداً.';
 }
 
+function campaignBindControls() {
+  if (campaignLoadedOnce) return;
+  campaignLoadedOnce = true;
+  document.querySelectorAll('#view-campaigns input, #view-campaigns textarea, #view-campaigns select').forEach(el => {
+    if (el.id !== 'campaignPicker') el.addEventListener('input', campaignMarkDirty);
+  });
+  document.querySelectorAll('input[name="campaignSource"]').forEach(el => el.addEventListener('change', campaignToggleKeywordOptions));
+  document.getElementById('campaignKeywordInput').addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    campaignAddKeywordFromInput();
+  });
+  document.getElementById('campaignMessage').addEventListener('input', campaignRenderContentPreview);
+  document.getElementById('campaignMedia').addEventListener('change', campaignRenderContentPreview);
+  document.getElementById('campaignNumbers').addEventListener('input', campaignUpdateNumbersCount);
+  campaignToggleKeywordOptions();
+  campaignRenderKeywordTags();
+  campaignRenderContentPreview();
+}
+
 async function campaignOnTab() {
-  try {
-    await Promise.all([campaignLoadList(), campaignLoadCounts(), campaignLoadSignals()]);
-    if (!campaignLoadedOnce) {
-      campaignLoadedOnce = true;
-      document.querySelectorAll('#view-campaigns input, #view-campaigns textarea, #view-campaigns select').forEach(el => {
-        if (el.id !== 'campaignPicker') el.addEventListener('input', campaignMarkDirty);
-      });
-      document.querySelectorAll('input[name="campaignSource"]').forEach(el => el.addEventListener('change', campaignToggleKeywordOptions));
-      document.getElementById('campaignKeywordInput').addEventListener('keydown', event => {
-        if (event.key !== 'Enter') return;
-        event.preventDefault();
-        if (campaignAddKeyword(event.currentTarget.value)) event.currentTarget.value = '';
-      });
-      document.getElementById('campaignMessage').addEventListener('input', campaignRenderContentPreview);
-      document.getElementById('campaignMedia').addEventListener('change', campaignRenderContentPreview);
-      document.getElementById('campaignNumbers').addEventListener('input', campaignUpdateNumbersCount);
-      campaignToggleKeywordOptions();
-      campaignRenderKeywordTags();
-      campaignRenderContentPreview();
-    }
-  } catch (error) { campaignFlash(error.message, true); }
+  campaignBindControls();
+  const [listResult] = await Promise.allSettled([campaignLoadList(), campaignLoadCounts(), campaignLoadSignals()]);
+  if (listResult.status === 'rejected') campaignFlash(`تعذر تحميل الحملات المحفوظة: ${listResult.reason.message}`, true);
 }
 
 window.campaignOnTab = campaignOnTab;
