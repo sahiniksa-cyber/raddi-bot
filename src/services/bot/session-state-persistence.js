@@ -1,12 +1,14 @@
 'use strict';
 
 function buildRuntimeAuthMetadata(state = {}) {
-  return {
+  const metadata = {
     ready: !!state.ready,
     qrVersion: state.qrVersion || 0,
     authFailureCount: state.authFailureCount || 0,
     heartbeatFailures: state.heartbeatFailures || 0,
   };
+  if (state.lastDisconnect) metadata.lastDisconnect = state.lastDisconnect;
+  return metadata;
 }
 
 function buildPersistSessionStateQuery({

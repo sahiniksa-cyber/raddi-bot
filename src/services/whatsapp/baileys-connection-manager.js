@@ -11,6 +11,7 @@ const {
   fetchLatestBaileysVersion,
   jidNormalizedUser,
   makeWASocket,
+  proto,
 } = require('@whiskeysockets/baileys');
 
 const db = require('../../db/client');
@@ -29,6 +30,21 @@ const { usePostgresBaileysAuthState, BaileysPostgresAuthState } = require('./bai
 const RECONNECT_DELAYS_MS = (process.env.WA_RECONNECT_DELAYS_MS
   ? process.env.WA_RECONNECT_DELAYS_MS.split(',').map(n => parseInt(n.trim(), 10)).filter(Number.isFinite)
   : null) || [1000, 2000, 5000, 12000, 20000, 40000, 60000];
+
+// Raddi does not consume Baileys' `messaging-history.set` event, so downloading
+// RECENT/FULL/ON_DEMAND history during a fresh pairing only adds a large sync
+// burst at the most fragile point of the handshake. Keep the two bootstrap
+// types needed for contact identity/LID mapping, and skip the unused payloads.
+// Do not return false for every type: Baileys explicitly warns that doing so
+// removes initial LID mappings and can make sessions unstable.
+const ESSENTIAL_HISTORY_SYNC_TYPES = new Set([
+  proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP,
+  proto.HistorySync.HistorySyncType.PUSH_NAME,
+]);
+
+function shouldSyncEssentialHistoryMessage({ syncType } = {}) {
+  return ESSENTIAL_HISTORY_SYNC_TYPES.has(syncType);
+}
 
 // WebSocket readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED.
 // The passive heartbeat must treat ONLY explicit CLOSING/CLOSED as dead.
@@ -186,6 +202,8 @@ class BaileysConnectionManager extends EventEmitter {
     this.heartbeatFailures = 0;
     this.statusSince = Date.now();
     this.lastProbeState = null;
+    this.lastDisconnect = null;
+    this._pairingStartedAt = null;
     this._running = false;
     this._retryTimer = null;
     this._heartbeatTimer = null;
@@ -232,6 +250,7 @@ class BaileysConnectionManager extends EventEmitter {
       heartbeatFailures: this.heartbeatFailures,
       statusAgeMs: Date.now() - this.statusSince,
       lastProbeState: this.lastProbeState,
+      lastDisconnect: this.lastDisconnect,
     };
   }
 
@@ -274,6 +293,7 @@ class BaileysConnectionManager extends EventEmitter {
         browser: Browsers.ubuntu('Chrome'),
         logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || 'silent' }),
         syncFullHistory: false,
+        shouldSyncHistoryMessage: shouldSyncEssentialHistoryMessage,
         markOnlineOnConnect: false,
         emitOwnEvents: false,
         // Connection stability: send a WebSocket keep-alive ping on an interval
@@ -504,6 +524,10 @@ class BaileysConnectionManager extends EventEmitter {
       this.startQrStuckWatchdog(retryCount, socketGeneration);
     }
 
+    if (update.isNewLogin) {
+      this._pairingStartedAt = new Date().toISOString();
+    }
+
     if (update.connection === 'connecting') {
       if (this.status !== 'qr_ready') this.setStatus('connecting', 'connecting');
       this.lastProbeState = 'CONNECTING';
@@ -545,6 +569,20 @@ class BaileysConnectionManager extends EventEmitter {
       const reasonName = DisconnectReason[statusCode] || 'unknown';
       const rawMessage = update.lastDisconnect?.error?.message || 'closed';
       const technicalMessage = `${rawMessage} (code=${statusCode || 'unknown'} reason=${reasonName})`;
+      const authCreds = this._authStore?.cache?.creds || null;
+      const authKeys = this._authStore?.cache?.keys || null;
+      this.lastDisconnect = {
+        at: new Date().toISOString(),
+        statusCode: statusCode || null,
+        reason: reasonName,
+        message: String(rawMessage).slice(0, 500),
+        pairingStartedAt: this._pairingStartedAt,
+        auth: {
+          registered: !!authCreds?.registered,
+          hasMe: !!authCreds?.me?.id,
+          keyCategories: authKeys ? Object.keys(authKeys).length : 0,
+        },
+      };
       // A successful QR scan makes Baileys close the pre-pairing socket with
       // restartRequired (515). QR rotations may already have increased the
       // reconnect backoff, but carrying that delay into this required restart
@@ -734,4 +772,12 @@ class BaileysConnectionManager extends EventEmitter {
   }
 }
 
-module.exports = { BaileysConnectionManager, normalizeOutboundJid, extractPhoneNumber, toWhatsappWebMessage, quotedStanzaIdFromBaileysMessage, isSocketDeadReadyState };
+module.exports = {
+  BaileysConnectionManager,
+  normalizeOutboundJid,
+  extractPhoneNumber,
+  toWhatsappWebMessage,
+  quotedStanzaIdFromBaileysMessage,
+  isSocketDeadReadyState,
+  shouldSyncEssentialHistoryMessage,
+};
