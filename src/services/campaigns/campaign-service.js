@@ -270,7 +270,6 @@ async function resolveAudience(database, userId, rules = {}) {
        WHERE c.user_id = $1
          AND c.sender NOT LIKE '%@g.us'
          AND c.sender NOT LIKE '%@broadcast'
-         AND c.sender NOT LIKE '%@lid'
        ORDER BY c.last_message_at DESC`,
       params,
     );
@@ -278,7 +277,7 @@ async function resolveAudience(database, userId, rules = {}) {
   }
   if (source === 'conversations' || source === 'all') {
     const params = [userId];
-    const clauses = [`user_id = $1`, `sender NOT LIKE '%@g.us'`, `sender NOT LIKE '%@broadcast'`, `sender NOT LIKE '%@lid'`];
+    const clauses = [`user_id = $1`, `sender NOT LIKE '%@g.us'`, `sender NOT LIKE '%@broadcast'`];
     if (source === 'conversations' && rules.dateFrom) {
       params.push(rules.dateFrom);
       clauses.push(`last_message_at >= $${params.length}::timestamptz`);
@@ -330,7 +329,10 @@ async function resolveAudience(database, userId, rules = {}) {
   const bySender = new Map();
   for (const row of rows) {
     const sender = String(row.sender || '').trim();
-    if (!sender || sender.includes('@g.us') || sender.includes('@broadcast') || sender.includes('@lid')) continue;
+    // Modern WhatsApp privacy-masked customers are represented by @lid JIDs.
+    // Baileys can deliver to these identifiers directly, so excluding them here
+    // silently removed most real customers from campaign previews and sends.
+    if (!sender || sender.includes('@g.us') || sender.includes('@broadcast')) continue;
     if (!bySender.has(sender)) bySender.set(sender, row);
   }
   return [...bySender.values()];
