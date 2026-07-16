@@ -701,6 +701,22 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_campaign_contacts_user_updated
     ON campaign_contacts (user_id, updated_at DESC)`,
 
+  `ALTER TABLE campaign_contacts
+     ADD COLUMN IF NOT EXISTS customer_status TEXT NOT NULL DEFAULT 'contact'`,
+  `ALTER TABLE campaign_contacts
+     ADD COLUMN IF NOT EXISTS product_name TEXT`,
+  `ALTER TABLE campaign_contacts
+     ADD COLUMN IF NOT EXISTS order_reference TEXT`,
+  `ALTER TABLE campaign_contacts
+     ADD COLUMN IF NOT EXISTS order_date DATE`,
+  `ALTER TABLE campaign_contacts
+     ADD COLUMN IF NOT EXISTS subscription_start_date DATE`,
+  `ALTER TABLE campaign_contacts
+     ADD COLUMN IF NOT EXISTS subscription_end_date DATE`,
+
+  `CREATE INDEX IF NOT EXISTS idx_campaign_contacts_user_status
+    ON campaign_contacts (user_id, customer_status, updated_at DESC)`,
+
   `CREATE TABLE IF NOT EXISTS customer_product_signals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

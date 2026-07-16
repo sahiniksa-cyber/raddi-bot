@@ -87,6 +87,18 @@ function createCampaignRoutes(deps = {}) {
     const result = await service.addManualContacts(userId(req), req.body?.contacts || req.body?.numbers || []);
     res.json({ success: true, ...result });
   }));
+  router.get('/api/campaigns/contacts/template.xlsx', asyncHandler(async (_req, res) => {
+    const buffer = await service.exportContactTemplate();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="campaign-contacts-template.xlsx"');
+    res.send(Buffer.from(buffer));
+  }));
+  router.get('/api/campaigns/contacts/export.xlsx', asyncHandler(async (req, res) => {
+    const buffer = await service.exportContacts(userId(req));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="campaign-contacts-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  }));
   router.post('/api/campaigns/contacts/import', handleUpload(upload.single('file')), asyncHandler(async (req, res) => {
     if (!req.file) return res.status(400).json({ success: false, message: 'اختر ملف CSV أو Excel' });
     const result = await service.importContacts(userId(req), req.file.buffer, req.file.originalname);

@@ -289,6 +289,93 @@ test('an edited exported Excel sheet can be re-imported to update the customer c
   assert.equal(signalInsert.params[9], 'AB-88');
 });
 
+test('legacy smart audience is retired and automatically becomes Excel or manual contacts', () => {
+  const rules = normalizeAudienceRules({ source: 'smart', states: ['interested_unverified'] });
+  assert.equal(rules.source, 'contacts');
+  assert.deepEqual(rules.states, ['interested_unverified']);
+});
+
+test('campaign audience never sends twice when a phone exists in conversations and Excel contacts', async () => {
+  let call = 0;
+  const database = { query: async () => {
+    call += 1;
+    if (call === 1) return { rows: [{ conversation_id: 'c1', sender: '966551234567@s.whatsapp.net', normalized_phone: '966551234567', source: 'conversation' }] };
+    return { rows: [
+      { conversation_id: null, sender: '966551234567@s.whatsapp.net', normalized_phone: '966551234567', source: 'import' },
+      { conversation_id: null, sender: '966559999999@s.whatsapp.net', normalized_phone: '966559999999', source: 'import' },
+    ] };
+  } };
+  const recipients = await resolveAudience(database, 'user-1', { source: 'all' });
+  assert.equal(recipients.length, 2);
+  assert.equal(recipients.filter(item => item.sender === '966551234567@s.whatsapp.net').length, 1);
+});
+
+test('Excel audience import stores orders and subscription dates while merging duplicate phones', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('العملاء');
+  sheet.addRow(['رقم الجوال', 'اسم العميل', 'نوع السجل', 'المنتج أو الاشتراك', 'رقم الطلب', 'تاريخ الطلب', 'بداية الاشتراك', 'نهاية الاشتراك']);
+  sheet.addRow(['0551234567', 'عميل واحد', 'طلب', 'منتج أ', 'ORD-7', '2026-07-16', '', '']);
+  sheet.addRow(['+966551234567', 'عميل واحد', 'اشتراك', 'اشتراك سنوي', '', '', '2026-07-01', '2027-06-30']);
+  const buffer = await workbook.xlsx.writeBuffer();
+  const calls = [];
+  const database = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (/INSERT INTO customer_product_signals/.test(sql)) return { rows: [{ id: 'signal-1' }] };
+      return { rows: [] };
+    },
+  };
+  const service = createCampaignService({ database, getUserBot: async () => ({}) });
+  const result = await service.importContacts('user-1', buffer, 'audience.xlsx');
+  assert.deepEqual({ added: result.added, duplicates: result.duplicates, ordered: result.ordered, subscriptions: result.subscriptions }, {
+    added: 1, duplicates: 1, ordered: 1, subscriptions: 1,
+  });
+  assert.equal(result.invalid.length, 0);
+  const contactCalls = calls.filter(call => /INSERT INTO campaign_contacts/.test(call.sql));
+  assert.equal(contactCalls.length, 2);
+  assert.match(contactCalls[0].sql, /ON CONFLICT \(user_id, normalized_phone\) DO UPDATE/);
+  assert.equal(contactCalls[0].params[5], 'ordered');
+  assert.equal(contactCalls[0].params[8], '2026-07-16');
+  assert.equal(contactCalls[1].params[5], 'subscription');
+  assert.equal(contactCalls[1].params[9], '2026-07-01');
+  assert.equal(contactCalls[1].params[10], '2027-06-30');
+});
+
+test('Excel audience import rejects unclear or reversed subscription dates', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('العملاء');
+  sheet.addRow(['رقم الجوال', 'نوع السجل', 'بداية الاشتراك', 'نهاية الاشتراك']);
+  sheet.addRow(['0551234567', 'اشتراك', '2027-01-01', '2026-01-01']);
+  const buffer = await workbook.xlsx.writeBuffer();
+  const calls = [];
+  const service = createCampaignService({ database: { query: async (...args) => { calls.push(args); return { rows: [] }; } }, getUserBot: async () => ({}) });
+  const result = await service.importContacts('user-1', buffer, 'bad-dates.xlsx');
+  assert.equal(result.added, 0);
+  assert.equal(result.invalid.length, 1);
+  assert.match(result.invalid[0].reason, /بداية الاشتراك/);
+  assert.equal(calls.length, 0);
+});
+
+test('campaign contact template and database export expose order and subscription fields', async () => {
+  const database = { query: async () => ({ rows: [{
+    normalized_phone: '966551234567', name: 'عميل', customer_status: 'subscription', product_name: 'اشتراك سنوي',
+    order_reference: null, order_date: null, subscription_start_date: '2026-07-01', subscription_end_date: '2027-06-30',
+    source: 'import', updated_at: '2026-07-16T00:00:00Z',
+  }] }) };
+  const service = createCampaignService({ database, getUserBot: async () => ({}) });
+  const template = new ExcelJS.Workbook();
+  await template.xlsx.load(await service.exportContactTemplate());
+  assert.deepEqual(template.getWorksheet('نموذج الاستهداف').getRow(1).values.slice(1), [
+    'رقم الجوال', 'اسم العميل', 'نوع السجل', 'المنتج أو الاشتراك', 'رقم الطلب', 'تاريخ الطلب', 'بداية الاشتراك', 'نهاية الاشتراك',
+  ]);
+  const exported = new ExcelJS.Workbook();
+  await exported.xlsx.load(await service.exportContacts('user-1'));
+  const row = exported.getWorksheet('قاعدة العملاء').getRow(2).values;
+  assert.equal(row[3], 'اشتراك');
+  assert.equal(row[7], '2026-07-01');
+  assert.equal(row[8], '2027-06-30');
+});
+
 test('campaign media validation checks file contents, not only the browser MIME type', () => {
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
   assert.equal(hasValidSignature(png, 'image/png'), true);
@@ -311,7 +398,8 @@ test('campaign UI exposes wizard, multi-media and explicit approval without stor
   assert.ok(html.includes('id="campaignApproveBtn"'));
   assert.ok(html.includes('id="campaignStartBtn"'));
   assert.ok(html.includes('min="30"'));
-  assert.ok(html.includes('/api/campaigns/smart/export/ordered_confirmed.xlsx'));
+  assert.ok(html.includes('/api/campaigns/contacts/template.xlsx'));
+  assert.ok(html.includes('/api/campaigns/contacts/export.xlsx'));
   assert.ok(html.includes('id="campaignSegmentDetails"'));
   assert.ok(html.includes('id="campaignWhatsappMessage"'));
   assert.ok(html.includes('id="campaignContentAudienceCount"'));
@@ -326,10 +414,13 @@ test('campaign UI exposes wizard, multi-media and explicit approval without stor
 
 test('campaign backend is mounted with a dedicated queue and worker', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const routes = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'campaign.routes.js'), 'utf8');
   const queue = fs.readFileSync(path.join(__dirname, '..', 'src', 'queues', 'campaign-queue.js'), 'utf8');
   const worker = fs.readFileSync(path.join(__dirname, '..', 'src', 'workers', 'campaign-worker.js'), 'utf8');
   assert.ok(server.includes('createCampaignRoutes'));
   assert.ok(server.includes('createCampaignWorker'));
+  assert.ok(routes.includes('/api/campaigns/contacts/template.xlsx'));
+  assert.ok(routes.includes('/api/campaigns/contacts/export.xlsx'));
   assert.ok(queue.includes("'campaign-deliveries'"));
   assert.ok(queue.includes('refresh-campaign-segmentation'));
   assert.ok(worker.includes('concurrency: 1'));
@@ -347,5 +438,7 @@ test('campaign migration contains durable approval and recipient progress fields
   assert.ok(migration.includes('text_sent BOOLEAN'));
   assert.ok(migration.includes('quota_decremented BOOLEAN'));
   assert.ok(migration.includes('customer_product_signal_events'));
+  assert.ok(migration.includes('subscription_start_date'));
+  assert.ok(migration.includes('subscription_end_date'));
   assert.ok(migration.includes('interval_min_seconds BETWEEN 30 AND 3600'));
 });
