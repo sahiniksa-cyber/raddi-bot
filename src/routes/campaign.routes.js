@@ -114,6 +114,23 @@ function createCampaignRoutes(deps = {}) {
   router.post('/api/campaigns/history-import/finish', asyncHandler(async (req, res) => {
     res.json({ success: true, historyImport: await service.finishHistoryImport(userId(req)) });
   }));
+  router.get('/api/campaigns/history-import/qr-image', asyncHandler(async (req, res) => {
+    if (typeof deps.getUserBot !== 'function') return res.status(404).end();
+    const bot = await deps.getUserBot(userId(req));
+    const state = bot?.appState || {};
+    if (!state.historyImportMode || state.status !== 'qr_ready' || !state.qrString) {
+      return res.status(404).end();
+    }
+    const QRCode = require('qrcode');
+    const buffer = await QRCode.toBuffer(state.qrString, {
+      width: 512,
+      margin: 2,
+      color: { dark: '#000000', light: '#ffffff' },
+      errorCorrectionLevel: 'H',
+    });
+    res.set('Cache-Control', 'no-store');
+    res.type('png').send(buffer);
+  }));
 
   router.get('/api/campaigns', asyncHandler(async (req, res) => {
     res.json({ success: true, campaigns: await service.list(userId(req)) });

@@ -211,6 +211,47 @@ test('campaign start refuses immediately when WhatsApp is not connected', async 
   );
 });
 
+test('approved campaign start queues the reviewed audience without sending inside the request', async () => {
+  const scheduled = [];
+  let directSends = 0;
+  const campaign = {
+    id: 'campaign-approved',
+    user_id: 'user-1',
+    status: 'approved',
+    approved_at: new Date(),
+    approved_snapshot_hash: 'reviewed-hash',
+    scheduled_at: null,
+  };
+  const database = {
+    query: async sql => {
+      if (sql.includes('SELECT * FROM campaigns')) return { rows: [campaign] };
+      if (sql.includes('FROM whatsapp_history_imports')) return { rows: [{ count: 0 }] };
+      if (sql.includes('FROM campaign_recipients')) return { rows: [{ count: 2 }] };
+      if (sql.includes('FROM billing_accounts')) {
+        return { rows: [{ messages_remaining: 100, quota_expires_at: null, expire_resets_quota: false }] };
+      }
+      if (sql.includes("UPDATE campaigns SET status = $3")) return { rows: [{ id: campaign.id }] };
+      if (sql.includes('INSERT INTO campaign_events')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  const service = createCampaignService({
+    database,
+    getUserBot: async () => ({
+      client: { sendMessage: async () => { directSends += 1; } },
+      connection: { ready: true, status: 'connected' },
+    }),
+    scheduleCampaignRecipient: async (campaignId, options) => {
+      scheduled.push({ campaignId, options });
+    },
+  });
+  const result = await service.start('user-1', campaign.id);
+  assert.equal(result.id, campaign.id);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].campaignId, campaign.id);
+  assert.equal(directSends, 0);
+});
+
 test('approval snapshot hash is stable across object key order and changes with recipients', () => {
   assert.deepEqual(canonicalize({ b: 1, a: { d: 2, c: 3 } }), { a: { c: 3, d: 2 }, b: 1 });
   const first = snapshotHash({ message: 'x', rules: { b: 2, a: 1 }, recipients: ['1'] });

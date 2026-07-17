@@ -903,6 +903,12 @@ const statements = [
      ADD COLUMN IF NOT EXISTS purged_messages_count INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE whatsapp_history_imports
      ADD COLUMN IF NOT EXISTS purged_conversations_count INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE whatsapp_history_imports
+     ADD COLUMN IF NOT EXISTS import_auth_state JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE whatsapp_history_imports
+     ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ`,
+  `ALTER TABLE whatsapp_history_imports
+     ADD COLUMN IF NOT EXISTS resume_after_import BOOLEAN NOT NULL DEFAULT FALSE`,
 
   `CREATE TABLE IF NOT EXISTS whatsapp_history_conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

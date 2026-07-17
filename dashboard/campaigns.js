@@ -10,6 +10,9 @@ let campaignSignalsLoaded = false;
 let campaignSelectedSegment = null;
 let campaignAudienceCount = 0;
 let campaignHistoryPollTimer = null;
+let campaignHistoryCountdownTimer = null;
+let campaignHistoryCurrentStatus = null;
+let campaignHistoryQrVersion = 0;
 
 function campaignFlash(message, error = false) {
   const el = document.getElementById('campaignFlash');
@@ -260,6 +263,7 @@ async function campaignPreviewKeywords() {
 }
 
 function campaignRenderHistoryImport(status = {}) {
+  campaignHistoryCurrentStatus = status;
   const active = ['starting', 'running'].includes(status.status);
   const labels = {
     not_started: 'لم يبدأ',
@@ -279,15 +283,27 @@ function campaignRenderHistoryImport(status = {}) {
   document.getElementById('campaignHistoryStart').disabled = active;
   document.getElementById('campaignHistoryFinish').disabled = !active;
   const note = document.getElementById('campaignHistoryNote');
+  const qrBox = document.getElementById('campaignHistoryQr');
+  const qrImage = document.getElementById('campaignHistoryQrImage');
+  const showQr = active && status.qr_ready === true;
+  if (qrBox) qrBox.classList.toggle('visible', showQr);
+  if (showQr && qrImage && campaignHistoryQrVersion !== Number(status.qr_version || 0)) {
+    campaignHistoryQrVersion = Number(status.qr_version || 0);
+    qrImage.src = `/api/campaigns/history-import/qr-image?v=${campaignHistoryQrVersion}&t=${Date.now()}`;
+  }
+  if (!active) campaignHistoryQrVersion = 0;
   if (status.last_error) {
     note.textContent = `تعذر الاستيراد: ${status.last_error}`;
   } else if (active && status.explicit_complete) {
-    note.textContent = 'وصلت إشارة اكتمال السجل من واتساب، وسيُنهي النظام الاستيراد تلقائياً ويبقي الاتصال متوقفاً بدون إرسال.';
+    note.textContent = 'وصلت إشارة اكتمال السجل من واتساب. سيُنهي النظام جهاز الاستيراد المؤقت ويعيد جلسة البوت الأصلية إذا كانت تعمل قبل البدء.';
   } else if (active) {
-    const autoFinish = status.auto_finish_at
-      ? `، وبحد أقصى عند ${new Date(status.auto_finish_at).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`
-      : '';
-    note.textContent = `الاستيراد يعمل بوضع القراءة فقط${status.progress ? ` — التقدم المعلن ${status.progress}%` : ''}${autoFinish}. إذا لم تصل بيانات جديدة سيتوقف تلقائياً خلال ${Number(status.idle_timeout_seconds) || 180} ثانية. لا توجد ردود آلية أو حملات أو رسائل صادرة الآن.`;
+    if (['waiting_qr', 'qr_ready'].includes(status.connection_status)) {
+      note.textContent = 'الاستيراد ينتظر ربط جهاز مؤقت جديد. لن يبدأ عداد الخمول قبل مسح رمز QR ونجاح الاتصال.';
+    } else if (status.connection_status === 'connected' && !status.last_event_at) {
+      note.textContent = 'تم ربط الجهاز المؤقت بنجاح. ننتظر الآن دفعات المحادثات الفعلية من واتساب، وستتغير العدادات عند حفظ كل دفعة.';
+    } else {
+      note.textContent = `يستقبل النظام سجل واتساب بوضع القراءة فقط${status.progress ? ` — التقدم المعلن ${status.progress}%` : ''}. تتحدث الأعداد أعلاه من قاعدة البيانات الفعلية، وليست عداداً شكلياً.`;
+    }
   } else if (status.status === 'completed') {
     note.textContent = 'تم حفظ السجل الذي سلّمه واتساب وأصبح قابلاً للبحث. اكتب كلمات البحث واضغط حساب العملاء لعرض الأرقام.';
   } else if (status.status === 'partial') {
@@ -302,6 +318,41 @@ function campaignRenderHistoryImport(status = {}) {
     window.clearInterval(campaignHistoryPollTimer);
     campaignHistoryPollTimer = null;
   }
+  if (active && !campaignHistoryCountdownTimer) {
+    campaignHistoryCountdownTimer = window.setInterval(campaignRenderHistoryCountdown, 1000);
+  } else if (!active && campaignHistoryCountdownTimer) {
+    window.clearInterval(campaignHistoryCountdownTimer);
+    campaignHistoryCountdownTimer = null;
+  }
+  campaignRenderHistoryCountdown();
+}
+
+function campaignRenderHistoryCountdown() {
+  const status = campaignHistoryCurrentStatus || {};
+  const active = ['starting', 'running'].includes(status.status);
+  const progress = document.getElementById('campaignHistoryProgress');
+  if (!progress) return;
+  if (!active) {
+    progress.hidden = true;
+    progress.textContent = '';
+    return;
+  }
+  const waitingForQr = ['waiting_qr', 'qr_ready', 'connecting', 'reconnecting'].includes(status.connection_status)
+    && !status.connected_at;
+  const target = waitingForQr ? status.auto_finish_at : (status.idle_finish_at || status.auto_finish_at);
+  const remaining = target ? Math.max(0, Math.ceil((new Date(target).getTime() - Date.now()) / 1000)) : null;
+  const minutes = remaining === null ? null : Math.floor(remaining / 60);
+  const seconds = remaining === null ? null : remaining % 60;
+  const timer = remaining === null ? 'جارٍ الحساب' : `${minutes}:${String(seconds).padStart(2, '0')}`;
+  const chats = Number(status.conversations_total) || 0;
+  const messages = Number(status.inbound_messages_total) || 0;
+  const stage = waitingForQr
+    ? 'بانتظار مسح رمز QR'
+    : status.last_event_at
+      ? 'يستقبل ويحفظ دفعات المحادثات'
+      : 'متصل وينتظر أول دفعة من واتساب';
+  progress.hidden = false;
+  progress.innerHTML = `<b>${campaignEscape(stage)}</b> · المتبقي <strong dir="ltr">${timer}</strong><br>المحفوظ فعلياً الآن: <strong>${chats}</strong> محادثة و<strong>${messages}</strong> رسالة واردة.`;
 }
 
 async function campaignLoadHistoryImport() {
@@ -312,11 +363,11 @@ async function campaignLoadHistoryImport() {
 
 async function campaignStartHistoryImport() {
   try {
-    const confirmed = window.confirm('سيتم تشغيل اتصال واتساب بوضع قراءة فقط لإحضار المحادثات. خلال الاستيراد لن يعمل الرد الآلي ولن تُرسل أي حملة أو رسالة. هل تريد البدء؟');
+    const confirmed = window.confirm('سيظهر رمز QR مؤقت داخل خانة الحملات. امسحه من الأجهزة المرتبطة حتى يرسل واتساب سجل المحادثات فعلياً. خلال الاستيراد لن يعمل الرد الآلي ولن تُرسل أي حملة أو رسالة. هل تريد البدء؟');
     if (!confirmed) return;
     const data = await campaignApi('/api/campaigns/history-import/start', { method: 'POST' });
     campaignRenderHistoryImport(data.historyImport || {});
-    campaignFlash('بدأ استيراد المحادثات بوضع القراءة فقط. لن تُرسل أي رسالة.');
+    campaignFlash('بدأ الاستيراد. امسح رمز QR المؤقت الذي سيظهر داخل الخانة؛ لن تُرسل أي رسالة.');
   } catch (error) { campaignFlash(error.message, true); }
 }
 
@@ -324,7 +375,7 @@ async function campaignFinishHistoryImport() {
   try {
     const data = await campaignApi('/api/campaigns/history-import/finish', { method: 'POST' });
     campaignRenderHistoryImport(data.historyImport || {});
-    campaignFlash('تم إنهاء الاستيراد وحفظ المحادثات، واتصال واتساب متوقف الآن بدون إرسال.');
+    campaignFlash('تم إنهاء جهاز الاستيراد المؤقت وحفظ البيانات المستلمة. ستعود جلسة البوت الأصلية تلقائياً إذا كانت تعمل قبل البدء.');
   } catch (error) { campaignFlash(error.message, true); }
 }
 

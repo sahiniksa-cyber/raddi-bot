@@ -194,7 +194,7 @@ class WhatsAppHistoryImportService {
     this._queue = Promise.resolve();
   }
 
-  async beginImport() {
+  async beginImport({ resumeAfterImport = false } = {}) {
     const active = await this.db.query(
       `SELECT id FROM whatsapp_history_imports
        WHERE user_id = $1 AND status IN ('starting','running')
@@ -211,9 +211,10 @@ class WhatsAppHistoryImportService {
     // inbox. A new import replaces any unused older index for this merchant.
     await purgeTemporaryHistory(this.db, this.userId);
     const result = await this.db.query(
-      `INSERT INTO whatsapp_history_imports (user_id, status, read_only)
-       VALUES ($1, 'starting', TRUE) RETURNING *`,
-      [this.userId],
+      `INSERT INTO whatsapp_history_imports (
+         user_id, status, read_only, import_auth_state, resume_after_import
+       ) VALUES ($1, 'starting', TRUE, '{}'::jsonb, $2) RETURNING *`,
+      [this.userId, Boolean(resumeAfterImport)],
     );
     return result.rows[0];
   }
@@ -227,6 +228,22 @@ class WhatsAppHistoryImportService {
     );
     if (!result.rows[0]) throw new Error('History import is not startable');
     return result.rows[0];
+  }
+
+  async markConnected(importId) {
+    const result = await this.db.query(
+      `UPDATE whatsapp_history_imports
+       SET status = 'running', connected_at = COALESCE(connected_at, NOW()),
+           sync_types = sync_types || $3::jsonb, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2 AND status IN ('starting','running')
+       RETURNING *`,
+      [
+        importId,
+        this.userId,
+        JSON.stringify({ connection: { status: 'connected', at: new Date().toISOString() } }),
+      ],
+    );
+    return result.rows[0] || null;
   }
 
   enqueueHistorySet(importId, event) {
@@ -253,7 +270,12 @@ class WhatsAppHistoryImportService {
     const numericProgress = Number(event.progress);
     const progress = Number.isFinite(numericProgress) ? Math.max(0, Math.min(100, Math.round(numericProgress))) : 0;
     const messageHistoryType = isMessageHistoryType(event.syncType);
-    const explicitlyComplete = messageHistoryType && (event.isLatest === true || progress >= 100);
+    // In Baileys 7, isLatest means this notification is the newest one known
+    // to the local credential state; it does NOT mean the final history chunk.
+    // Finishing on isLatest truncated imports after the first batch. Only the
+    // server's 100% progress (or messaging-history.status explicit completion)
+    // is authoritative.
+    const explicitlyComplete = messageHistoryType && progress >= 100;
     const effectiveProgress = messageHistoryType ? progress : 0;
     const syncDetail = {
       [type]: {
@@ -367,12 +389,30 @@ class WhatsAppHistoryImportService {
       },
     };
     const result = await this.db.query(
-      `UPDATE whatsapp_history_imports SET
-         status = CASE WHEN explicit_complete OR progress >= 100 THEN 'completed' ELSE 'partial' END,
-         sync_types = sync_types || $3::jsonb,
+      `WITH imported AS (
+         SELECT
+           (SELECT COUNT(*)::int FROM whatsapp_history_conversations
+            WHERE user_id = $2 AND last_import_id = $1) AS conversations,
+           (SELECT COUNT(*)::int FROM whatsapp_history_messages
+            WHERE user_id = $2 AND import_id = $1) AS messages
+       )
+       UPDATE whatsapp_history_imports i SET
+         status = CASE
+           WHEN imported.conversations = 0 AND imported.messages = 0 THEN 'failed'
+           WHEN i.explicit_complete OR i.progress >= 100 THEN 'completed'
+           ELSE 'partial'
+         END,
+         last_error = CASE
+           WHEN imported.conversations = 0 AND imported.messages = 0
+             THEN 'لم يرسل واتساب أي محادثات لهذه الجلسة. أعد الاستيراد وامسح رمز QR المؤقت من داخل خانة الحملات.'
+           ELSE NULL
+         END,
+         import_auth_state = '{}'::jsonb,
+         sync_types = i.sync_types || $3::jsonb,
          completed_at = NOW(), updated_at = NOW()
-       WHERE id = $1 AND user_id = $2 AND status IN ('starting','running')
-       RETURNING *`,
+       FROM imported
+       WHERE i.id = $1 AND i.user_id = $2 AND i.status IN ('starting','running')
+       RETURNING i.*`,
       [importId, this.userId, JSON.stringify(finishDetail)],
     );
     return result.rows[0] || null;
@@ -381,7 +421,7 @@ class WhatsAppHistoryImportService {
   async failImport(importId, error) {
     await this.db.query(
       `UPDATE whatsapp_history_imports SET status = 'failed', last_error = $3,
-         completed_at = NOW(), updated_at = NOW()
+         import_auth_state = '{}'::jsonb, completed_at = NOW(), updated_at = NOW()
        WHERE id = $1 AND user_id = $2 AND status IN ('starting','running')`,
       [importId, this.userId, String(error?.message || error || 'unknown').slice(0, 1000)],
     );
@@ -390,10 +430,14 @@ class WhatsAppHistoryImportService {
   async latestStatus() {
     const result = await this.db.query(
       `SELECT i.*,
-         (SELECT COUNT(*)::int FROM whatsapp_history_conversations c WHERE c.user_id = i.user_id) AS conversations_total,
-         (SELECT COUNT(*)::int FROM whatsapp_history_conversations c WHERE c.user_id = i.user_id AND c.normalized_phone IS NOT NULL) AS numbers_total,
-         (SELECT COUNT(*)::int FROM whatsapp_history_messages m WHERE m.user_id = i.user_id) AS messages_total,
-         (SELECT COUNT(*)::int FROM whatsapp_history_messages m WHERE m.user_id = i.user_id AND m.direction = 'inbound') AS inbound_messages_total
+         (SELECT COUNT(*)::int FROM whatsapp_history_conversations c
+          WHERE c.user_id = i.user_id AND c.last_import_id = i.id) AS conversations_total,
+         (SELECT COUNT(*)::int FROM whatsapp_history_conversations c
+          WHERE c.user_id = i.user_id AND c.last_import_id = i.id AND c.normalized_phone IS NOT NULL) AS numbers_total,
+         (SELECT COUNT(*)::int FROM whatsapp_history_messages m
+          WHERE m.user_id = i.user_id AND m.import_id = i.id) AS messages_total,
+         (SELECT COUNT(*)::int FROM whatsapp_history_messages m
+          WHERE m.user_id = i.user_id AND m.import_id = i.id AND m.direction = 'inbound') AS inbound_messages_total
        FROM whatsapp_history_imports i
        WHERE i.user_id = $1 ORDER BY i.created_at DESC LIMIT 1`,
       [this.userId],
@@ -412,6 +456,11 @@ class WhatsAppHistoryImportService {
     if (startedAt && Number.isFinite(startedAt) && ACTIVE_IMPORT_STATUSES.has(status.status)) {
       status.auto_finish_at = new Date(startedAt + historyImportMaxMs()).toISOString();
       status.idle_timeout_seconds = Math.round(historyImportIdleMs() / 1000);
+      const idleReference = status.last_event_at || status.connected_at;
+      if (idleReference) {
+        const idleAt = new Date(idleReference).getTime();
+        if (Number.isFinite(idleAt)) status.idle_finish_at = new Date(idleAt + historyImportIdleMs()).toISOString();
+      }
     }
     return status;
   }

@@ -447,11 +447,23 @@ async function resolveAudience(database, userId, rules = {}) {
   return [...bySender.values()];
 }
 
-function createCampaignService({ database = db, getUserBot } = {}) {
+function createCampaignService({ database = db, getUserBot, scheduleCampaignRecipient = null } = {}) {
   const historyServiceFor = userId => new WhatsAppHistoryImportService({ database, userId });
 
   async function historyImportStatus(userId) {
-    return historyServiceFor(userId).latestStatus();
+    const status = await historyServiceFor(userId).latestStatus();
+    if (typeof getUserBot !== 'function' || !WhatsAppHistoryImportService.isActiveStatus(status.status)) {
+      return status;
+    }
+    const bot = await getUserBot(userId);
+    const state = bot?.appState || {};
+    return {
+      ...status,
+      connection_status: state.status || null,
+      qr_ready: state.status === 'qr_ready' && Boolean(state.qrString),
+      qr_version: Number(state.qrVersion) || 0,
+      live_session_will_resume: Boolean(status.resume_after_import),
+    };
   }
 
   async function startHistoryImport(userId) {
@@ -474,7 +486,10 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     const service = historyServiceFor(userId);
     let historyImport = null;
     try {
-      historyImport = await service.beginImport();
+      const resumeAfterImport = bot.sessionDesiredState === 'running'
+        || bot.connection?.ready === true
+        || bot.connection?.status === 'connected';
+      historyImport = await service.beginImport({ resumeAfterImport });
       return await bot.startHistoryImport(historyImport.id);
     } catch (error) {
       if (historyImport?.id) await service.failImport(historyImport.id, error).catch(() => {});
@@ -1095,8 +1110,9 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     );
     if (!started.rows[0]) throw badRequest('تغيرت الحملة قبل بدء الإرسال؛ راجع اعتمادها من جديد', 'CAMPAIGN_START_RACE');
     try {
-      const { scheduleNextRecipient } = require('../../workers/campaign-worker');
-      await scheduleNextRecipient(campaignId, { database, delay });
+      const scheduler = scheduleCampaignRecipient
+        || require('../../workers/campaign-worker').scheduleNextRecipient;
+      await scheduler(campaignId, { database, delay });
     } catch (error) {
       await database.query(`UPDATE campaigns SET status = 'approved', last_error = $2, updated_at = NOW() WHERE id = $1`, [campaignId, error.message]).catch(() => {});
       throw error;
