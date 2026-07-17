@@ -148,6 +148,15 @@ test('history import pairing uses isolated temporary auth instead of the live bo
   assert.equal(calls.some(call => call.sql.includes('UPDATE whatsapp_sessions')), false);
 });
 
+test('history import uses the QR-compatible Chrome browser identity', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '../src/services/whatsapp/baileys-connection-manager.js'),
+    'utf8',
+  );
+  assert.match(source, /browser:\s*Browsers\.ubuntu\('Chrome'\)/);
+  assert.doesNotMatch(source, /browser:\s*historyImportMode\s*\?\s*Browsers\.macOS/);
+});
+
 test('history import idle countdown does not start before the temporary QR is scanned', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-history-wait-qr-'));
   const logger = { info() {}, warn() {}, error() {}, log() {}, all() { return []; } };
@@ -338,6 +347,7 @@ test('history import status exposes the real QR and database counters together',
   const status = await service.historyImportStatus('user-1');
   assert.equal(status.qr_ready, true);
   assert.equal(status.qr_version, 7);
+  assert.equal(status.connection_error, null);
   assert.equal(status.conversations_total, 0);
   assert.equal(status.live_session_will_resume, true);
 });

@@ -460,6 +460,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
     return {
       ...status,
       connection_status: state.status || null,
+      connection_error: state.error || null,
       qr_ready: state.status === 'qr_ready' && Boolean(state.qrString),
       qr_version: Number(state.qrVersion) || 0,
       live_session_will_resume: Boolean(status.resume_after_import),

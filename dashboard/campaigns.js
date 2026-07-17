@@ -297,8 +297,12 @@ function campaignRenderHistoryImport(status = {}) {
   } else if (active && status.explicit_complete) {
     note.textContent = 'وصلت إشارة اكتمال السجل من واتساب. سيُنهي النظام جهاز الاستيراد المؤقت، بينما يبقى البوت الأساسي متصلاً.';
   } else if (active) {
-    if (['waiting_qr', 'qr_ready'].includes(status.connection_status)) {
+    if (status.connection_status === 'reconnecting' && status.connection_error) {
+      note.textContent = 'تعذر إنشاء رمز QR في المحاولة السابقة، ويعيد النظام الاتصال تلقائياً. لا يلزمك فعل شيء حتى يظهر الرمز داخل هذه الخانة.';
+    } else if (status.connection_status === 'qr_ready') {
       note.textContent = 'الاستيراد ينتظر ربط جهاز مؤقت جديد. لن يبدأ عداد الخمول قبل مسح رمز QR ونجاح الاتصال.';
+    } else if (['waiting_qr', 'connecting'].includes(status.connection_status)) {
+      note.textContent = 'جاري إنشاء رمز QR المؤقت. سيظهر داخل هذه الخانة فور استلامه من واتساب.';
     } else if (status.connection_status === 'connected' && !status.last_event_at) {
       note.textContent = 'تم ربط الجهاز المؤقت بنجاح. ننتظر الآن دفعات المحادثات الفعلية من واتساب، وستتغير العدادات عند حفظ كل دفعة.';
     } else {
@@ -346,8 +350,12 @@ function campaignRenderHistoryCountdown() {
   const timer = remaining === null ? 'جارٍ الحساب' : `${minutes}:${String(seconds).padStart(2, '0')}`;
   const chats = Number(status.conversations_total) || 0;
   const messages = Number(status.inbound_messages_total) || 0;
-  const stage = waitingForQr
+  const stage = status.connection_status === 'qr_ready'
     ? 'بانتظار مسح رمز QR'
+    : status.connection_status === 'reconnecting'
+      ? 'تعذر إنشاء رمز QR، يحاول النظام مجدداً'
+      : waitingForQr
+        ? 'جاري إنشاء رمز QR'
     : status.last_event_at
       ? 'يستقبل ويحفظ دفعات المحادثات'
       : 'متصل وينتظر أول دفعة من واتساب';
