@@ -339,7 +339,10 @@ class BaileysConnectionManager extends EventEmitter {
         auth: state,
         version: this._version,
         printQRInTerminal: false,
-        browser: historyImportMode ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome'),
+        // WhatsApp currently terminates a fresh macOS/Desktop pairing socket
+        // with code 428 before Baileys can emit its first QR. A desktop Chrome
+        // identity still receives FULL history sync and reliably emits the QR.
+        browser: Browsers.ubuntu('Chrome'),
         logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || 'silent' }),
         syncFullHistory: historyImportMode,
         shouldSyncHistoryMessage: historyImportMode ? () => true : shouldSyncEssentialHistoryMessage,
