@@ -143,6 +143,9 @@ function createCampaignRoutes(deps = {}) {
   router.post('/api/campaigns/:id/prepare-approval', asyncHandler(async (req, res) => {
     res.json({ success: true, ...(await service.prepareApproval(userId(req), req.params.id)) });
   }));
+  router.post('/api/campaigns/:id/reuse-audience', asyncHandler(async (req, res) => {
+    res.status(201).json({ success: true, campaign: await service.reuseAudience(userId(req), req.params.id) });
+  }));
   router.post('/api/campaigns/:id/approve', asyncHandler(async (req, res) => {
     res.json({ success: true, campaign: await service.approve(userId(req), req.params.id, req.body || {}) });
   }));

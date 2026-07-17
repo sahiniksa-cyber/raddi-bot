@@ -402,7 +402,7 @@ async function markInboundMessagesAnswered({ database = db, messageIds = [] }) {
   await database.query(
     `UPDATE messages
      SET status = 'answered_by_ai',
-         raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb
+         raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}') || $2::jsonb
      WHERE id = ANY($1::uuid[])`,
     [ids, JSON.stringify({ answeredByAiAt: new Date().toISOString() })],
   );
@@ -418,7 +418,7 @@ async function markConversationMessagesMutedSkipped({ database = db, userId, con
   const result = await database.query(
     `UPDATE messages
         SET status = 'skipped_escalation_muted',
-            raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $3::jsonb
+            raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}') || $3::jsonb
       WHERE user_id = $1 AND conversation_id = $2
         AND direction = 'inbound' AND status = 'queued_for_ai'`,
     [userId, conversationId, JSON.stringify({ mutedSkippedAt: new Date().toISOString() })],
@@ -467,7 +467,7 @@ async function markInboundMessagesQuotaExceeded({ database = db, messageIds = []
   await database.query(
     `UPDATE messages
      SET status = 'quota_exceeded',
-         raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb
+         raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}') || $2::jsonb
      WHERE id = ANY($1::uuid[])`,
     [ids, JSON.stringify({ quotaExceededAt: new Date().toISOString(), reason })],
   );
@@ -704,7 +704,7 @@ async function processAiReply(job) {
       // queued_for_ai) so they leave the stuck count and are never answered.
       await db.query(
         `UPDATE messages SET status = 'ai_failed',
-                raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb
+                raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}') || $2::jsonb
           WHERE id = ANY($1::uuid[])`,
         [pendingMessages.map(m => m.id), JSON.stringify({ retiredAt: new Date().toISOString(), reason: 'stale_message' })],
       ).catch(() => {});

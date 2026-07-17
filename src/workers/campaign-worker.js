@@ -209,6 +209,9 @@ async function processCampaignSegmentation(job, { database = db, getUserBot } = 
 async function recipientMatchesKeywordAudience(database, campaign, recipient, audienceRules) {
   const rules = normalizeAudienceRules(audienceRules);
   if (rules.source !== 'keywords') return false;
+  // Raw imported messages are deleted after explicit campaign approval. The
+  // materialized delivery address is then the approved audience source.
+  if (recipient.source === 'saved_history_number') return Boolean(recipient.sender);
   if (recipient.source === 'keyword_history') {
     const params = [campaign.user_id, recipient.sender, rules.searchTerms];
     const clauses = [

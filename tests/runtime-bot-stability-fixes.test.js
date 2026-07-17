@@ -35,11 +35,13 @@ function makeBotWith440Handler({ desiredState = 'running' } = {}) {
   const conn = new FakeConnection();
   const releaseCalls = [];
   const startCalls = [];
+  const leaseRenewTimer = setInterval(() => {}, 1_000_000);
+  leaseRenewTimer.unref?.();
   const bot = {
     connection: conn,
     sessionDesiredState: desiredState,
     _autoRecoverTimer: null,
-    _leaseRenewTimer: setInterval(() => {}, 1_000_000), // pretend a renewal is active
+    _leaseRenewTimer: leaseRenewTimer, // pretend a renewal is active
     logger: { info: () => {}, warn: () => {} },
     leaseTtlMs() { return 1000; },
     async releaseConnectionLease() {

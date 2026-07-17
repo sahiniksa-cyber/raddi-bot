@@ -53,6 +53,7 @@ function campaignFormPayload() {
     messageText: document.getElementById('campaignMessage').value.trim(),
     audienceRules: {
       source,
+      sourceCampaignId: source === 'saved_campaign' ? campaignCurrent?.audience_rules?.sourceCampaignId : undefined,
       states: [],
       productKeys: [],
       searchTerms: [...campaignSearchTerms],
@@ -98,6 +99,7 @@ function campaignNew() {
   document.getElementById('campaignIntervalMin').value = 30;
   document.getElementById('campaignIntervalMax').value = 60;
   document.querySelector('input[name="campaignSource"][value="contacts"]').checked = true;
+  document.getElementById('campaignSavedAudienceOption').hidden = true;
   document.getElementById('campaignMediaList').innerHTML = '';
   document.getElementById('campaignPicker').value = '';
   document.getElementById('campaignKeywordInput').value = '';
@@ -130,6 +132,7 @@ function campaignFill(campaign) {
   const rules = campaign.audience_rules || {};
   campaignSearchTerms = Array.isArray(rules.searchTerms) ? [...rules.searchTerms] : [];
   const source = rules.source === 'smart' ? 'contacts' : (rules.source || 'contacts');
+  document.getElementById('campaignSavedAudienceOption').hidden = source !== 'saved_campaign';
   const sourceInput = document.querySelector(`input[name="campaignSource"][value="${source}"]`)
     || document.querySelector('input[name="campaignSource"][value="contacts"]');
   if (sourceInput) sourceInput.checked = true;
@@ -279,9 +282,12 @@ function campaignRenderHistoryImport(status = {}) {
   if (status.last_error) {
     note.textContent = `تعذر الاستيراد: ${status.last_error}`;
   } else if (active && status.explicit_complete) {
-    note.textContent = 'وصلت إشارة اكتمال السجل من واتساب. اضغط «إنهاء الاستيراد» لحفظ الحالة وإبقاء الاتصال متوقفاً بدون إرسال.';
+    note.textContent = 'وصلت إشارة اكتمال السجل من واتساب، وسيُنهي النظام الاستيراد تلقائياً ويبقي الاتصال متوقفاً بدون إرسال.';
   } else if (active) {
-    note.textContent = `الاستيراد يعمل بوضع القراءة فقط${status.progress ? ` — التقدم المعلن ${status.progress}%` : ''}. لا توجد ردود آلية أو حملات أو رسائل صادرة الآن.`;
+    const autoFinish = status.auto_finish_at
+      ? `، وبحد أقصى عند ${new Date(status.auto_finish_at).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`
+      : '';
+    note.textContent = `الاستيراد يعمل بوضع القراءة فقط${status.progress ? ` — التقدم المعلن ${status.progress}%` : ''}${autoFinish}. إذا لم تصل بيانات جديدة سيتوقف تلقائياً خلال ${Number(status.idle_timeout_seconds) || 180} ثانية. لا توجد ردود آلية أو حملات أو رسائل صادرة الآن.`;
   } else if (status.status === 'completed') {
     note.textContent = 'تم حفظ السجل الذي سلّمه واتساب وأصبح قابلاً للبحث. اكتب كلمات البحث واضغط حساب العملاء لعرض الأرقام.';
   } else if (status.status === 'partial') {
@@ -328,6 +334,20 @@ async function campaignOpen(id) {
     const data = await campaignApi(`/api/campaigns/${id}`);
     campaignFill(data.campaign);
     campaignGoStep('audience');
+  } catch (error) { campaignFlash(error.message, true); }
+}
+
+async function campaignReuseAudience() {
+  try {
+    if (!campaignCurrent?.id) throw new Error('اختر حملة محفوظة أولاً');
+    const confirmed = window.confirm('سيتم إنشاء مسودة جديدة بنفس قائمة المستلمين والنص. لن يبدأ أي إرسال، والوسائط تحتاج إضافتها من جديد. هل تريد المتابعة؟');
+    if (!confirmed) return;
+    const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/reuse-audience`, { method: 'POST' });
+    const detail = await campaignApi(`/api/campaigns/${data.campaign.id}`);
+    campaignFill(detail.campaign);
+    campaignGoStep('audience');
+    await campaignLoadList();
+    campaignFlash('تم إنشاء مسودة جديدة بنفس الجمهور المحفوظ بدون إعادة البحث. لم يبدأ أي إرسال.');
   } catch (error) { campaignFlash(error.message, true); }
 }
 
@@ -481,7 +501,7 @@ async function campaignRenderReview() {
   if (!campaignCurrent) { el.textContent = 'احفظ الحملة أولاً لعرض الملخص.'; return; }
   try {
     const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/preview`);
-    const sourceLabels = { contacts: 'الأرقام المحددة', all: 'كل العملاء', conversations: 'من تواصل في الفترة المحددة', smart: 'قائمة عملاء محفوظة سابقاً', keywords: 'كلمات البحث' };
+    const sourceLabels = { contacts: 'الأرقام المحددة', all: 'كل العملاء', conversations: 'من تواصل في الفترة المحددة', smart: 'قائمة عملاء محفوظة سابقاً', keywords: 'كلمات البحث', saved_campaign: 'جمهور حملة محفوظة بدون إعادة بحث' };
     const source = sourceLabels[campaignCurrent.audience_rules?.source] || 'الأرقام المحددة';
     const terms = campaignCurrent.audience_rules?.source === 'keywords' ? `\nكلمات البحث: ${(campaignCurrent.audience_rules.searchTerms || []).join('، ')}` : '';
     el.textContent = `الحملة: ${campaignCurrent.name}\nالجمهور: ${source}${terms}\nعدد المستلمين الحالي: ${data.count}\nالفاصل: ${campaignCurrent.interval_min_seconds}–${campaignCurrent.interval_max_seconds} ثانية\nالوسائط: ${(campaignCurrent.media || []).length}\n\nالرسالة:\n${campaignCurrent.message_text || '(بدون نص)'}`;
@@ -495,12 +515,14 @@ function campaignUpdateButtons() {
   const resume = document.getElementById('campaignResumeBtn');
   const cancel = document.getElementById('campaignCancelBtn');
   const notice = document.getElementById('campaignApprovalNotice');
+  const reuse = document.getElementById('campaignReuseAudienceBtn');
   if (!approve || !start) return;
   approve.disabled = !(campaignCurrent?.status === 'ready_for_approval' && campaignApproval);
   start.disabled = campaignCurrent?.status !== 'approved';
   pause.disabled = !['sending', 'scheduled'].includes(campaignCurrent?.status);
   resume.disabled = campaignCurrent?.status !== 'paused';
   cancel.disabled = !campaignCurrent || ['completed', 'canceled', 'failed'].includes(campaignCurrent.status);
+  if (reuse) reuse.disabled = !campaignCurrent?.approved_at || !(Number(campaignCurrent.audience_count) > 0);
   notice.textContent = campaignCurrent?.status === 'approved'
     ? 'الحملة معتمدة. لن يبدأ الإرسال إلا عند الضغط على «بدء الإرسال».'
     : campaignCurrent?.status === 'ready_for_approval'

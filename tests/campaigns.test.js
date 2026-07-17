@@ -220,6 +220,102 @@ test('approval snapshot hash is stable across object key order and changes with 
   assert.notEqual(first, changed);
 });
 
+test('approval trusts the reviewed recipient snapshot and purges imported message evidence', async () => {
+  const campaignId = '11111111-1111-4111-8111-111111111111';
+  const userId = '22222222-2222-4222-8222-222222222222';
+  const campaign = {
+    id: campaignId,
+    user_id: userId,
+    status: 'ready_for_approval',
+    message_text: 'عرض العدسات',
+    audience_rules: { source: 'keywords', searchTerms: ['عدسات'], states: [], productKeys: [], dateFrom: null, dateTo: null },
+    interval_min_seconds: 30,
+    interval_max_seconds: 60,
+    scheduled_at: null,
+    content_version: 1,
+    audience_count: 2,
+  };
+  const recipients = [{ sender: '12345@lid' }, { sender: '966500000001@s.whatsapp.net' }];
+  const approvedHash = snapshotHash({
+    campaignId,
+    contentVersion: 1,
+    messageText: campaign.message_text,
+    audienceRules: campaign.audience_rules,
+    intervalMinSeconds: 30,
+    intervalMaxSeconds: 60,
+    scheduledAt: null,
+    media: [],
+    recipients: recipients.map(row => row.sender).sort(),
+  });
+  campaign.approved_snapshot_hash = approvedHash;
+  const calls = [];
+  const client = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes('SELECT * FROM campaigns')) return { rows: [campaign] };
+      if (sql.includes('SELECT sender FROM campaign_recipients')) return { rows: recipients };
+      if (sql.includes('SELECT id, kind, sha256')) return { rows: [] };
+      if (sql.includes("UPDATE campaigns SET status = 'approved'")) {
+        return { rows: [{ ...campaign, status: 'approved', approved_at: new Date() }] };
+      }
+      if (sql.includes('SELECT EXISTS')) return { rows: [{ present: true }] };
+      if (sql.includes('DELETE FROM whatsapp_history_messages')) return { rows: [{ count: 8 }] };
+      if (sql.includes('DELETE FROM whatsapp_history_conversations')) return { rows: [{ count: 2 }] };
+      return { rows: [] };
+    },
+  };
+  const database = { transaction: async fn => fn(client) };
+  const service = createCampaignService({ database, getUserBot: async () => ({}) });
+  const result = await service.approve(userId, campaignId, { snapshotHash: approvedHash, audienceCount: 2 });
+  assert.equal(result.status, 'approved');
+  assert.equal(calls.some(call => /SELECT[\s\S]+FROM whatsapp_history_messages WHERE/.test(call.sql)), false);
+  assert.equal(calls.some(call => call.sql.includes("source = 'saved_history_number'")), true);
+  assert.equal(calls.some(call => call.sql.includes('DELETE FROM whatsapp_history_messages')), true);
+  assert.equal(calls.some(call => call.sql.includes('DELETE FROM whatsapp_history_conversations')), true);
+});
+
+test('a new campaign can reuse an approved saved audience without searching messages', async () => {
+  const sourceCampaignId = '11111111-1111-4111-8111-111111111111';
+  const userId = '22222222-2222-4222-8222-222222222222';
+  const calls = [];
+  const client = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes('SELECT * FROM campaigns')) {
+        return { rows: [{
+          id: sourceCampaignId,
+          user_id: userId,
+          name: 'حملة سابقة',
+          goal: '',
+          message_text: 'النص',
+          approved_at: new Date(),
+          interval_min_seconds: 30,
+          interval_max_seconds: 60,
+        }] };
+      }
+      if (sql.includes('SELECT COUNT(*)::int AS count FROM campaign_recipients')) return { rows: [{ count: 3 }] };
+      if (sql.includes('INSERT INTO campaigns')) {
+        return { rows: [{
+          id: '33333333-3333-4333-8333-333333333333',
+          user_id: userId,
+          status: 'draft',
+          name: params[1],
+          audience_rules: JSON.parse(params[4]),
+        }] };
+      }
+      return { rows: [] };
+    },
+  };
+  const database = { transaction: async fn => fn(client) };
+  const service = createCampaignService({ database, getUserBot: async () => ({}) });
+  const copy = await service.reuseAudience(userId, sourceCampaignId);
+  assert.equal(copy.status, 'draft');
+  assert.equal(copy.audience_rules.source, 'saved_campaign');
+  assert.equal(copy.audience_rules.sourceCampaignId, sourceCampaignId);
+  assert.equal(calls.some(call => call.sql.includes('FROM messages')), false);
+  assert.equal(calls.some(call => call.sql.includes('FROM whatsapp_history_messages')), false);
+});
+
 test('campaign interval jitter always stays inside the configured range', () => {
   for (let index = 0; index < 100; index += 1) {
     const delay = randomDelayMs({ interval_min_seconds: 5, interval_max_seconds: 60 });

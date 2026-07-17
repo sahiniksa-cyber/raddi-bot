@@ -14,7 +14,11 @@ const { getAllAdminApiKeys } = require('../admin/admin-api-keys');
 const { getCustomerApiKeysFor } = require('../admin/customer-api-keys');
 const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
-const { WhatsAppHistoryImportService } = require('../whatsapp/history-import.service');
+const {
+  WhatsAppHistoryImportService,
+  historyImportIdleMs,
+  historyImportMaxMs,
+} = require('../whatsapp/history-import.service');
 const { sendUnlinkAlert } = require('../monitoring/unlink-alert');
 const { resolveWhatsappEngine } = require('./engine-config');
 const {
@@ -89,6 +93,9 @@ class RuntimeBot {
     this._autoRecoverTimer = null;
     this._leaseRenewTimer = null;
     this._sessionBackupTimer = null;
+    this._historyImportIdleTimer = null;
+    this._historyImportMaxTimer = null;
+    this._historyImportFinishing = null;
     // WhatsApp 440 (connectionReplaced) smart-recovery state. A single conflict
     // recovers fast; repeated conflicts within a short window escalate the delay
     // so we don't fight a persistent duplicate-device session in a tight loop.
@@ -176,6 +183,17 @@ class RuntimeBot {
       // Device was unlinked — fire the instant owner alert (best-effort,
       // never blocks the disconnect handling).
       sendUnlinkAlert({ userId: this.userId, phone: this.connection.phone }).catch(() => {});
+    });
+    this.connection.on('history_import_activity', ({ importId } = {}) => {
+      if (importId && this.connection?._historyImport?.importId === importId) {
+        this.scheduleHistoryImportIdleTimer(importId);
+      }
+    });
+    this.connection.on('history_import_complete', ({ importId } = {}) => {
+      if (!importId) return;
+      this.autoFinishHistoryImport(importId, 'whatsapp_complete').catch((err) => {
+        this.logger.warn('history_import', `automatic completion failed: ${err.message}`);
+      });
     });
     this.connection.on('connection_conflict', () => {
       if (this.sessionDesiredState !== 'running') return;
@@ -289,7 +307,7 @@ class RuntimeBot {
       [this.userId, this.sessionStoragePath],
       ),
       this.db.query(
-        `SELECT id FROM whatsapp_history_imports
+        `SELECT id, started_at, last_event_at FROM whatsapp_history_imports
          WHERE user_id = $1 AND status IN ('starting','running')
          ORDER BY created_at DESC LIMIT 1`,
         [this.userId],
@@ -303,6 +321,7 @@ class RuntimeBot {
         importId: activeImportId,
         service: this.historyImport,
       });
+      this.scheduleHistoryImportTimers(activeImportId, activeHistoryImport.rows[0]);
     }
 
     const row = result.rows[0] || {};
@@ -522,6 +541,7 @@ class RuntimeBot {
       ? this.connection._historyImport.importId
       : null;
     this.sessionDesiredState = 'stopped';
+    this.clearHistoryImportTimers();
     clearTimeout(this._autoRecoverTimer);
     this._autoRecoverTimer = null;
     this.stopWhatsappSessionBackup();
@@ -554,6 +574,50 @@ class RuntimeBot {
     }
   }
 
+  clearHistoryImportTimers() {
+    clearTimeout(this._historyImportIdleTimer);
+    clearTimeout(this._historyImportMaxTimer);
+    this._historyImportIdleTimer = null;
+    this._historyImportMaxTimer = null;
+  }
+
+  scheduleHistoryImportIdleTimer(importId, referenceAt = Date.now()) {
+    clearTimeout(this._historyImportIdleTimer);
+    const reference = new Date(referenceAt || Date.now()).getTime();
+    const elapsed = Number.isFinite(reference) ? Math.max(0, Date.now() - reference) : 0;
+    const delay = Math.max(0, historyImportIdleMs() - elapsed);
+    this._historyImportIdleTimer = setTimeout(() => {
+      this._historyImportIdleTimer = null;
+      this.autoFinishHistoryImport(importId, 'idle_timeout').catch((err) => {
+        this.logger.warn('history_import', `idle timeout completion failed: ${err.message}`);
+      });
+    }, delay);
+    if (typeof this._historyImportIdleTimer.unref === 'function') this._historyImportIdleTimer.unref();
+  }
+
+  scheduleHistoryImportTimers(importId, { started_at: startedAt, last_event_at: lastEventAt } = {}) {
+    this.clearHistoryImportTimers();
+    const started = new Date(startedAt || Date.now()).getTime();
+    const elapsed = Number.isFinite(started) ? Math.max(0, Date.now() - started) : 0;
+    const maxDelay = Math.max(0, historyImportMaxMs() - elapsed);
+    this._historyImportMaxTimer = setTimeout(() => {
+      this._historyImportMaxTimer = null;
+      this.autoFinishHistoryImport(importId, 'maximum_duration').catch((err) => {
+        this.logger.warn('history_import', `maximum duration completion failed: ${err.message}`);
+      });
+    }, maxDelay);
+    if (typeof this._historyImportMaxTimer.unref === 'function') this._historyImportMaxTimer.unref();
+    this.scheduleHistoryImportIdleTimer(importId, lastEventAt || startedAt || Date.now());
+  }
+
+  async autoFinishHistoryImport(importId, reason) {
+    if (this._historyImportFinishing) return this._historyImportFinishing;
+    if (!this.connection?._historyImport?.enabled || this.connection._historyImport.importId !== importId) return null;
+    this._historyImportFinishing = this.finishHistoryImport(importId, { reason })
+      .finally(() => { this._historyImportFinishing = null; });
+    return this._historyImportFinishing;
+  }
+
   async startHistoryImport(importId) {
     if (this.whatsappEngine !== 'baileys') {
       const error = new Error('WhatsApp history import requires the Baileys connection');
@@ -577,8 +641,10 @@ class RuntimeBot {
       });
       const started = await this.connection.start(0);
       if (!started) throw new Error('WhatsApp history import connection did not start');
+      this.scheduleHistoryImportTimers(importId);
       return this.historyImport.latestStatus();
     } catch (error) {
+      this.clearHistoryImportTimers();
       await this.connection.stop().catch(() => {});
       this.connection.setHistoryImportMode({ enabled: false });
       this.sessionDesiredState = 'stopped';
@@ -589,7 +655,7 @@ class RuntimeBot {
     }
   }
 
-  async finishHistoryImport(importId) {
+  async finishHistoryImport(importId, { reason = 'manual' } = {}) {
     if (!this.connection?._historyImport?.enabled || this.connection._historyImport.importId !== importId) {
       const error = new Error('This WhatsApp history import is not active on the current connection');
       error.statusCode = 409;
@@ -597,10 +663,11 @@ class RuntimeBot {
       throw error;
     }
     this.sessionDesiredState = 'stopped';
+    this.clearHistoryImportTimers();
     clearTimeout(this._autoRecoverTimer);
     this._autoRecoverTimer = null;
     await this.connection.stop();
-    const result = await this.historyImport.finishImport(importId);
+    const result = await this.historyImport.finishImport(importId, { reason });
     this.connection.setHistoryImportMode({ enabled: false });
     await this.persistSessionState({ desiredState: 'stopped' });
     await this.releaseConnectionLease();
@@ -612,6 +679,7 @@ class RuntimeBot {
       ? this.connection._historyImport.importId
       : null;
     this.sessionDesiredState = 'stopped';
+    this.clearHistoryImportTimers();
     this.stopWhatsappSessionBackup();
     await this.connection.stop();
     if (activeHistoryImportId) {

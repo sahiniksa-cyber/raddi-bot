@@ -6,7 +6,10 @@ const ExcelJS = require('exceljs');
 
 const db = require('../../db/client');
 const { checkMessageQuota } = require('../billing/message-quota');
-const { WhatsAppHistoryImportService } = require('../whatsapp/history-import.service');
+const {
+  WhatsAppHistoryImportService,
+  purgeTemporaryHistory,
+} = require('../whatsapp/history-import.service');
 const { buildProductCatalog, normalizeProductText } = require('../products/product-knowledge');
 const {
   classifyConversationDeterministic,
@@ -57,7 +60,9 @@ function safeJson(value, fallback = {}) {
 function normalizeAudienceRules(value = {}) {
   const input = safeJson(value, {});
   const requestedSource = input.source === 'smart' ? 'contacts' : input.source;
-  const source = ['keywords', 'contacts', 'conversations', 'all'].includes(requestedSource) ? requestedSource : 'contacts';
+  const source = ['keywords', 'contacts', 'conversations', 'all', 'saved_campaign'].includes(requestedSource)
+    ? requestedSource
+    : 'contacts';
   const hasExplicitStates = Array.isArray(input.states);
   const states = [...new Set((hasExplicitStates ? input.states : ['interested_unverified']).filter(state => SIGNAL_STATES.has(state)))];
   const productKeys = [...new Set((Array.isArray(input.productKeys) ? input.productKeys : [])
@@ -106,6 +111,13 @@ function normalizeAudienceRules(value = {}) {
   }
   const normalized = { source, states, productKeys, searchTerms, dateFrom, dateTo };
   if (source === 'contacts' && hasExplicitNumbers) normalized.numbers = numbers;
+  if (source === 'saved_campaign') {
+    const sourceCampaignId = String(input.sourceCampaignId || '').trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sourceCampaignId)) {
+      throw badRequest('الحملة المصدر غير صالحة', 'SAVED_CAMPAIGN_INVALID');
+    }
+    normalized.sourceCampaignId = sourceCampaignId;
+  }
   return normalized;
 }
 
@@ -230,6 +242,22 @@ function buildAudienceWhere(userId, rules = {}) {
 async function resolveAudience(database, userId, rules = {}) {
   const source = rules.source === 'smart' ? 'contacts' : (rules.source || 'contacts');
   const rows = [];
+  if (source === 'saved_campaign') {
+    const normalized = normalizeAudienceRules(rules);
+    const result = await database.query(
+      `SELECT r.conversation_id, r.sender, r.normalized_phone,
+              ''::text AS customer_name, NULL::text AS product_key,
+              NULL::text AS product_name, NULL::text AS customer_state,
+              NULL::numeric AS confidence, NULL::uuid AS evidence_message_id,
+              ''::text AS evidence_text, 'saved_campaign'::text AS source
+       FROM campaign_recipients r
+       JOIN campaigns c ON c.id = r.campaign_id
+       WHERE c.id = $2 AND c.user_id = $1 AND c.approved_at IS NOT NULL
+       ORDER BY r.created_at`,
+      [userId, normalized.sourceCampaignId],
+    );
+    rows.push(...result.rows);
+  }
   if (source === 'keywords') {
     const searchTerms = normalizeAudienceRules(rules).searchTerms;
     const params = [userId, searchTerms];
@@ -510,6 +538,48 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     );
     await audit(database, result.rows[0].id, userId, 'created');
     return campaignPublic(result.rows[0]);
+  }
+
+  async function reuseAudience(userId, campaignId) {
+    return database.transaction(async client => {
+      const sourceCampaign = await getOwnedCampaign(client, userId, campaignId, { lock: true });
+      if (!sourceCampaign.approved_at) {
+        throw badRequest('لا يمكن إعادة استخدام جمهور حملة لم تُعتمد', 'CAMPAIGN_AUDIENCE_NOT_APPROVED');
+      }
+      const countResult = await client.query(
+        `SELECT COUNT(*)::int AS count FROM campaign_recipients WHERE campaign_id = $1`,
+        [campaignId],
+      );
+      const audienceCount = Number(countResult.rows[0]?.count || 0);
+      if (!audienceCount) {
+        throw badRequest('لا توجد أرقام محفوظة داخل هذه الحملة', 'CAMPAIGN_AUDIENCE_EMPTY');
+      }
+      const audienceRules = normalizeAudienceRules({
+        source: 'saved_campaign',
+        sourceCampaignId: campaignId,
+      });
+      const result = await client.query(
+        `INSERT INTO campaigns (
+           user_id, name, goal, message_text, audience_rules,
+           interval_min_seconds, interval_max_seconds
+         ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7) RETURNING *`,
+        [
+          userId,
+          `${String(sourceCampaign.name || '').slice(0, 105)} - إعادة`.slice(0, 120),
+          sourceCampaign.goal || '',
+          sourceCampaign.message_text || '',
+          JSON.stringify(audienceRules),
+          sourceCampaign.interval_min_seconds,
+          sourceCampaign.interval_max_seconds,
+        ],
+      );
+      await audit(client, result.rows[0].id, userId, 'created_from_saved_audience', {
+        sourceCampaignId: campaignId,
+        audienceCount,
+        mediaCopied: false,
+      });
+      return campaignPublic(result.rows[0]);
+    });
   }
 
   async function update(userId, campaignId, input = {}) {
@@ -853,6 +923,34 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     };
   }
 
+  async function buildMaterializedSnapshot(client, campaign) {
+    const [recipients, media] = await Promise.all([
+      client.query(
+        `SELECT sender FROM campaign_recipients
+         WHERE campaign_id = $1 AND user_id = $2 ORDER BY sender`,
+        [campaign.id, campaign.user_id],
+      ),
+      client.query(
+        `SELECT id, kind, sha256, sort_order FROM campaign_media WHERE campaign_id = $1 ORDER BY sort_order`,
+        [campaign.id],
+      ),
+    ]);
+    return {
+      snapshot: {
+        campaignId: campaign.id,
+        contentVersion: campaign.content_version,
+        messageText: campaign.message_text,
+        audienceRules: safeJson(campaign.audience_rules, {}),
+        intervalMinSeconds: campaign.interval_min_seconds,
+        intervalMaxSeconds: campaign.interval_max_seconds,
+        scheduledAt: campaign.scheduled_at ? new Date(campaign.scheduled_at).toISOString() : null,
+        media: media.rows,
+        recipients: recipients.rows.map(row => row.sender).sort(),
+      },
+      recipients: recipients.rows,
+    };
+  }
+
   async function prepareApproval(userId, campaignId) {
     return database.transaction(async client => {
       const campaign = await getOwnedCampaign(client, userId, campaignId, { lock: true });
@@ -897,7 +995,7 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     return database.transaction(async client => {
       const campaign = await getOwnedCampaign(client, userId, campaignId, { lock: true });
       if (campaign.status !== 'ready_for_approval') throw badRequest('الحملة ليست بانتظار الموافقة');
-      const { snapshot, recipients } = await buildSnapshot(client, campaign);
+      const { snapshot, recipients } = await buildMaterializedSnapshot(client, campaign);
       const currentHash = snapshotHash(snapshot);
       if (!expectedHash || expectedHash !== campaign.approved_snapshot_hash || currentHash !== campaign.approved_snapshot_hash) {
         throw badRequest('تغير محتوى الحملة أو جمهورها؛ راجعها ثم اطلب الموافقة من جديد', 'APPROVAL_SNAPSHOT_CHANGED');
@@ -911,6 +1009,28 @@ function createCampaignService({ database = db, getUserBot } = {}) {
         [campaignId, userId],
       );
       await audit(client, campaignId, userId, 'approved', { audienceCount: recipients.length, snapshotHash: currentHash });
+      const importedAudience = await client.query(
+        `SELECT EXISTS (
+           SELECT 1 FROM campaign_recipients
+           WHERE campaign_id = $1 AND source = 'keyword_history'
+         ) AS present`,
+        [campaignId],
+      );
+      if (importedAudience.rows[0]?.present) {
+        // The approved recipient snapshot becomes the durable source of truth.
+        // Raw imported messages and evidence are no longer needed after the
+        // merchant explicitly approves this exact audience.
+        await client.query(
+          `UPDATE campaign_recipients SET
+             customer_name = NULL, product_key = NULL, product_name = NULL,
+             customer_state = NULL, confidence = NULL, evidence_message_id = NULL,
+             evidence_text = '', source = 'saved_history_number', updated_at = NOW()
+           WHERE campaign_id = $1 AND source = 'keyword_history'`,
+          [campaignId],
+        );
+        const purged = await purgeTemporaryHistory(client, userId);
+        await audit(client, campaignId, userId, 'temporary_history_purged', purged);
+      }
       return campaignPublic(result.rows[0]);
     });
   }
@@ -1121,6 +1241,7 @@ function createCampaignService({ database = db, getUserBot } = {}) {
     prepareApproval,
     preview,
     previewAudience,
+    reuseAudience,
     segmentCounts,
     setStatus,
     start,

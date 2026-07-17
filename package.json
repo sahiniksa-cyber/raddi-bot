@@ -9,6 +9,7 @@
     "start:web": "node src/server.js",
     "start:all": "node src/runtime/start-all.js",
     "db:migrate": "node src/db/migrations/init.js",
+    "db:compact-message-media": "node scripts/compact-message-media.js",
     "migrate:json": "node scripts/migrate-json-to-postgres.js",
     "worker:ai": "node src/workers/ai-worker.js",
     "test": "node --test"
