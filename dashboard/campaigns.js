@@ -295,7 +295,7 @@ function campaignRenderHistoryImport(status = {}) {
   if (status.last_error) {
     note.textContent = `تعذر الاستيراد: ${status.last_error}`;
   } else if (active && status.explicit_complete) {
-    note.textContent = 'وصلت إشارة اكتمال السجل من واتساب. سيُنهي النظام جهاز الاستيراد المؤقت ويعيد جلسة البوت الأصلية إذا كانت تعمل قبل البدء.';
+    note.textContent = 'وصلت إشارة اكتمال السجل من واتساب. سيُنهي النظام جهاز الاستيراد المؤقت، بينما يبقى البوت الأساسي متصلاً.';
   } else if (active) {
     if (['waiting_qr', 'qr_ready'].includes(status.connection_status)) {
       note.textContent = 'الاستيراد ينتظر ربط جهاز مؤقت جديد. لن يبدأ عداد الخمول قبل مسح رمز QR ونجاح الاتصال.';
@@ -363,7 +363,7 @@ async function campaignLoadHistoryImport() {
 
 async function campaignStartHistoryImport() {
   try {
-    const confirmed = window.confirm('سيظهر رمز QR مؤقت داخل خانة الحملات. امسحه من الأجهزة المرتبطة حتى يرسل واتساب سجل المحادثات فعلياً. خلال الاستيراد لن يعمل الرد الآلي ولن تُرسل أي حملة أو رسالة. هل تريد البدء؟');
+    const confirmed = window.confirm('سيظهر رمز QR مؤقت داخل خانة الحملات. امسحه من الأجهزة المرتبطة حتى يرسل واتساب سجل المحادثات فعلياً. البوت الأساسي سيبقى متصلاً، واتصال الاستيراد مؤقت وللقراءة فقط ولن يطلق أي حملة. هل تريد البدء؟');
     if (!confirmed) return;
     const data = await campaignApi('/api/campaigns/history-import/start', { method: 'POST' });
     campaignRenderHistoryImport(data.historyImport || {});
@@ -375,7 +375,7 @@ async function campaignFinishHistoryImport() {
   try {
     const data = await campaignApi('/api/campaigns/history-import/finish', { method: 'POST' });
     campaignRenderHistoryImport(data.historyImport || {});
-    campaignFlash('تم إنهاء جهاز الاستيراد المؤقت وحفظ البيانات المستلمة. ستعود جلسة البوت الأصلية تلقائياً إذا كانت تعمل قبل البدء.');
+    campaignFlash('تم إنهاء جهاز الاستيراد المؤقت وحفظ البيانات المستلمة. البوت الأساسي لم يتوقف أثناء الاستيراد.');
   } catch (error) { campaignFlash(error.message, true); }
 }
 

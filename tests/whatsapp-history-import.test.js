@@ -156,11 +156,6 @@ test('history import idle countdown does not start before the temporary QR is sc
     database: { query: async () => ({ rows: [] }) },
     logger,
   });
-  bot.connection.setHistoryImportMode({
-    enabled: true,
-    importId: 'import-waiting-qr',
-    service: bot.historyImport,
-  });
   bot.scheduleHistoryImportTimers('import-waiting-qr', {
     started_at: new Date().toISOString(),
     connected_at: null,
@@ -192,10 +187,20 @@ test('an active import is restored as read-only before automatic WhatsApp recove
   const logger = { info() {}, warn() {}, error() {}, log() {}, all() { return []; } };
   const bot = new RuntimeBot('user-history', { dataDir: tmp, database, logger });
   bot.persistSessionState = async () => {};
+  bot.createHistoryImportConnection = function createHistoryImportConnection(importId) {
+    this._historyImportConnection = {
+      _historyImport: { enabled: true, importId },
+      state: () => ({ status: 'qr_ready', readOnly: true, historyImportMode: true }),
+      start: async () => true,
+    };
+    return this._historyImportConnection;
+  };
   await bot.loadSessionState();
-  assert.equal(bot.connection.state().readOnly, true);
-  assert.equal(bot.connection._historyImport.importId, 'import-active');
+  assert.equal(bot.connection.state().readOnly, false);
+  assert.equal(bot._historyImportConnection.state().readOnly, true);
+  assert.equal(bot._historyImportConnection._historyImport.importId, 'import-active');
   clearTimeout(bot._autoRecoverTimer);
+  bot.clearHistoryImportTimers();
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -207,16 +212,14 @@ test('a restored import beyond the maximum duration is finished automatically', 
     database: { query: async () => ({ rows: [] }) },
     logger,
   });
-  bot.connection.setHistoryImportMode({
-    enabled: true,
-    importId: 'import-expired',
-    service: bot.historyImport,
-  });
+  bot._historyImportConnection = {
+    _historyImport: { enabled: true, importId: 'import-expired' },
+  };
   const finished = [];
   bot.finishHistoryImport = async (importId, options) => {
     finished.push({ importId, options });
     bot.clearHistoryImportTimers();
-    bot.connection.setHistoryImportMode({ enabled: false });
+    bot._historyImportConnection = null;
     return { status: 'partial' };
   };
   bot.scheduleHistoryImportTimers('import-expired', {
@@ -292,7 +295,7 @@ test('starting an import locks outgoing sends before the import row is created',
   const result = await service.startHistoryImport('user-1');
   assert.equal(result.read_only, true);
   assert.ok(order.indexOf('locked-send') < order.indexOf('created-import'));
-  assert.deepEqual(order.slice(-2), ['created-import', 'started:import-1']);
+  assert.deepEqual(order.slice(-3), ['created-import', 'started:import-1', 'unlocked-send']);
   const insert = order.indexOf('created-import');
   assert.ok(insert > -1);
 });
@@ -320,10 +323,15 @@ test('history import status exposes the real QR and database counters together',
   const service = createCampaignService({
     database,
     getUserBot: async () => ({
-      appState: {
+      historyImportAppState: {
         status: 'qr_ready',
         qrString: 'temporary-qr',
         qrVersion: 7,
+      },
+      appState: {
+        status: 'connected',
+        qrString: null,
+        qrVersion: 2,
       },
     }),
   });
@@ -332,6 +340,79 @@ test('history import status exposes the real QR and database counters together',
   assert.equal(status.qr_version, 7);
   assert.equal(status.conversations_total, 0);
   assert.equal(status.live_session_will_resume, true);
+});
+
+test('history import uses a separate socket and never stops or replaces the live bot connection', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-history-separate-'));
+  const logger = { info() {}, warn() {}, error() {}, log() {}, all() { return []; } };
+  const bot = new RuntimeBot('user-history-separate', {
+    dataDir: tmp,
+    database: { query: async () => ({ rows: [] }) },
+    logger,
+  });
+  const liveCalls = [];
+  bot.connection.status = 'connected';
+  bot.connection.ready = true;
+  bot.connection.stop = async () => { liveCalls.push('stop'); };
+  bot.acquireConnectionLease = async () => { liveCalls.push('lease'); return true; };
+  bot.persistSessionState = async () => { liveCalls.push('persist'); };
+  bot.historyImport.markRunning = async () => ({
+    id: 'import-separate',
+    started_at: new Date().toISOString(),
+    connected_at: null,
+    last_event_at: null,
+  });
+  bot.historyImport.latestStatus = async () => ({ id: 'import-separate', status: 'running' });
+  const temporaryCalls = [];
+  bot.createHistoryImportConnection = function createHistoryImportConnection(importId) {
+    this._historyImportConnection = {
+      _historyImport: { enabled: true, importId },
+      start: async () => { temporaryCalls.push('start'); return true; },
+    };
+    return this._historyImportConnection;
+  };
+
+  const result = await bot.startHistoryImport('import-separate');
+  assert.equal(result.status, 'running');
+  assert.deepEqual(temporaryCalls, ['start']);
+  assert.deepEqual(liveCalls, []);
+  assert.equal(bot.connection.status, 'connected');
+  assert.equal(bot.connection.ready, true);
+  bot.clearHistoryImportTimers();
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('finishing the temporary history socket leaves the live bot connected', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-history-finish-separate-'));
+  const logger = { info() {}, warn() {}, error() {}, log() {}, all() { return []; } };
+  const bot = new RuntimeBot('user-history-finish-separate', {
+    dataDir: tmp,
+    database: { query: async () => ({ rows: [] }) },
+    logger,
+  });
+  const liveCalls = [];
+  bot.connection.status = 'connected';
+  bot.connection.ready = true;
+  bot.connection.stop = async () => { liveCalls.push('stop'); };
+  const temporaryCalls = [];
+  bot._historyImportConnection = {
+    _historyImport: { enabled: true, importId: 'import-finish-separate' },
+    closeHistoryImportDevice: async () => { temporaryCalls.push('close'); },
+    stop: async () => { temporaryCalls.push('stop'); },
+  };
+  bot.historyImport.finishImport = async () => ({
+    id: 'import-finish-separate',
+    status: 'completed',
+  });
+
+  const result = await bot.finishHistoryImport('import-finish-separate');
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(temporaryCalls, ['close']);
+  assert.deepEqual(liveCalls, []);
+  assert.equal(bot.connection.status, 'connected');
+  assert.equal(bot.connection.ready, true);
+  assert.equal(bot._historyImportConnection, null);
+  fs.rmSync(tmp, { recursive: true, force: true });
 });
 
 test('a zero-row import is marked failed instead of pretending partial success', async () => {
@@ -390,14 +471,16 @@ test('history tables stay isolated from the live messages table and UI states no
   const migration = fs.readFileSync(path.join(__dirname, '../src/db/migrations/init.js'), 'utf8');
   const dashboard = fs.readFileSync(path.join(__dirname, '../dashboard/index.html'), 'utf8');
   const script = fs.readFileSync(path.join(__dirname, '../dashboard/campaigns.js'), 'utf8');
+  const routes = fs.readFileSync(path.join(__dirname, '../src/routes/campaign.routes.js'), 'utf8');
   assert.match(migration, /CREATE TABLE IF NOT EXISTS whatsapp_history_messages/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_history_imports_one_active/);
   assert.match(migration, /purged_messages_count/);
   assert.match(migration, /import_auth_state/);
   assert.match(migration, /resume_after_import/);
   assert.doesNotMatch(migration, /INSERT INTO messages/);
-  assert.match(dashboard, /لا يشغّل الرد الآلي ولا يرسل أي رسالة أو حملة أثناء الاستيراد/);
+  assert.match(dashboard, /يبقى البوت الأساسي متصلاً ولا يطلق الاستيراد أي رسالة أو حملة/);
   assert.match(dashboard, /campaignHistoryQrImage/);
+  assert.match(routes, /bot\?\.historyImportAppState/);
   assert.match(script, /المحفوظ فعلياً الآن/);
   assert.match(script, /لن تُرسل أي رسالة/);
 });
