@@ -456,7 +456,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
       return status;
     }
     const bot = await getUserBot(userId);
-    const state = bot?.appState || {};
+    const state = bot?.historyImportAppState || bot?.appState || {};
     return {
       ...status,
       connection_status: state.status || null,
@@ -476,7 +476,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
       [userId],
     );
     if (Number(activeCampaign.rows[0]?.count || 0) > 0) {
-      throw badRequest('أوقف الحملة الجارية أو ألغِ المجدولة قبل استيراد المحادثات. الاستيراد وضع قراءة فقط ويمنع كل إرسال.', 'CAMPAIGN_ACTIVE_DURING_HISTORY_IMPORT');
+      throw badRequest('أوقف الحملة الجارية أو ألغِ المجدولة قبل استيراد المحادثات. اتصال الاستيراد مؤقت وللقراءة فقط، ولا يوقف البوت الأساسي.', 'CAMPAIGN_ACTIVE_DURING_HISTORY_IMPORT');
     }
     const bot = await getUserBot(userId);
     if (typeof bot?.startHistoryImport !== 'function' || typeof bot?.lockHistoryImportSending !== 'function') {
@@ -493,8 +493,13 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
       return await bot.startHistoryImport(historyImport.id);
     } catch (error) {
       if (historyImport?.id) await service.failImport(historyImport.id, error).catch(() => {});
-      bot.unlockHistoryImportSending?.();
       throw error;
+    } finally {
+      // The dedicated import socket is permanently read-only. The live socket
+      // only needs this short lock while the active import row is being created,
+      // which closes the race with a simultaneous campaign launch without
+      // pausing normal bot replies for the duration of the import.
+      bot.unlockHistoryImportSending?.();
     }
   }
 

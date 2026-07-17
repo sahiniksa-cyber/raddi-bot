@@ -117,7 +117,7 @@ function createCampaignRoutes(deps = {}) {
   router.get('/api/campaigns/history-import/qr-image', asyncHandler(async (req, res) => {
     if (typeof deps.getUserBot !== 'function') return res.status(404).end();
     const bot = await deps.getUserBot(userId(req));
-    const state = bot?.appState || {};
+    const state = bot?.historyImportAppState || {};
     if (!state.historyImportMode || state.status !== 'qr_ready' || !state.qrString) {
       return res.status(404).end();
     }
