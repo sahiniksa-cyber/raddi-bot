@@ -8,11 +8,13 @@ const test = require('node:test');
 
 const { RuntimeBot } = require('../src/services/bot/runtime-bot');
 const { createCampaignService, resolveAudience } = require('../src/services/campaigns/campaign-service');
+const { BaileysPostgresAuthState } = require('../src/services/whatsapp/baileys-postgres-auth');
 const {
   createBaileysClientWrapper,
   BaileysConnectionManager,
 } = require('../src/services/whatsapp/baileys-connection-manager');
 const {
+  WhatsAppHistoryImportService,
   buildHistoryRows,
   isMessageHistoryType,
 } = require('../src/services/whatsapp/history-import.service');
@@ -93,6 +95,86 @@ test('connection manager exposes read-only state while history import is active'
   assert.equal(manager.state().historyImportMode, false);
   assert.equal(manager.state().readOnly, true);
   manager.setHistoryImportSendLock(false);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('Baileys isLatest does not falsely finish the import after the first history chunk', async () => {
+  const updates = [];
+  const client = {
+    query: async (sql, params) => {
+      if (sql.includes("status IN ('starting','running') FOR UPDATE")) {
+        return { rows: [{ id: 'import-1' }] };
+      }
+      if (sql.includes('UPDATE whatsapp_history_imports SET')) updates.push(params);
+      return { rows: [] };
+    },
+  };
+  const service = new WhatsAppHistoryImportService({
+    userId: 'user-1',
+    database: { transaction: async fn => fn(client), query: client.query },
+  });
+  const result = await service.ingestHistorySet('import-1', {
+    syncType: 3,
+    progress: 5,
+    isLatest: true,
+    chats: [],
+    contacts: [],
+    messages: [],
+  });
+  assert.equal(result.explicitlyComplete, false);
+  assert.equal(updates[0][3], false);
+});
+
+test('history import pairing uses isolated temporary auth instead of the live bot auth', async () => {
+  const calls = [];
+  const database = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes('SELECT import_auth_state AS auth_state')) {
+        return { rows: [{ auth_state: {} }] };
+      }
+      return { rows: [] };
+    },
+  };
+  const store = new BaileysPostgresAuthState({
+    db: database,
+    userId: 'user-history',
+    historyImportId: 'import-fresh-pairing',
+  });
+  await store.load();
+  await store.persist();
+  assert.ok(calls.some(call => call.sql.includes('FROM whatsapp_history_imports')));
+  assert.ok(calls.some(call => call.sql.includes('SET import_auth_state = $3::jsonb')));
+  assert.equal(calls.some(call => call.sql.includes('UPDATE whatsapp_sessions')), false);
+});
+
+test('history import idle countdown does not start before the temporary QR is scanned', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-history-wait-qr-'));
+  const logger = { info() {}, warn() {}, error() {}, log() {}, all() { return []; } };
+  const bot = new RuntimeBot('user-history-wait-qr', {
+    dataDir: tmp,
+    database: { query: async () => ({ rows: [] }) },
+    logger,
+  });
+  bot.connection.setHistoryImportMode({
+    enabled: true,
+    importId: 'import-waiting-qr',
+    service: bot.historyImport,
+  });
+  bot.scheduleHistoryImportTimers('import-waiting-qr', {
+    started_at: new Date().toISOString(),
+    connected_at: null,
+    last_event_at: null,
+  });
+  assert.equal(bot._historyImportIdleTimer, null);
+  assert.ok(bot._historyImportMaxTimer);
+  bot.scheduleHistoryImportTimers('import-waiting-qr', {
+    started_at: new Date().toISOString(),
+    connected_at: new Date().toISOString(),
+    last_event_at: null,
+  });
+  assert.ok(bot._historyImportIdleTimer);
+  bot.clearHistoryImportTimers();
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -197,6 +279,8 @@ test('starting an import locks outgoing sends before the import row is created',
     },
   };
   const bot = {
+    sessionDesiredState: 'running',
+    connection: { ready: true, status: 'connected' },
     lockHistoryImportSending() { order.push('locked-send'); },
     unlockHistoryImportSending() { order.push('unlocked-send'); },
     async startHistoryImport(id) {
@@ -209,6 +293,65 @@ test('starting an import locks outgoing sends before the import row is created',
   assert.equal(result.read_only, true);
   assert.ok(order.indexOf('locked-send') < order.indexOf('created-import'));
   assert.deepEqual(order.slice(-2), ['created-import', 'started:import-1']);
+  const insert = order.indexOf('created-import');
+  assert.ok(insert > -1);
+});
+
+test('history import status exposes the real QR and database counters together', async () => {
+  const database = {
+    query: async sql => {
+      if (sql.includes('FROM whatsapp_history_imports i')) {
+        return { rows: [{
+          id: 'import-qr',
+          status: 'running',
+          started_at: new Date().toISOString(),
+          connected_at: null,
+          last_event_at: null,
+          conversations_total: 0,
+          numbers_total: 0,
+          messages_total: 0,
+          inbound_messages_total: 0,
+          resume_after_import: true,
+        }] };
+      }
+      return { rows: [] };
+    },
+  };
+  const service = createCampaignService({
+    database,
+    getUserBot: async () => ({
+      appState: {
+        status: 'qr_ready',
+        qrString: 'temporary-qr',
+        qrVersion: 7,
+      },
+    }),
+  });
+  const status = await service.historyImportStatus('user-1');
+  assert.equal(status.qr_ready, true);
+  assert.equal(status.qr_version, 7);
+  assert.equal(status.conversations_total, 0);
+  assert.equal(status.live_session_will_resume, true);
+});
+
+test('a zero-row import is marked failed instead of pretending partial success', async () => {
+  const calls = [];
+  const service = new WhatsAppHistoryImportService({
+    userId: 'user-1',
+    database: {
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql.includes('WITH imported AS')) {
+          return { rows: [{ id: 'import-empty', status: 'failed', last_error: 'لم يرسل واتساب أي محادثات' }] };
+        }
+        return { rows: [] };
+      },
+    },
+  });
+  const result = await service.finishImport('import-empty', { reason: 'idle_timeout' });
+  assert.equal(result.status, 'failed');
+  assert.match(calls[0].sql, /imported\.conversations = 0 AND imported\.messages = 0 THEN 'failed'/);
+  assert.match(calls[0].sql, /import_auth_state = '\{\}'::jsonb/);
 });
 
 test('campaign worker rechecks imported keyword evidence before a later send', async () => {
@@ -250,7 +393,11 @@ test('history tables stay isolated from the live messages table and UI states no
   assert.match(migration, /CREATE TABLE IF NOT EXISTS whatsapp_history_messages/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_history_imports_one_active/);
   assert.match(migration, /purged_messages_count/);
+  assert.match(migration, /import_auth_state/);
+  assert.match(migration, /resume_after_import/);
   assert.doesNotMatch(migration, /INSERT INTO messages/);
   assert.match(dashboard, /لا يشغّل الرد الآلي ولا يرسل أي رسالة أو حملة أثناء الاستيراد/);
-  assert.match(script, /HISTORY_IMPORT_READ_ONLY|لن تُرسل أي رسالة/);
+  assert.match(dashboard, /campaignHistoryQrImage/);
+  assert.match(script, /المحفوظ فعلياً الآن/);
+  assert.match(script, /لن تُرسل أي رسالة/);
 });

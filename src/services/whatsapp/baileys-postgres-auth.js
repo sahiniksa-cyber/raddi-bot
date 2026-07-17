@@ -19,11 +19,12 @@ function deserializeFromDb(value) {
 }
 
 class BaileysPostgresAuthState {
-  constructor({ db, userId }) {
+  constructor({ db, userId, historyImportId = null }) {
     if (!db?.query) throw new Error('db dependency is required');
     if (!userId) throw new Error('userId is required');
     this.db = db;
     this.userId = userId;
+    this.historyImportId = historyImportId || null;
     this.cache = { creds: null, keys: {} };
     this.loaded = false;
     // Set once the live store is being torn down (logout/clear). A disposed
@@ -57,12 +58,19 @@ class BaileysPostgresAuthState {
   }
 
   async _doLoad() {
-    const result = await this.db.query(
-      `SELECT auth_state FROM whatsapp_sessions WHERE user_id = $1`,
-      [this.userId],
-    );
+    const result = this.historyImportId
+      ? await this.db.query(
+        `SELECT import_auth_state AS auth_state
+         FROM whatsapp_history_imports
+         WHERE id = $1 AND user_id = $2`,
+        [this.historyImportId, this.userId],
+      )
+      : await this.db.query(
+        `SELECT auth_state FROM whatsapp_sessions WHERE user_id = $1`,
+        [this.userId],
+      );
     const authState = result.rows[0]?.auth_state || {};
-    const baileys = authState.baileys || {};
+    const baileys = this.historyImportId ? authState : (authState.baileys || {});
     this.cache = {
       creds: baileys.creds ? deserializeFromDb(baileys.creds) : initAuthCreds(),
       keys: baileys.keys ? deserializeFromDb(baileys.keys) : {},
@@ -76,16 +84,25 @@ class BaileysPostgresAuthState {
       keys: this.cache.keys,
       updatedAt: new Date().toISOString(),
     });
-    this.writeQueue = this.writeQueue.then(() => this.db.query(
-      `UPDATE whatsapp_sessions
-       SET auth_state = jsonb_set(
-         COALESCE(auth_state, '{}'::jsonb),
-         '{baileys}',
-         $2::jsonb,
-         true
-       )
-       WHERE user_id = $1`,
-      [this.userId, JSON.stringify(payload)],
+    this.writeQueue = this.writeQueue.then(() => (
+      this.historyImportId
+        ? this.db.query(
+          `UPDATE whatsapp_history_imports
+           SET import_auth_state = $3::jsonb, updated_at = NOW()
+           WHERE id = $1 AND user_id = $2`,
+          [this.historyImportId, this.userId, JSON.stringify(payload)],
+        )
+        : this.db.query(
+          `UPDATE whatsapp_sessions
+           SET auth_state = jsonb_set(
+             COALESCE(auth_state, '{}'::jsonb),
+             '{baileys}',
+             $2::jsonb,
+             true
+           )
+           WHERE user_id = $1`,
+          [this.userId, JSON.stringify(payload)],
+        )
     ));
     return this.writeQueue;
   }
@@ -216,8 +233,8 @@ class BaileysPostgresAuthState {
   }
 }
 
-async function usePostgresBaileysAuthState({ db, userId }) {
-  const store = new BaileysPostgresAuthState({ db, userId });
+async function usePostgresBaileysAuthState({ db, userId, historyImportId = null }) {
+  const store = new BaileysPostgresAuthState({ db, userId, historyImportId });
   const s = await store.state();
   // Expose the store so the connection manager can dispose()/clear() the LIVE
   // instance on logout. Backward compatible — callers still destructure

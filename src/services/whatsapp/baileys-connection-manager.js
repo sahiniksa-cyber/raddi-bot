@@ -237,6 +237,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._socketGeneration = 0;
     this._authFlush = null;
     this._authStore = null;
+    this._activeAuthImportId = null;
     this.startupTime = Date.now();
     this._hasEverConnected = false;
     this._stableTimer = null;
@@ -321,9 +322,14 @@ class BaileysConnectionManager extends EventEmitter {
     this.log('info', 'boot', `starting Baileys WhatsApp socket${retryCount > 0 ? ` retry=${retryCount + 1}` : ''}`);
 
     try {
-      const { state, saveCreds, flush, store } = await usePostgresBaileysAuthState({ db: this.db, userId: this.userId });
+      const { state, saveCreds, flush, store } = await usePostgresBaileysAuthState({
+        db: this.db,
+        userId: this.userId,
+        historyImportId: historyImportMode ? historyImportId : null,
+      });
       this._authFlush = flush || null;
       this._authStore = store || null;
+      this._activeAuthImportId = historyImportMode ? historyImportId : null;
       if (!this._version) {
         const { version } = await fetchLatestBaileysVersion();
         this._version = version;
@@ -475,6 +481,39 @@ class BaileysConnectionManager extends EventEmitter {
     const flush = this._authFlush;
     this._authFlush = null;
     if (flush) { try { await flush(); } catch (_) {} }
+  }
+
+  async closeHistoryImportDevice(importId) {
+    const activeImportId = this._activeAuthImportId || this._historyImport?.importId || importId;
+    const sock = this.sock;
+    const liveImportStore = this._authStore?.historyImportId === importId ? this._authStore : null;
+    // Freeze persistence before logout. The socket may emit late creds/key
+    // updates while unlinking; disposing first prevents those writes from
+    // resurrecting the temporary auth after the final wipe.
+    liveImportStore?.dispose();
+    // This is a dedicated temporary linked device. Unlink it from the phone so
+    // imports do not leave ghost devices behind, then wipe its temporary keys.
+    if (sock && this.ready && activeImportId === importId && typeof sock.logout === 'function') {
+      this._running = false;
+      try {
+        await Promise.race([
+          sock.logout(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('history import logout timeout')), 8000)),
+        ]);
+      } catch (err) {
+        this.log('warn', 'history_import', `temporary linked-device logout failed: ${err.message}`);
+      }
+    }
+    await this.stop();
+    const store = liveImportStore
+      || new BaileysPostgresAuthState({ db: this.db, userId: this.userId, historyImportId: importId });
+    try {
+      store.dispose();
+      await store.clear();
+    } finally {
+      if (this._authStore === store) this._authStore = null;
+      this._activeAuthImportId = null;
+    }
   }
 
   startQrWatchdog(retryCount) {
@@ -833,7 +872,11 @@ class BaileysConnectionManager extends EventEmitter {
         await this._authStore.clear();
         this._authStore = null;
       } else {
-        const store = new BaileysPostgresAuthState({ db: this.db, userId: this.userId });
+        const store = new BaileysPostgresAuthState({
+          db: this.db,
+          userId: this.userId,
+          historyImportId: this._activeAuthImportId,
+        });
         await store.clear();
       }
       this.log('warn', 'auth', `cleared Baileys auth session: ${reason}`);
