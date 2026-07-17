@@ -412,15 +412,29 @@ class BaileysConnectionManager extends EventEmitter {
       });
       sock.ev.on('messaging-history.set', (event) => {
         if (!historyImportMode || socketGeneration !== this._socketGeneration) return;
-        historyImportService.enqueueHistorySet(historyImportId, event).catch((err) => {
-          this.log('error', 'history_import', `failed to store WhatsApp history: ${err.message}`, err);
-        });
+        historyImportService.enqueueHistorySet(historyImportId, event)
+          .then((result) => {
+            this.emit('history_import_activity', { importId: historyImportId });
+            if (result?.explicitlyComplete) {
+              this.emit('history_import_complete', { importId: historyImportId, source: 'history_set' });
+            }
+          })
+          .catch((err) => {
+            this.log('error', 'history_import', `failed to store WhatsApp history: ${err.message}`, err);
+          });
       });
       sock.ev.on('messaging-history.status', (event) => {
         if (!historyImportMode || socketGeneration !== this._socketGeneration) return;
-        historyImportService.recordHistoryStatus(historyImportId, event).catch((err) => {
-          this.log('error', 'history_import', `failed to store WhatsApp history status: ${err.message}`, err);
-        });
+        historyImportService.recordHistoryStatus(historyImportId, event)
+          .then((result) => {
+            this.emit('history_import_activity', { importId: historyImportId });
+            if (result?.explicitlyComplete) {
+              this.emit('history_import_complete', { importId: historyImportId, source: 'history_status' });
+            }
+          })
+          .catch((err) => {
+            this.log('error', 'history_import', `failed to store WhatsApp history status: ${err.message}`, err);
+          });
       });
       this.startQrWatchdog(retryCount);
       return true;

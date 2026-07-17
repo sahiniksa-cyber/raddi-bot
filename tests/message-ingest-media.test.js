@@ -3,7 +3,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { MessageIngestService } = require('../src/services/whatsapp/message-ingest.service');
+const {
+  MessageIngestService,
+  compactMediaForStorage,
+} = require('../src/services/whatsapp/message-ingest.service');
 
 function createFakeDb() {
   const calls = [];
@@ -53,4 +56,21 @@ test('MessageIngestService accepts media-only inbound messages', async () => {
   assert.equal(enqueued[0].payload.hasMedia, true);
   assert.equal(enqueued[0].payload.media.kind, 'image');
   assert.match(database.calls[1].params[3], /\[صورة من العميل/);
+});
+
+test('terminal message storage keeps media metadata but removes base64 bytes', () => {
+  const compact = compactMediaForStorage({
+    kind: 'image',
+    mimeType: 'image/jpeg',
+    data: 'very-large-base64',
+    base64: 'duplicate-large-base64',
+    caption: 'فاتورة',
+    sizeBytes: 1024,
+  });
+  assert.deepEqual(compact, {
+    kind: 'image',
+    mimeType: 'image/jpeg',
+    caption: 'فاتورة',
+    sizeBytes: 1024,
+  });
 });

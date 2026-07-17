@@ -1814,6 +1814,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
           <label class="campaign-source-option" onclick="campaignSelectSource('keywords')"><input type="radio" name="campaignSource" value="keywords"><div><b>اختيار بكلمات البحث</b><div class="hint">يبحث في رسائل العملاء ويعرض العدد الحقيقي قبل الإرسال.</div><span class="campaign-source-open">اضغط لفتح كلمات البحث</span></div></label>
           <label class="campaign-source-option" onclick="campaignSelectSource('conversations')"><input type="radio" name="campaignSource" value="conversations"><div><b>من تواصل خلال فترة</b><div class="hint">حدد بداية ونهاية الفترة حسب تاريخ آخر رسالة للعميل.</div><span class="campaign-source-open">اضغط لتحديد الفترة</span></div></label>
           <label class="campaign-source-option" onclick="campaignSelectSource('all')"><input type="radio" name="campaignSource" value="all"><div><b>كل العملاء</b><div class="hint">يشمل جميع العملاء المسجلين في المحادثات وقاعدة العملاء، بدون تكرار.</div><span class="campaign-source-open">اضغط لاختيار الجميع</span></div></label>
+          <label id="campaignSavedAudienceOption" class="campaign-source-option campaign-source-saved" hidden><input type="radio" name="campaignSource" value="saved_campaign"><div><b>جمهور حملة محفوظة</b><div class="hint">الأرقام محفوظة داخل الحملة السابقة ولا يحتاج هذا الخيار إلى بحث الرسائل مرة أخرى.</div></div></label>
         </div>
         <div class="campaign-source-panels">
           <div id="campaignContactOptions" class="campaign-source-panel" data-campaign-source-panel="contacts">
@@ -1848,6 +1849,9 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
           <div class="campaign-source-panel" data-campaign-source-panel="all" hidden>
             <b>تم اختيار كل العملاء</b>
             <div class="hint" style="margin-top:6px">سيظهر العدد الفعلي قبل الاعتماد، ولن يتكرر العميل إذا كان موجوداً في أكثر من مصدر.</div>
+          </div>
+          <div class="campaign-source-panel" data-campaign-source-panel="saved_campaign" hidden>
+            <div class="campaign-target-box"><h4>الجمهور محفوظ كقائمة مستلمين</h4><p>يمكن مراجعة العدد واعتماد حملة جديدة دون الاحتفاظ برسائل واتساب المستوردة أو إعادة البحث فيها.</p></div>
           </div>
         </div>
         <div class="campaign-actions"><button class="campaign-btn" onclick="campaignSaveAndNext('content')">حفظ والمتابعة</button></div>
@@ -1908,7 +1912,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   </div>
   <section class="campaign-saved-card">
     <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
-    <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
+    <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button id="campaignReuseAudienceBtn" class="campaign-btn secondary" onclick="campaignReuseAudience()" disabled>إعادة بنفس الجمهور</button><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
   </section>
 </div>
 </div>

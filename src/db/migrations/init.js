@@ -897,6 +897,13 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_imports_user_created
     ON whatsapp_history_imports (user_id, created_at DESC)`,
 
+  `ALTER TABLE whatsapp_history_imports
+     ADD COLUMN IF NOT EXISTS purged_at TIMESTAMPTZ`,
+  `ALTER TABLE whatsapp_history_imports
+     ADD COLUMN IF NOT EXISTS purged_messages_count INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE whatsapp_history_imports
+     ADD COLUMN IF NOT EXISTS purged_conversations_count INTEGER NOT NULL DEFAULT 0`,
+
   `CREATE TABLE IF NOT EXISTS whatsapp_history_conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

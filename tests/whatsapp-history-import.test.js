@@ -117,6 +117,39 @@ test('an active import is restored as read-only before automatic WhatsApp recove
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('a restored import beyond the maximum duration is finished automatically', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-history-timeout-'));
+  const logger = { info() {}, warn() {}, error() {}, log() {}, all() { return []; } };
+  const bot = new RuntimeBot('user-history-timeout', {
+    dataDir: tmp,
+    database: { query: async () => ({ rows: [] }) },
+    logger,
+  });
+  bot.connection.setHistoryImportMode({
+    enabled: true,
+    importId: 'import-expired',
+    service: bot.historyImport,
+  });
+  const finished = [];
+  bot.finishHistoryImport = async (importId, options) => {
+    finished.push({ importId, options });
+    bot.clearHistoryImportTimers();
+    bot.connection.setHistoryImportMode({ enabled: false });
+    return { status: 'partial' };
+  };
+  bot.scheduleHistoryImportTimers('import-expired', {
+    started_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    last_event_at: new Date().toISOString(),
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(finished, [{
+    importId: 'import-expired',
+    options: { reason: 'maximum_duration' },
+  }]);
+  bot.clearHistoryImportTimers();
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test('keyword audience includes numbers found only in imported WhatsApp history', async () => {
   const calls = [];
   const database = {
@@ -197,12 +230,26 @@ test('campaign worker rechecks imported keyword evidence before a later send', a
   assert.deepEqual(calls[0].params, ['user-1', '12345@lid', ['عدسات']]);
 });
 
+test('an approved imported recipient no longer depends on raw history rows', async () => {
+  let queried = false;
+  const database = { query: async () => { queried = true; return { rows: [] }; } };
+  const matches = await recipientMatchesKeywordAudience(
+    database,
+    { user_id: 'user-1' },
+    { source: 'saved_history_number', sender: '12345@lid', conversation_id: null },
+    { source: 'keywords', searchTerms: ['عدسات'] },
+  );
+  assert.equal(matches, true);
+  assert.equal(queried, false);
+});
+
 test('history tables stay isolated from the live messages table and UI states no sending', () => {
   const migration = fs.readFileSync(path.join(__dirname, '../src/db/migrations/init.js'), 'utf8');
   const dashboard = fs.readFileSync(path.join(__dirname, '../dashboard/index.html'), 'utf8');
   const script = fs.readFileSync(path.join(__dirname, '../dashboard/campaigns.js'), 'utf8');
   assert.match(migration, /CREATE TABLE IF NOT EXISTS whatsapp_history_messages/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_history_imports_one_active/);
+  assert.match(migration, /purged_messages_count/);
   assert.doesNotMatch(migration, /INSERT INTO messages/);
   assert.match(dashboard, /لا يشغّل الرد الآلي ولا يرسل أي رسالة أو حملة أثناء الاستيراد/);
   assert.match(script, /HISTORY_IMPORT_READ_ONLY|لن تُرسل أي رسالة/);

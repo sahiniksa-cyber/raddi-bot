@@ -6,6 +6,51 @@ const { proto } = require('@whiskeysockets/baileys');
 const db = require('../../db/client');
 
 const ACTIVE_IMPORT_STATUSES = new Set(['starting', 'running']);
+const DEFAULT_HISTORY_IMPORT_IDLE_MS = 3 * 60 * 1000;
+const DEFAULT_HISTORY_IMPORT_MAX_MS = 15 * 60 * 1000;
+
+function boundedDuration(value, fallback, minimum) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? Math.max(minimum, parsed) : fallback;
+}
+
+function historyImportIdleMs() {
+  return boundedDuration(process.env.WA_HISTORY_IMPORT_IDLE_MS, DEFAULT_HISTORY_IMPORT_IDLE_MS, 30_000);
+}
+
+function historyImportMaxMs() {
+  return boundedDuration(process.env.WA_HISTORY_IMPORT_MAX_MS, DEFAULT_HISTORY_IMPORT_MAX_MS, 60_000);
+}
+
+async function purgeTemporaryHistory(database, userId) {
+  const messages = await database.query(
+    `WITH deleted AS (
+       DELETE FROM whatsapp_history_messages WHERE user_id = $1 RETURNING 1
+     ) SELECT COUNT(*)::int AS count FROM deleted`,
+    [userId],
+  );
+  const conversations = await database.query(
+    `WITH deleted AS (
+       DELETE FROM whatsapp_history_conversations WHERE user_id = $1 RETURNING 1
+     ) SELECT COUNT(*)::int AS count FROM deleted`,
+    [userId],
+  );
+  const messagesCount = Number(messages.rows[0]?.count || 0);
+  const conversationsCount = Number(conversations.rows[0]?.count || 0);
+  await database.query(
+    `UPDATE whatsapp_history_imports SET
+       purged_at = CASE WHEN $2::int > 0 OR $3::int > 0 THEN NOW() ELSE purged_at END,
+       purged_messages_count = purged_messages_count + $2,
+       purged_conversations_count = purged_conversations_count + $3,
+       updated_at = NOW()
+     WHERE id = (
+       SELECT id FROM whatsapp_history_imports
+       WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1
+     )`,
+    [userId, messagesCount, conversationsCount],
+  );
+  return { messages: messagesCount, conversations: conversationsCount };
+}
 
 function normalizePhone(value) {
   const raw = String(value || '').trim();
@@ -162,6 +207,9 @@ class WhatsAppHistoryImportService {
       error.code = 'HISTORY_IMPORT_ACTIVE';
       throw error;
     }
+    // Imported history is a temporary search index, not a second permanent
+    // inbox. A new import replaces any unused older index for this merchant.
+    await purgeTemporaryHistory(this.db, this.userId);
     const result = await this.db.query(
       `INSERT INTO whatsapp_history_imports (user_id, status, read_only)
        VALUES ($1, 'starting', TRUE) RETURNING *`,
@@ -283,7 +331,13 @@ class WhatsAppHistoryImportService {
       );
     });
 
-    return { conversations: conversations.length, messages: messages.length, progress, type };
+    return {
+      conversations: conversations.length,
+      messages: messages.length,
+      progress,
+      type,
+      explicitlyComplete,
+    };
   }
 
   async recordHistoryStatus(importId, event = {}) {
@@ -301,17 +355,25 @@ class WhatsAppHistoryImportService {
        WHERE id = $1 AND user_id = $2 AND status IN ('starting','running')`,
       [importId, this.userId, messageHistoryType && complete, explicit, JSON.stringify(detail)],
     );
+    return { explicitlyComplete: explicit };
   }
 
-  async finishImport(importId) {
+  async finishImport(importId, { reason = 'manual' } = {}) {
     await this._queue.catch(() => {});
+    const finishDetail = {
+      autoFinish: {
+        reason: String(reason || 'manual').slice(0, 80),
+        at: new Date().toISOString(),
+      },
+    };
     const result = await this.db.query(
       `UPDATE whatsapp_history_imports SET
          status = CASE WHEN explicit_complete OR progress >= 100 THEN 'completed' ELSE 'partial' END,
+         sync_types = sync_types || $3::jsonb,
          completed_at = NOW(), updated_at = NOW()
        WHERE id = $1 AND user_id = $2 AND status IN ('starting','running')
        RETURNING *`,
-      [importId, this.userId],
+      [importId, this.userId, JSON.stringify(finishDetail)],
     );
     return result.rows[0] || null;
   }
@@ -336,7 +398,7 @@ class WhatsAppHistoryImportService {
        WHERE i.user_id = $1 ORDER BY i.created_at DESC LIMIT 1`,
       [this.userId],
     );
-    return result.rows[0] || {
+    const status = result.rows[0] || {
       status: 'not_started',
       progress: 0,
       explicit_complete: false,
@@ -346,6 +408,12 @@ class WhatsAppHistoryImportService {
       messages_total: 0,
       inbound_messages_total: 0,
     };
+    const startedAt = status.started_at ? new Date(status.started_at).getTime() : null;
+    if (startedAt && Number.isFinite(startedAt) && ACTIVE_IMPORT_STATUSES.has(status.status)) {
+      status.auto_finish_at = new Date(startedAt + historyImportMaxMs()).toISOString();
+      status.idle_timeout_seconds = Math.round(historyImportIdleMs() / 1000);
+    }
+    return status;
   }
 
   static isActiveStatus(status) {
@@ -356,9 +424,12 @@ class WhatsAppHistoryImportService {
 module.exports = {
   WhatsAppHistoryImportService,
   buildHistoryRows,
+  historyImportIdleMs,
+  historyImportMaxMs,
   historyMessageText,
   isDirectChatJid,
   isMessageHistoryType,
   normalizePhone,
+  purgeTemporaryHistory,
   timestampToIso,
 };

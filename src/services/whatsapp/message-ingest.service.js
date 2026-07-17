@@ -60,7 +60,14 @@ function phoneNumberFromWhatsappMessage(msg) {
   return raw || null;
 }
 
-function toSafeRawPayload(msg) {
+function compactMediaForStorage(media) {
+  if (!media || typeof media !== 'object') return media || null;
+  const { data: _data, base64: _base64, ...metadata } = media;
+  return metadata;
+}
+
+function toSafeRawPayload(msg, { includeMediaData = true } = {}) {
+  const media = mediaFromWhatsappMessage(msg);
   return {
     id: messageIdFromWhatsappMessage(msg),
     from: msg?.from || null,
@@ -69,7 +76,7 @@ function toSafeRawPayload(msg) {
     timestamp: msg?.timestamp || null,
     type: msg?.type || null,
     hasMedia: !!msg?.hasMedia,
-    media: mediaFromWhatsappMessage(msg),
+    media: includeMediaData ? media : compactMediaForStorage(media),
     deviceType: msg?.deviceType || null,
   };
 }
@@ -370,7 +377,9 @@ class MessageIngestService {
       // window) would answer the blocked customer ~30s later, defeating the
       // do-not-reply feature entirely.
       await this.db.query(
-        "UPDATE messages SET status = 'do_not_reply' WHERE id = $1 AND user_id = $2",
+        `UPDATE messages SET status = 'do_not_reply',
+           raw_payload = COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}'
+         WHERE id = $1 AND user_id = $2`,
         [saved.messageId, userId],
       );
       this.logger.info?.('message', `inbound from ${sender} is on the do-not-reply list — stored, not answered`);
@@ -555,7 +564,11 @@ class MessageIngestService {
     }
     const phoneNumber = phoneNumberFromWhatsappMessage(msg);
     const providerMessageId = whatsappId || `${userId}:${recipient}:fromme:${Date.now()}`;
-    const rawPayload = { source, fromMe: true, ...toSafeRawPayload(msg) };
+    const rawPayload = {
+      source,
+      fromMe: true,
+      ...toSafeRawPayload(msg, { includeMediaData: false }),
+    };
 
     const saved = await this.db.transaction(async (client) => {
       const { id: conversationId, phoneNumber: storedPhoneNumber } = await upsertConversation(client, {
@@ -612,6 +625,7 @@ class MessageIngestService {
 
 module.exports = {
   MessageIngestService,
+  compactMediaForStorage,
   ownerPauseExpiry,
   messageIdFromWhatsappMessage,
   mediaFromWhatsappMessage,
