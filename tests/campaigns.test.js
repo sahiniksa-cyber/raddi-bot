@@ -574,6 +574,7 @@ test('approval trusts the reviewed recipient snapshot and purges imported messag
   const result = await service.approve(userId, campaignId, { snapshotHash: approvedHash, audienceCount: 2 });
   assert.equal(result.status, 'approved');
   assert.equal(calls.some(call => /SELECT[\s\S]+FROM whatsapp_history_messages WHERE/.test(call.sql)), false);
+  assert.equal(calls.some(call => call.sql.includes('INSERT INTO whatsapp_history_search_index')), true);
   assert.equal(calls.some(call => call.sql.includes("source = 'saved_history_number'")), true);
   assert.equal(calls.some(call => call.sql.includes('DELETE FROM whatsapp_history_messages')), true);
   assert.equal(calls.some(call => call.sql.includes('DELETE FROM whatsapp_history_conversations')), true);

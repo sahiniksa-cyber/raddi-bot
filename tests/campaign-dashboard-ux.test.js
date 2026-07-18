@@ -102,6 +102,23 @@ test('purged imported history is explained instead of looking like lost data', (
   assert.match(nodes.campaignHistoryNote.textContent, /إعادة بنفس الجمهور/);
   assert.match(nodes.campaignHistoryNote.textContent, /استيراد المحادثات من جديد/);
   assert.match(js, /لا توجد محادثات مستوردة قابلة للبحث الآن/);
+
+  vm.runInContext(`campaignRenderHistoryImport({
+    status: 'completed',
+    purged_at: '2026-07-18T00:00:00Z',
+    purged_conversations_count: 12,
+    purged_messages_count: 88,
+    conversations_total: 0,
+    inbound_messages_total: 0,
+    search_index_conversations_total: 9,
+    search_index_messages_total: 70,
+    search_index_bytes: 2048
+  })`, context);
+
+  assert.equal(nodes.campaignHistoryBadge.textContent, 'محفوظ للبحث بدون استيراد');
+  assert.equal(nodes.campaignHistoryChats.textContent, '9');
+  assert.equal(nodes.campaignHistoryMessages.textContent, '70');
+  assert.match(nodes.campaignHistoryNote.textContent, /بكلمات مختلفة بدون استيراد واتساب مرة أخرى/);
 });
 
 test('conversation date range is contained inside its own clear option', () => {

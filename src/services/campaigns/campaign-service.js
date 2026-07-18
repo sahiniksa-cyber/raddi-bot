@@ -10,6 +10,7 @@ const { normalizeUploadFilename } = require('./media-store');
 const {
   WhatsAppHistoryImportService,
   purgeTemporaryHistory,
+  rebuildCompactHistorySearchIndex,
 } = require('../whatsapp/history-import.service');
 const { buildProductCatalog, normalizeProductText } = require('../products/product-knowledge');
 const {
@@ -352,6 +353,43 @@ async function resolveAudience(database, userId, rules = {}) {
       historyParams,
     );
     rows.push(...historyResult.rows);
+
+    const compactParams = [userId, searchTerms];
+    const compactClauses = [
+      `s.user_id = $1`,
+      `EXISTS (
+         SELECT 1 FROM unnest($2::text[]) AS keyword(term)
+         WHERE STRPOS(LOWER(s.search_document), LOWER(keyword.term)) > 0
+       )`,
+    ];
+    if (rules.dateFrom) {
+      compactParams.push(rules.dateFrom);
+      compactClauses.push(`s.bucket_date >= $${compactParams.length}::date`);
+    }
+    if (rules.dateTo) {
+      compactParams.push(rules.dateTo);
+      compactClauses.push(`s.bucket_date <= $${compactParams.length}::date`);
+    }
+    const compactResult = await database.query(
+      `SELECT DISTINCT ON (s.sender)
+              NULL::uuid AS conversation_id, s.sender, s.normalized_phone,
+              s.customer_name, NULL::text AS product_key,
+              matched.matched_term AS product_name,
+              NULL::text AS customer_state, 1::numeric AS confidence,
+              NULL::uuid AS evidence_message_id, ''::text AS evidence_text,
+              'keyword_history'::text AS source
+       FROM whatsapp_history_search_index s
+       CROSS JOIN LATERAL (
+         SELECT keyword.term AS matched_term
+         FROM unnest($2::text[]) AS keyword(term)
+         WHERE STRPOS(LOWER(s.search_document), LOWER(keyword.term)) > 0
+         ORDER BY LENGTH(keyword.term) DESC LIMIT 1
+       ) matched
+       WHERE ${compactClauses.join(' AND ')}
+       ORDER BY s.sender, s.bucket_date DESC`,
+      compactParams,
+    );
+    rows.push(...compactResult.rows);
   }
   if (source === 'conversations' || source === 'all') {
     const params = [userId];
@@ -1187,6 +1225,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
         // The approved recipient snapshot becomes the durable source of truth.
         // Raw imported messages and evidence are no longer needed after the
         // merchant explicitly approves this exact audience.
+        await rebuildCompactHistorySearchIndex(client, userId, null);
         await client.query(
           `UPDATE campaign_recipients SET
              customer_name = NULL, product_key = NULL, product_name = NULL,

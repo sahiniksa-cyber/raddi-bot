@@ -954,6 +954,31 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_messages_user_direction_time
     ON whatsapp_history_messages (user_id, direction, message_at DESC)`,
+
+  // Compact durable keyword index. One compressed text document per customer
+  // per day preserves arbitrary keyword/date searches while allowing the
+  // message-level import rows and their WhatsApp metadata to be purged.
+  `CREATE TABLE IF NOT EXISTS whatsapp_history_search_index (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sender TEXT NOT NULL,
+    bucket_date DATE NOT NULL,
+    source_import_id UUID REFERENCES whatsapp_history_imports(id) ON DELETE SET NULL,
+    normalized_phone TEXT,
+    customer_name TEXT NOT NULL DEFAULT '',
+    search_document TEXT NOT NULL DEFAULT '',
+    message_count INTEGER NOT NULL DEFAULT 0,
+    first_message_at TIMESTAMPTZ,
+    last_message_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, sender, bucket_date)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_search_user_date
+    ON whatsapp_history_search_index (user_id, bucket_date DESC)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_search_user_phone
+    ON whatsapp_history_search_index (user_id, normalized_phone)`,
 ];
 
 async function migrate() {
