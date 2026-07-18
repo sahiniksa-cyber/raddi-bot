@@ -309,6 +309,85 @@ test('campaign detail returns exact live delivery progress and repairs stored me
   assert.equal(detail.media[0].original_name, expectedName);
 });
 
+test('campaign archive returns real recipient totals for every saved campaign', async () => {
+  const database = {
+    async query(sql, params) {
+      assert.match(sql, /LEFT JOIN \(\s*SELECT campaign_id/);
+      assert.match(sql, /WHERE c\.user_id = \$1/);
+      assert.deepEqual(params, ['user-1']);
+      return {
+        rows: [{
+          id: 'campaign-archive-1',
+          user_id: 'user-1',
+          name: 'حملة العيد',
+          status: 'completed',
+          audience_rules: '{}',
+          progress_total: 12,
+          progress_sent: 9,
+          progress_remaining: 0,
+          progress_failed: 2,
+          progress_skipped: 1,
+          progress_canceled: 0,
+        }],
+      };
+    },
+  };
+  const archive = await createCampaignService({ database }).archive('user-1');
+  assert.equal(archive.length, 1);
+  assert.equal(archive[0].name, 'حملة العيد');
+  assert.deepEqual(archive[0].delivery_progress, {
+    total: 12,
+    sent: 9,
+    remaining: 0,
+    failed: 2,
+    skipped: 1,
+    canceled: 0,
+  });
+  assert.equal('progress_total' in archive[0], false);
+});
+
+test('campaign recipient history is owned, filtered and paginated without exposing provider ids', async () => {
+  const calls = [];
+  const database = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.includes('SELECT * FROM campaigns')) {
+        return { rows: [{ id: 'campaign-1', user_id: 'user-1', audience_rules: {} }] };
+      }
+      if (sql.includes('SELECT COUNT(*)::int AS count')) return { rows: [{ count: 2 }] };
+      if (sql.includes('SELECT id, sender, normalized_phone')) {
+        return {
+          rows: [{
+            id: 'recipient-1',
+            sender: '966551234567@s.whatsapp.net',
+            normalized_phone: '966551234567',
+            customer_name: 'عميل اختبار',
+            status: 'sent',
+            attempts: 1,
+            sent_at: '2026-07-18T10:00:00.000Z',
+            last_error: null,
+          }],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  };
+  const result = await createCampaignService({ database }).listRecipients('user-1', 'campaign-1', {
+    status: 'sent',
+    search: '055',
+    page: 2,
+    limit: 25,
+  });
+  assert.equal(result.recipients[0].phone, '966551234567');
+  assert.equal(result.recipients[0].status, 'sent');
+  assert.equal('sender' in result.recipients[0], false);
+  assert.equal('provider_message_ids' in result.recipients[0], false);
+  assert.deepEqual(result.pagination, { page: 1, limit: 25, total: 2, pages: 1 });
+  const recipientQuery = calls.find(call => call.sql.includes('SELECT id, sender, normalized_phone'));
+  assert.match(recipientQuery.sql, /campaign_id = \$1 AND user_id = \$2/);
+  assert.deepEqual(recipientQuery.params.slice(-2), [25, 0]);
+});
+
 test('failed campaign media DB insert rolls back and removes the written file', async () => {
   const originalDataDir = process.env.DATA_DIR;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-campaign-media-failure-'));

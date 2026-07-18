@@ -135,11 +135,25 @@ function createCampaignRoutes(deps = {}) {
   router.get('/api/campaigns', asyncHandler(async (req, res) => {
     res.json({ success: true, campaigns: await service.list(userId(req)) });
   }));
+  router.get('/api/campaigns/archive', asyncHandler(async (req, res) => {
+    res.json({ success: true, campaigns: await service.archive(userId(req)) });
+  }));
   router.post('/api/campaigns', asyncHandler(async (req, res) => {
     res.status(201).json({ success: true, campaign: await service.create(userId(req), req.body || {}) });
   }));
   router.post('/api/campaigns/audience/preview', asyncHandler(async (req, res) => {
     res.json({ success: true, ...(await service.previewAudience(userId(req), req.body?.audienceRules || {})) });
+  }));
+  router.get('/api/campaigns/:id/recipients', asyncHandler(async (req, res) => {
+    res.json({
+      success: true,
+      ...(await service.listRecipients(userId(req), req.params.id, {
+        status: req.query.status,
+        search: req.query.search,
+        page: req.query.page,
+        limit: req.query.limit,
+      })),
+    });
   }));
   router.get('/api/campaigns/:id', asyncHandler(async (req, res) => {
     res.json({ success: true, campaign: await service.get(userId(req), req.params.id) });
