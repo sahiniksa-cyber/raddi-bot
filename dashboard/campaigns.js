@@ -608,7 +608,9 @@ async function campaignPreviewKeywords() {
     });
     const preview = document.getElementById('campaignKeywordPreview');
     document.getElementById('campaignKeywordAudienceCount').textContent = String(data.count);
+    const hasCompactHistory = Number(campaignHistoryCurrentStatus?.search_index_messages_total) > 0;
     const historyWasPurged = Boolean(campaignHistoryCurrentStatus?.purged_at)
+      && !hasCompactHistory
       && !(Number(campaignHistoryCurrentStatus?.conversations_total)
         || Number(campaignHistoryCurrentStatus?.inbound_messages_total));
     if (!data.count && historyWasPurged) {
@@ -631,7 +633,11 @@ async function campaignPreviewKeywords() {
 function campaignRenderHistoryImport(status = {}) {
   campaignHistoryCurrentStatus = status;
   const active = ['starting', 'running'].includes(status.status);
+  const compactChats = Number(status.search_index_conversations_total) || 0;
+  const compactMessages = Number(status.search_index_messages_total) || 0;
+  const hasCompactHistory = compactMessages > 0;
   const historyWasPurged = Boolean(status.purged_at)
+    && !hasCompactHistory
     && !(Number(status.conversations_total) || Number(status.inbound_messages_total));
   const labels = {
     not_started: 'لم يبدأ',
@@ -644,12 +650,17 @@ function campaignRenderHistoryImport(status = {}) {
   };
   const badge = document.getElementById('campaignHistoryBadge');
   if (!badge) return;
-  badge.textContent = historyWasPurged
-    ? 'تم تنظيف بيانات البحث'
-    : (labels[status.status] || status.status || 'غير معروف');
-  document.getElementById('campaignHistoryChats').textContent = String(Number(status.conversations_total) || 0);
-  document.getElementById('campaignHistoryNumbers').textContent = String(Number(status.numbers_total) || 0);
-  document.getElementById('campaignHistoryMessages').textContent = String(Number(status.inbound_messages_total) || 0);
+  badge.textContent = hasCompactHistory && !active
+    ? 'محفوظ للبحث بدون استيراد'
+    : historyWasPurged
+      ? 'تم تنظيف بيانات البحث'
+      : (labels[status.status] || status.status || 'غير معروف');
+  const visibleChats = active ? (Number(status.conversations_total) || 0) : (compactChats || Number(status.conversations_total) || 0);
+  const visibleMessages = active ? (Number(status.inbound_messages_total) || 0) : (compactMessages || Number(status.inbound_messages_total) || 0);
+  const visibleNumbers = active ? (Number(status.numbers_total) || 0) : (compactChats || Number(status.numbers_total) || 0);
+  document.getElementById('campaignHistoryChats').textContent = String(visibleChats);
+  document.getElementById('campaignHistoryNumbers').textContent = String(visibleNumbers);
+  document.getElementById('campaignHistoryMessages').textContent = String(visibleMessages);
   document.getElementById('campaignHistoryStart').disabled = active;
   document.getElementById('campaignHistoryFinish').disabled = !active;
   const note = document.getElementById('campaignHistoryNote');
@@ -664,6 +675,9 @@ function campaignRenderHistoryImport(status = {}) {
   if (!active) campaignHistoryQrVersion = 0;
   if (status.last_error) {
     note.textContent = `تعذر الاستيراد: ${status.last_error}`;
+  } else if (hasCompactHistory && !active) {
+    const compactKb = Math.max(1, Math.ceil((Number(status.search_index_bytes) || 0) / 1024));
+    note.textContent = `فهرس البحث المضغوط جاهز: ${compactChats} عميل و${compactMessages} رسالة قابلة للبحث بحجم يقارب ${compactKb} كيلوبايت. يمكنك إنشاء حملات جديدة بكلمات مختلفة بدون استيراد واتساب مرة أخرى. حُذفت صفوف الرسائل الخام وبياناتها الإضافية لتوفير المساحة.`;
   } else if (historyWasPurged) {
     const removedChats = Number(status.purged_conversations_count) || 0;
     const removedMessages = Number(status.purged_messages_count) || 0;

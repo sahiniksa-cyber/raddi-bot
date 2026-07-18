@@ -52,6 +52,74 @@ async function purgeTemporaryHistory(database, userId) {
   return { messages: messagesCount, conversations: conversationsCount };
 }
 
+async function rebuildCompactHistorySearchIndex(database, userId, importId = null) {
+  const result = await database.query(
+    `WITH source AS MATERIALIZED (
+       SELECT
+         m.user_id,
+         m.sender,
+         COALESCE(m.message_at, m.created_at)::date AS bucket_date,
+         $2::uuid AS source_import_id,
+         COALESCE(
+           MAX(NULLIF(c.normalized_phone, '')),
+           MAX(NULLIF(m.normalized_phone, ''))
+         ) AS normalized_phone,
+         COALESCE(MAX(NULLIF(c.customer_name, '')), '') AS customer_name,
+         STRING_AGG(
+           m.content,
+           E'\n' ORDER BY COALESCE(m.message_at, m.created_at), m.provider_message_id
+         ) AS search_document,
+         COUNT(*)::int AS message_count,
+         MIN(COALESCE(m.message_at, m.created_at)) AS first_message_at,
+         MAX(COALESCE(m.message_at, m.created_at)) AS last_message_at
+       FROM whatsapp_history_messages m
+       LEFT JOIN whatsapp_history_conversations c
+         ON c.user_id = m.user_id AND c.sender = m.sender
+       WHERE m.user_id = $1
+         AND m.direction = 'inbound'
+         AND BTRIM(m.content) <> ''
+       GROUP BY m.user_id, m.sender, COALESCE(m.message_at, m.created_at)::date
+     ),
+     indexed AS (
+       INSERT INTO whatsapp_history_search_index (
+         user_id, sender, bucket_date, source_import_id, normalized_phone,
+         customer_name, search_document, message_count, first_message_at,
+         last_message_at
+       )
+       SELECT
+         user_id, sender, bucket_date, source_import_id, normalized_phone,
+         customer_name, search_document, message_count, first_message_at,
+         last_message_at
+       FROM source
+       ON CONFLICT (user_id, sender, bucket_date) DO UPDATE SET
+         source_import_id = EXCLUDED.source_import_id,
+         normalized_phone = COALESCE(EXCLUDED.normalized_phone, whatsapp_history_search_index.normalized_phone),
+         customer_name = CASE
+           WHEN EXCLUDED.customer_name <> '' THEN EXCLUDED.customer_name
+           ELSE whatsapp_history_search_index.customer_name
+         END,
+         search_document = EXCLUDED.search_document,
+         message_count = EXCLUDED.message_count,
+         first_message_at = EXCLUDED.first_message_at,
+         last_message_at = EXCLUDED.last_message_at,
+         updated_at = NOW()
+       RETURNING message_count, OCTET_LENGTH(search_document) AS document_bytes
+     )
+     SELECT
+       COUNT(*)::int AS documents,
+       COALESCE(SUM(message_count), 0)::int AS messages,
+       COALESCE(SUM(document_bytes), 0)::bigint AS bytes
+     FROM indexed`,
+    [userId, importId],
+  );
+  const summary = result.rows[0] || {};
+  return {
+    documents: Number(summary.documents || 0),
+    messages: Number(summary.messages || 0),
+    bytes: Number(summary.bytes || 0),
+  };
+}
+
 function normalizePhone(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.endsWith('@lid') || raw.endsWith('@g.us') || raw.includes('@broadcast')) return null;
@@ -415,7 +483,22 @@ class WhatsAppHistoryImportService {
        RETURNING i.*`,
       [importId, this.userId, JSON.stringify(finishDetail)],
     );
-    return result.rows[0] || null;
+    const finished = result.rows[0] || null;
+    if (finished && finished.status !== 'failed') {
+      try {
+        const indexed = await rebuildCompactHistorySearchIndex(this.db, this.userId, importId);
+        if (indexed.messages > 0) {
+          const purged = await purgeTemporaryHistory(this.db, this.userId);
+          finished.search_index = indexed;
+          finished.purged = purged;
+        }
+      } catch (error) {
+        // Fail safe: keep raw history searchable if compacting fails. Never
+        // delete the only searchable copy.
+        this.logger.warn?.(`history search compaction failed; raw history retained: ${error.message}`);
+      }
+    }
+    return finished;
   }
 
   async failImport(importId, error) {
@@ -438,6 +521,14 @@ class WhatsAppHistoryImportService {
           WHERE m.user_id = i.user_id AND m.import_id = i.id) AS messages_total,
          (SELECT COUNT(*)::int FROM whatsapp_history_messages m
           WHERE m.user_id = i.user_id AND m.import_id = i.id AND m.direction = 'inbound') AS inbound_messages_total
+         ,
+         (SELECT COUNT(DISTINCT s.sender)::int FROM whatsapp_history_search_index s
+          WHERE s.user_id = i.user_id) AS search_index_conversations_total,
+         (SELECT COALESCE(SUM(s.message_count), 0)::int FROM whatsapp_history_search_index s
+          WHERE s.user_id = i.user_id) AS search_index_messages_total,
+         (SELECT COALESCE(SUM(OCTET_LENGTH(s.search_document)), 0)::bigint
+          FROM whatsapp_history_search_index s
+          WHERE s.user_id = i.user_id) AS search_index_bytes
        FROM whatsapp_history_imports i
        WHERE i.user_id = $1 ORDER BY i.created_at DESC LIMIT 1`,
       [this.userId],
@@ -480,5 +571,6 @@ module.exports = {
   isMessageHistoryType,
   normalizePhone,
   purgeTemporaryHistory,
+  rebuildCompactHistorySearchIndex,
   timestampToIso,
 };

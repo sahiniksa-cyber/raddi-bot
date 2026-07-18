@@ -17,6 +17,7 @@ const {
   WhatsAppHistoryImportService,
   buildHistoryRows,
   isMessageHistoryType,
+  rebuildCompactHistorySearchIndex,
 } = require('../src/services/whatsapp/history-import.service');
 const { recipientMatchesKeywordAudience } = require('../src/workers/campaign-worker');
 
@@ -274,6 +275,68 @@ test('keyword audience includes numbers found only in imported WhatsApp history'
   assert.ok(calls.some(call => call.sql.includes("m.direction = 'inbound'")));
 });
 
+test('compact history index groups inbound text by customer and day before raw cleanup', async () => {
+  const calls = [];
+  const database = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: [{ documents: 3, messages: 12, bytes: 640 }] };
+    },
+  };
+
+  const result = await rebuildCompactHistorySearchIndex(
+    database,
+    '22222222-2222-4222-8222-222222222222',
+    '11111111-1111-4111-8111-111111111111',
+  );
+
+  assert.deepEqual(result, { documents: 3, messages: 12, bytes: 640 });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /INSERT INTO whatsapp_history_search_index/);
+  assert.match(calls[0].sql, /STRING_AGG/);
+  assert.match(calls[0].sql, /m\.direction = 'inbound'/);
+  assert.match(calls[0].sql, /GROUP BY m\.user_id, m\.sender, COALESCE\(m\.message_at, m\.created_at\)::date/);
+  assert.match(calls[0].sql, /ON CONFLICT \(user_id, sender, bucket_date\) DO UPDATE/);
+  assert.doesNotMatch(calls[0].sql, /DELETE FROM whatsapp_history_search_index/);
+});
+
+test('keyword audience remains searchable from the compact index after raw rows are gone', async () => {
+  const calls = [];
+  const database = {
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      if (sql.includes('FROM whatsapp_history_search_index s')) {
+        return { rows: [{
+          conversation_id: null,
+          sender: '12345@lid',
+          normalized_phone: '966500000001',
+          customer_name: 'عميل العدسات',
+          product_name: 'شنط',
+          evidence_text: '',
+          source: 'keyword_history',
+        }] };
+      }
+      return { rows: [] };
+    },
+  };
+
+  const recipients = await resolveAudience(database, 'user-1', {
+    source: 'keywords',
+    searchTerms: ['شنط'],
+    dateFrom: '2026-07-01',
+    dateTo: '2026-07-18',
+  });
+
+  assert.equal(recipients.length, 1);
+  assert.equal(recipients[0].normalized_phone, '966500000001');
+  const compactCall = calls.find(call => call.sql.includes('FROM whatsapp_history_search_index s'));
+  assert.ok(compactCall);
+  assert.match(compactCall.sql, /STRPOS\(LOWER\(s\.search_document\), LOWER\(keyword\.term\)\)/);
+  assert.match(compactCall.sql, /s\.bucket_date >= \$3::date/);
+  assert.match(compactCall.sql, /s\.bucket_date <= \$4::date/);
+  assert.deepEqual(compactCall.params, ['user-1', ['شنط'], '2026-07-01', '2026-07-18']);
+});
+
 test('starting an import locks outgoing sends before the import row is created', async () => {
   const order = [];
   const database = {
@@ -445,6 +508,52 @@ test('a zero-row import is marked failed instead of pretending partial success',
   assert.match(calls[0].sql, /import_auth_state = '\{\}'::jsonb/);
 });
 
+test('a successful import builds the compact index before deleting raw history', async () => {
+  const order = [];
+  const service = new WhatsAppHistoryImportService({
+    userId: '22222222-2222-4222-8222-222222222222',
+    database: {
+      query: async sql => {
+        if (sql.includes('WITH imported AS')) {
+          order.push('finish');
+          return { rows: [{ id: 'import-1', status: 'completed' }] };
+        }
+        if (sql.includes('INSERT INTO whatsapp_history_search_index')) {
+          order.push('index');
+          return { rows: [{ documents: 4, messages: 15, bytes: 900 }] };
+        }
+        if (sql.includes('DELETE FROM whatsapp_history_messages')) {
+          order.push('delete-messages');
+          return { rows: [{ count: 15 }] };
+        }
+        if (sql.includes('DELETE FROM whatsapp_history_conversations')) {
+          order.push('delete-conversations');
+          return { rows: [{ count: 4 }] };
+        }
+        if (sql.includes('UPDATE whatsapp_history_imports SET')) {
+          order.push('record-cleanup');
+        }
+        return { rows: [] };
+      },
+    },
+  });
+
+  const result = await service.finishImport(
+    '11111111-1111-4111-8111-111111111111',
+    { reason: 'idle_timeout' },
+  );
+
+  assert.deepEqual(result.search_index, { documents: 4, messages: 15, bytes: 900 });
+  assert.deepEqual(result.purged, { messages: 15, conversations: 4 });
+  assert.deepEqual(order, [
+    'finish',
+    'index',
+    'delete-messages',
+    'delete-conversations',
+    'record-cleanup',
+  ]);
+});
+
 test('campaign worker rechecks imported keyword evidence before a later send', async () => {
   const calls = [];
   const database = {
@@ -487,6 +596,8 @@ test('history tables stay isolated from the live messages table and UI states no
   assert.match(migration, /purged_messages_count/);
   assert.match(migration, /import_auth_state/);
   assert.match(migration, /resume_after_import/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS whatsapp_history_search_index/);
+  assert.match(migration, /PRIMARY KEY \(user_id, sender, bucket_date\)/);
   assert.doesNotMatch(migration, /INSERT INTO messages/);
   assert.match(dashboard, /يبقى البوت الأساسي متصلاً ولا يطلق الاستيراد أي رسالة أو حملة/);
   assert.match(dashboard, /campaignHistoryQrImage/);
