@@ -805,7 +805,7 @@ const statements = [
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('image', 'video')),
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'document')),
     original_name TEXT NOT NULL,
     mime_type TEXT NOT NULL,
     storage_path TEXT NOT NULL,
@@ -818,6 +818,13 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_campaign_media_campaign_order
     ON campaign_media (campaign_id, sort_order)`,
+
+  // Existing installations created the inline constraint before PDF documents
+  // were supported. CREATE TABLE IF NOT EXISTS does not update that constraint,
+  // so explicitly replace it on every idempotent migration run.
+  `ALTER TABLE campaign_media DROP CONSTRAINT IF EXISTS campaign_media_kind_check`,
+  `ALTER TABLE campaign_media ADD CONSTRAINT campaign_media_kind_check
+    CHECK (kind IN ('image', 'video', 'document'))`,
 
   `CREATE TABLE IF NOT EXISTS campaign_recipients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

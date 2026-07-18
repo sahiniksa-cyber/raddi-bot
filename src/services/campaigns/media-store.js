@@ -46,82 +46,96 @@ function hasValidSignature(buffer, mimeType) {
 
 async function saveCampaignMedia({ database = db, userId, campaignId, files = [] } = {}) {
   if (!Array.isArray(files) || !files.length) return [];
-  const campaignResult = await database.query(
-    `SELECT id, status FROM campaigns WHERE id = $1 AND user_id = $2`,
-    [campaignId, userId],
-  );
-  const campaign = campaignResult.rows[0];
-  if (!campaign) {
-    const error = new Error('الحملة غير موجودة');
-    error.statusCode = 404;
-    throw error;
-  }
-  if (!['draft', 'ready_for_approval', 'approved'].includes(campaign.status)) {
-    const error = new Error('لا يمكن إضافة وسائط في حالة الحملة الحالية');
-    error.statusCode = 400;
-    throw error;
-  }
-  const countResult = await database.query(`SELECT COUNT(*)::int AS count, COALESCE(MAX(sort_order), -1)::int + 1 AS next_order FROM campaign_media WHERE campaign_id = $1`, [campaignId]);
-  const existingCount = Number(countResult.rows[0]?.count || 0);
-  const nextOrder = Number(countResult.rows[0]?.next_order || 0);
-  if (existingCount + files.length > 10) {
-    const error = new Error('الحد الأقصى 10 صور أو فيديوهات للحملة');
-    error.statusCode = 400;
-    throw error;
-  }
+  const preparedFiles = files.map(file => {
+    const mimeType = String(file.mimetype || '').toLowerCase();
+    const type = ALLOWED_TYPES.get(mimeType);
+    if (!type || !hasValidSignature(file.buffer, mimeType)) {
+      const error = new Error('نوع الملف غير مدعوم. استخدم JPG أو PNG أو WEBP أو MP4 أو MOV أو WEBM أو PDF');
+      error.statusCode = 400;
+      throw error;
+    }
+    return { file, mimeType, type };
+  });
 
-  // Revoke approval atomically before writing anything. The status predicate
-  // closes the upload-vs-start race: once sending begins this update matches
-  // zero rows and no new media can enter the campaign.
-  const revoked = await database.query(
-    `UPDATE campaigns SET status = 'draft', approved_at = NULL, approved_by = NULL,
-       approved_snapshot_hash = NULL, audience_count = 0, content_version = content_version + 1,
-       updated_at = NOW()
-     WHERE id = $1 AND user_id = $2 AND status IN ('draft','ready_for_approval','approved')
-     RETURNING id`,
-    [campaignId, userId],
-  );
-  if (!revoked.rows[0]) {
-    const error = new Error('لا يمكن إضافة وسائط في حالة الحملة الحالية');
-    error.statusCode = 400;
-    throw error;
-  }
-  await database.query(`DELETE FROM campaign_recipients WHERE campaign_id = $1`, [campaignId]);
-
-  const directory = assertInsideRoot(path.join(mediaRoot(), String(userId), String(campaignId)));
-  await fs.mkdir(directory, { recursive: true });
+  const transactional = typeof database.transaction === 'function';
+  const run = transactional ? database.transaction.bind(database) : async operation => operation(database);
   const saved = [];
+  const writtenPaths = [];
   try {
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      const mimeType = String(file.mimetype || '').toLowerCase();
-      const type = ALLOWED_TYPES.get(mimeType);
-      if (!type || !hasValidSignature(file.buffer, mimeType)) {
-        const error = new Error('نوع الملف غير مدعوم. استخدم JPG أو PNG أو WEBP أو MP4 أو MOV أو WEBM أو PDF');
+    return await run(async client => {
+      const campaignResult = await client.query(
+        `SELECT id, status FROM campaigns WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        [campaignId, userId],
+      );
+      const campaign = campaignResult.rows[0];
+      if (!campaign) {
+        const error = new Error('الحملة غير موجودة');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (!['draft', 'ready_for_approval', 'approved'].includes(campaign.status)) {
+        const error = new Error('لا يمكن إضافة وسائط في حالة الحملة الحالية');
         error.statusCode = 400;
         throw error;
       }
-      const sha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
-      const filename = `${crypto.randomUUID()}${type.extension}`;
-      const storagePath = assertInsideRoot(path.join(directory, filename));
-      await fs.writeFile(storagePath, file.buffer, { flag: 'wx' });
-      const result = await database.query(
-        `INSERT INTO campaign_media (
-           campaign_id, user_id, kind, original_name, mime_type, storage_path,
-           size_bytes, sha256, sort_order
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, kind, original_name, mime_type, size_bytes, sha256, sort_order, created_at`,
-        [campaignId, userId, type.kind, String(file.originalname || filename).slice(0, 255),
-          mimeType, storagePath, file.buffer.length, sha256, nextOrder + index],
+      const countResult = await client.query(
+        `SELECT COUNT(*)::int AS count, COALESCE(MAX(sort_order), -1)::int + 1 AS next_order
+         FROM campaign_media WHERE campaign_id = $1`,
+        [campaignId],
       );
-      saved.push({ ...result.rows[0], storage_path: storagePath });
-    }
-    return saved.map(({ storage_path: _private, ...item }) => item);
+      const existingCount = Number(countResult.rows[0]?.count || 0);
+      const nextOrder = Number(countResult.rows[0]?.next_order || 0);
+      if (existingCount + preparedFiles.length > 10) {
+        const error = new Error('الحد الأقصى 10 صور أو فيديوهات أو مستندات PDF للحملة');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // Keep approval revocation, recipient deletion and media rows in one DB
+      // transaction. A failed file write or insert must leave the campaign in
+      // exactly the state it had before the upload attempt.
+      const revoked = await client.query(
+        `UPDATE campaigns SET status = 'draft', approved_at = NULL, approved_by = NULL,
+           approved_snapshot_hash = NULL, audience_count = 0, content_version = content_version + 1,
+           updated_at = NOW()
+         WHERE id = $1 AND user_id = $2 AND status IN ('draft','ready_for_approval','approved')
+         RETURNING id`,
+        [campaignId, userId],
+      );
+      if (!revoked.rows[0]) {
+        const error = new Error('لا يمكن إضافة وسائط في حالة الحملة الحالية');
+        error.statusCode = 400;
+        throw error;
+      }
+      await client.query(`DELETE FROM campaign_recipients WHERE campaign_id = $1`, [campaignId]);
+
+      const directory = assertInsideRoot(path.join(mediaRoot(), String(userId), String(campaignId)));
+      await fs.mkdir(directory, { recursive: true });
+      for (let index = 0; index < preparedFiles.length; index += 1) {
+        const { file, mimeType, type } = preparedFiles[index];
+        const sha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
+        const filename = `${crypto.randomUUID()}${type.extension}`;
+        const storagePath = assertInsideRoot(path.join(directory, filename));
+        await fs.writeFile(storagePath, file.buffer, { flag: 'wx' });
+        writtenPaths.push(storagePath);
+        const result = await client.query(
+          `INSERT INTO campaign_media (
+             campaign_id, user_id, kind, original_name, mime_type, storage_path,
+             size_bytes, sha256, sort_order
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, kind, original_name, mime_type, size_bytes, sha256, sort_order, created_at`,
+          [campaignId, userId, type.kind, String(file.originalname || filename).slice(0, 255),
+            mimeType, storagePath, file.buffer.length, sha256, nextOrder + index],
+        );
+        saved.push({ ...result.rows[0], storage_path: storagePath });
+      }
+      return saved.map(({ storage_path: _private, ...item }) => item);
+    });
   } catch (error) {
-    const savedIds = saved.map(item => item.id);
-    if (savedIds.length) {
+    const savedIds = saved.map(item => item.id).filter(Boolean);
+    if (!transactional && savedIds.length) {
       await database.query(`DELETE FROM campaign_media WHERE id = ANY($1::uuid[])`, [savedIds]).catch(() => {});
     }
-    for (const item of saved) await fs.unlink(item.storage_path).catch(() => {});
+    for (const storagePath of writtenPaths) await fs.unlink(storagePath).catch(() => {});
     throw error;
   }
 }

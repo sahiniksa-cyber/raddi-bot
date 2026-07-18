@@ -30,7 +30,10 @@ async function campaignApi(url, options = {}) {
   const response = await fetch(url, options);
   const contentType = response.headers.get('content-type') || '';
   const data = contentType.includes('application/json') ? await response.json() : null;
-  if (!response.ok) throw new Error(data?.message || 'تعذر تنفيذ الطلب');
+  if (!response.ok) {
+    const reference = data?.code ? ` (رمز الخطأ: ${data.code})` : '';
+    throw new Error(data?.message || `تعذر تنفيذ الطلب${reference}`);
+  }
   return data;
 }
 

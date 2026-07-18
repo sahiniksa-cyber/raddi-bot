@@ -185,3 +185,7 @@ test('keyword controls bind and source cards open even when background loading f
 test('campaign dashboard script remains syntactically valid', () => {
   assert.doesNotThrow(() => new vm.Script(js, { filename: 'dashboard/campaigns.js' }));
 });
+
+test('campaign API surfaces the production error reference instead of a blank generic failure', () => {
+  assert.match(js, /رمز الخطأ: \$\{data\.code\}/);
+});

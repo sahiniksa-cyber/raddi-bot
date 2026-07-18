@@ -30,7 +30,7 @@ const {
   sendMedia,
   sendCampaignText,
 } = require('../src/workers/campaign-worker');
-const { ALLOWED_TYPES, hasValidSignature } = require('../src/services/campaigns/media-store');
+const { ALLOWED_TYPES, hasValidSignature, saveCampaignMedia } = require('../src/services/campaigns/media-store');
 const AIClient = require('../lib/ai-client');
 const ExcelJS = require('exceljs');
 const { MessageIngestService } = require('../src/services/whatsapp/message-ingest.service');
@@ -202,6 +202,101 @@ test('campaign media accepts only a real PDF signature', () => {
   assert.equal(ALLOWED_TYPES.get('application/pdf')?.kind, 'document');
   assert.equal(hasValidSignature(pdf, 'application/pdf'), true);
   assert.equal(hasValidSignature(Buffer.from('not-a-pdf-file'), 'application/pdf'), false);
+});
+
+test('campaign PDF upload commits its DB row and durable file together', async () => {
+  const originalDataDir = process.env.DATA_DIR;
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-campaign-media-success-'));
+  process.env.DATA_DIR = dataDir;
+  const transactionEvents = [];
+  let insertedStoragePath = '';
+  const client = {
+    async query(sql, params = []) {
+      if (sql.includes('SELECT id, status FROM campaigns')) return { rows: [{ id: 'campaign-1', status: 'draft' }] };
+      if (sql.includes('SELECT COUNT(*)::int AS count')) return { rows: [{ count: 0, next_order: 0 }] };
+      if (sql.includes('UPDATE campaigns SET status')) return { rows: [{ id: 'campaign-1' }] };
+      if (sql.includes('DELETE FROM campaign_recipients')) return { rows: [] };
+      if (sql.includes('INSERT INTO campaign_media')) {
+        insertedStoragePath = params[5];
+        return { rows: [{ id: 'media-1', kind: params[2], original_name: params[3], mime_type: params[4], size_bytes: params[6], sha256: params[7], sort_order: params[8] }] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  };
+  const database = {
+    transaction: async operation => {
+      transactionEvents.push('begin');
+      try {
+        const result = await operation(client);
+        transactionEvents.push('commit');
+        return result;
+      } catch (error) {
+        transactionEvents.push('rollback');
+        throw error;
+      }
+    },
+  };
+  try {
+    const saved = await saveCampaignMedia({
+      database,
+      userId: 'user-1',
+      campaignId: 'campaign-1',
+      files: [{ originalname: 'الأسعار.pdf', mimetype: 'application/pdf', buffer: Buffer.from('%PDF-1.7\n%%EOF') }],
+    });
+    assert.deepEqual(transactionEvents, ['begin', 'commit']);
+    assert.equal(saved[0].kind, 'document');
+    assert.equal(saved[0].original_name, 'الأسعار.pdf');
+    assert.equal(fs.existsSync(insertedStoragePath), true);
+  } finally {
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('failed campaign media DB insert rolls back and removes the written file', async () => {
+  const originalDataDir = process.env.DATA_DIR;
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-campaign-media-failure-'));
+  process.env.DATA_DIR = dataDir;
+  const transactionEvents = [];
+  const client = {
+    async query(sql) {
+      if (sql.includes('SELECT id, status FROM campaigns')) return { rows: [{ id: 'campaign-1', status: 'draft' }] };
+      if (sql.includes('SELECT COUNT(*)::int AS count')) return { rows: [{ count: 0, next_order: 0 }] };
+      if (sql.includes('UPDATE campaigns SET status')) return { rows: [{ id: 'campaign-1' }] };
+      if (sql.includes('DELETE FROM campaign_recipients')) return { rows: [] };
+      if (sql.includes('INSERT INTO campaign_media')) throw new Error('simulated constraint failure');
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  };
+  const database = {
+    transaction: async operation => {
+      transactionEvents.push('begin');
+      try {
+        const result = await operation(client);
+        transactionEvents.push('commit');
+        return result;
+      } catch (error) {
+        transactionEvents.push('rollback');
+        throw error;
+      }
+    },
+  };
+  try {
+    await assert.rejects(() => saveCampaignMedia({
+      database,
+      userId: 'user-1',
+      campaignId: 'campaign-1',
+      files: [{ originalname: 'الأسعار.pdf', mimetype: 'application/pdf', buffer: Buffer.from('%PDF-1.7\n%%EOF') }],
+    }), /simulated constraint failure/);
+    const campaignDirectory = path.join(dataDir, 'campaign-media', 'user-1', 'campaign-1');
+    assert.deepEqual(transactionEvents, ['begin', 'rollback']);
+    assert.deepEqual(fs.existsSync(campaignDirectory) ? fs.readdirSync(campaignDirectory) : [], []);
+  } finally {
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test('Baileys sends campaign PDF as a named WhatsApp document', async () => {
@@ -767,4 +862,7 @@ test('campaign migration contains durable approval and recipient progress fields
   assert.ok(migration.includes('subscription_start_date'));
   assert.ok(migration.includes('subscription_end_date'));
   assert.ok(migration.includes('interval_min_seconds BETWEEN 30 AND 3600'));
+  assert.ok(migration.includes("kind IN ('image', 'video', 'document')"));
+  assert.ok(migration.includes('DROP CONSTRAINT IF EXISTS campaign_media_kind_check'));
+  assert.ok(migration.includes('ADD CONSTRAINT campaign_media_kind_check'));
 });
