@@ -14,6 +14,7 @@ let campaignHistoryCountdownTimer = null;
 let campaignHistoryCurrentStatus = null;
 let campaignHistoryQrVersion = 0;
 let campaignMediaUploadPromise = null;
+let campaignProgressPollTimer = null;
 
 function campaignFlash(message, error = false) {
   const el = document.getElementById('campaignFlash');
@@ -107,7 +108,9 @@ async function campaignSaveAndNext(step) {
 }
 
 function campaignNew() {
+  campaignStopProgressPolling();
   campaignCurrent = null;
+  campaignRenderDeliveryProgress();
   campaignApproval = null;
   campaignVisited = new Set(['audience']);
   ['campaignName', 'campaignGoal', 'campaignMessage', 'campaignDateFrom', 'campaignDateTo', 'campaignScheduledAt', 'campaignNumbers'].forEach(id => {
@@ -168,11 +171,92 @@ function campaignFill(campaign) {
     `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px;border-bottom:1px solid var(--border)"><span>${campaignEscape(item.original_name)} · ${campaignEscape(mediaKindLabels[item.kind] || item.kind)}</span><button class="campaign-btn secondary" onclick="campaignDeleteMedia('${item.id}')">حذف</button></div>`
   ).join('') || '<div class="hint">لا توجد وسائط مرفوعة.</div>';
   campaignRenderContentPreview();
+  campaignRenderDeliveryProgress();
   campaignUpdateButtons();
+  campaignSyncProgressPolling();
 }
 
 function campaignEscape(value) {
   return String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+}
+
+function campaignProgressValues(campaign = campaignCurrent) {
+  const progress = campaign?.delivery_progress || {};
+  const total = Number(progress.total ?? campaign?.audience_count) || 0;
+  const sent = Number(progress.sent ?? campaign?.sent_count) || 0;
+  const failed = Number(progress.failed ?? campaign?.failed_count) || 0;
+  const skipped = Number(progress.skipped ?? campaign?.skipped_count) || 0;
+  const canceled = Number(progress.canceled) || 0;
+  const remaining = progress.remaining === undefined
+    ? Math.max(0, total - sent - failed - skipped - canceled)
+    : Math.max(0, Number(progress.remaining) || 0);
+  return { total, sent, remaining, failed, skipped, canceled, notSent: failed + skipped + canceled };
+}
+
+function campaignRenderDeliveryProgress() {
+  const container = document.getElementById('campaignDeliveryProgress');
+  if (!container) return;
+  const values = campaignProgressValues();
+  const visible = Boolean(campaignCurrent?.id) && (
+    values.total > 0
+    || ['approved', 'scheduled', 'sending', 'paused', 'completed', 'failed', 'canceled'].includes(campaignCurrent.status)
+  );
+  container.hidden = !visible;
+  if (!visible) return;
+
+  const statusLabels = {
+    approved: 'معتمدة ولم يبدأ الإرسال',
+    scheduled: 'مجدولة وتنتظر الموعد',
+    sending: 'الإرسال جارٍ الآن',
+    paused: 'الإرسال متوقف مؤقتاً',
+    completed: 'اكتمل إرسال الحملة',
+    failed: 'توقفت الحملة بسبب خطأ',
+    canceled: 'أُلغيت الحملة',
+  };
+  document.getElementById('campaignProgressStatus').textContent = statusLabels[campaignCurrent.status] || 'لم يبدأ الإرسال';
+  document.getElementById('campaignProgressSent').textContent = values.sent.toLocaleString('ar-EG');
+  document.getElementById('campaignProgressRemaining').textContent = values.remaining.toLocaleString('ar-EG');
+  document.getElementById('campaignProgressNotSent').textContent = values.notSent.toLocaleString('ar-EG');
+  document.getElementById('campaignProgressTotal').textContent = values.total.toLocaleString('ar-EG');
+  document.getElementById('campaignProgressDetails').textContent =
+    `فشل: ${values.failed.toLocaleString('ar-EG')} · تم تجاوزهم: ${values.skipped.toLocaleString('ar-EG')} · أُلغي قبل إرسالهم: ${values.canceled.toLocaleString('ar-EG')}`;
+  const deliveredPercent = values.total > 0 ? Math.min(100, Math.max(0, (values.sent / values.total) * 100)) : 0;
+  document.getElementById('campaignProgressBar').style.width = `${deliveredPercent}%`;
+}
+
+function campaignStopProgressPolling() {
+  if (campaignProgressPollTimer && typeof window.clearInterval === 'function') {
+    window.clearInterval(campaignProgressPollTimer);
+  }
+  campaignProgressPollTimer = null;
+}
+
+async function campaignRefreshDeliveryProgress() {
+  const campaignId = campaignCurrent?.id;
+  if (!campaignId) return;
+  try {
+    const data = await campaignApi(`/api/campaigns/${campaignId}`);
+    if (campaignCurrent?.id !== campaignId) return;
+    const currentMedia = campaignCurrent.media;
+    campaignCurrent = { ...campaignCurrent, ...data.campaign };
+    if (!Array.isArray(data.campaign.media) && Array.isArray(currentMedia)) campaignCurrent.media = currentMedia;
+    campaignRenderDeliveryProgress();
+    campaignUpdateButtons();
+    if (!['scheduled', 'sending'].includes(campaignCurrent.status)) campaignStopProgressPolling();
+  } catch (_) {
+    // A transient refresh failure must not interrupt a campaign or replace the
+    // last confirmed counters shown to the merchant.
+  }
+}
+
+function campaignSyncProgressPolling() {
+  campaignStopProgressPolling();
+  campaignRenderDeliveryProgress();
+  if (!['scheduled', 'sending'].includes(campaignCurrent?.status)) return;
+  if (typeof window.setInterval !== 'function') return;
+  campaignProgressPollTimer = window.setInterval(() => {
+    void campaignRefreshDeliveryProgress();
+  }, 3000);
 }
 
 function campaignToggleKeywordOptions() {
@@ -643,7 +727,9 @@ async function campaignAction(action) {
     if (!campaignCurrent) return;
     if (action === 'cancel' && !window.confirm('هل تريد إلغاء الحملة؟ لن تُرسل الرسائل المتبقية.')) return;
     const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/${action}`, { method: 'POST' });
-    campaignCurrent = data.campaign;
+    campaignCurrent = { ...campaignCurrent, ...data.campaign };
+    campaignRenderDeliveryProgress();
+    campaignSyncProgressPolling();
     campaignUpdateButtons();
     await campaignLoadList();
     const messages = { pause: 'تم إيقاف الحملة مؤقتاً.', resume: 'تمت استعادة الحملة. اضغط «بدء الإرسال» للمتابعة.', cancel: 'تم إلغاء الحملة.' };
@@ -670,7 +756,8 @@ async function campaignApprove() {
     const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/approve`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(campaignApproval),
     });
-    campaignCurrent = data.campaign;
+    campaignCurrent = { ...campaignCurrent, ...data.campaign };
+    campaignRenderDeliveryProgress();
     campaignUpdateButtons();
     campaignFlash('تم اعتماد الحملة. الإرسال لم يبدأ بعد.');
   } catch (error) { campaignFlash(error.message, true); }
@@ -680,7 +767,9 @@ async function campaignStart() {
   try {
     if (!window.confirm('هل تريد بدء إرسال الحملة المعتمدة الآن؟')) return;
     const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/start`, { method: 'POST' });
-    campaignCurrent = data.campaign;
+    campaignCurrent = { ...campaignCurrent, ...data.campaign };
+    campaignRenderDeliveryProgress();
+    campaignSyncProgressPolling();
     campaignUpdateButtons();
     await campaignLoadList();
     campaignFlash(campaignCurrent.status === 'scheduled' ? 'تمت جدولة الحملة.' : 'بدأ إرسال الحملة.');

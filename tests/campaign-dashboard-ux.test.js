@@ -81,6 +81,63 @@ test('content section shows send count and a WhatsApp campaign preview', () => {
   assert.match(js, /مرفق بانتظار الرفع/);
 });
 
+test('campaign review shows live sent and remaining recipient counters', () => {
+  for (const id of [
+    'campaignDeliveryProgress',
+    'campaignProgressSent',
+    'campaignProgressRemaining',
+    'campaignProgressNotSent',
+    'campaignProgressTotal',
+    'campaignProgressBar',
+  ]) {
+    assert.match(campaignMarkup, new RegExp(`id="${id}"`));
+  }
+  assert.match(campaignMarkup, /شخص وصلته الرسالة/);
+  assert.match(campaignMarkup, /شخص باقي له الإرسال/);
+  assert.match(js, /campaignRefreshDeliveryProgress/);
+  assert.match(js, /window\.setInterval[\s\S]*3000/);
+  assert.match(js, /delivery_progress/);
+});
+
+test('campaign progress separates delivered, remaining and terminal non-deliveries', () => {
+  const nodes = Object.fromEntries([
+    'campaignDeliveryProgress',
+    'campaignProgressStatus',
+    'campaignProgressSent',
+    'campaignProgressRemaining',
+    'campaignProgressNotSent',
+    'campaignProgressTotal',
+    'campaignProgressDetails',
+    'campaignProgressBar',
+  ].map(id => [id, { id, hidden: true, textContent: '', style: {} }]));
+  const context = vm.createContext({
+    document: {
+      getElementById: id => nodes[id] || null,
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+    window: { setTimeout() {}, scrollTo() {} },
+    fetch: async () => { throw new Error('unexpected fetch'); },
+    console,
+  });
+  new vm.Script(js, { filename: 'dashboard/campaigns.js' }).runInContext(context);
+  vm.runInContext(`
+    campaignCurrent = {
+      id: 'campaign-1',
+      status: 'sending',
+      delivery_progress: { total: 10, sent: 4, remaining: 3, failed: 1, skipped: 1, canceled: 1 }
+    };
+    campaignRenderDeliveryProgress();
+  `, context);
+  assert.equal(nodes.campaignDeliveryProgress.hidden, false);
+  assert.equal(nodes.campaignProgressSent.textContent, '٤');
+  assert.equal(nodes.campaignProgressRemaining.textContent, '٣');
+  assert.equal(nodes.campaignProgressNotSent.textContent, '٣');
+  assert.equal(nodes.campaignProgressTotal.textContent, '١٠');
+  assert.equal(nodes.campaignProgressBar.style.width, '40%');
+  assert.match(nodes.campaignProgressDetails.textContent, /فشل: ١/);
+});
+
 test('saving campaign content uploads pending media before moving to the next step', async () => {
   const events = [];
   const flash = { style: {}, textContent: '' };

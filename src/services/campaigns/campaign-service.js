@@ -6,6 +6,7 @@ const ExcelJS = require('exceljs');
 
 const db = require('../../db/client');
 const { checkMessageQuota } = require('../billing/message-quota');
+const { normalizeUploadFilename } = require('./media-store');
 const {
   WhatsAppHistoryImportService,
   purgeTemporaryHistory,
@@ -531,12 +532,40 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
 
   async function get(userId, campaignId) {
     const campaign = campaignPublic(await getOwnedCampaign(database, userId, campaignId));
-    const [media, recipients, events] = await Promise.all([
+    const [media, recipients, events, progress] = await Promise.all([
       database.query(`SELECT id, kind, original_name, mime_type, size_bytes, sha256, sort_order, created_at FROM campaign_media WHERE campaign_id = $1 ORDER BY sort_order`, [campaignId]),
       database.query(`SELECT * FROM campaign_recipients WHERE campaign_id = $1 ORDER BY created_at LIMIT 1000`, [campaignId]),
       database.query(`SELECT event_type, payload, created_at FROM campaign_events WHERE campaign_id = $1 ORDER BY created_at DESC LIMIT 100`, [campaignId]),
+      database.query(
+        `SELECT
+           COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
+           COUNT(*) FILTER (WHERE status IN ('pending','queued','sending'))::int AS remaining,
+           COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+           COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped,
+           COUNT(*) FILTER (WHERE status = 'canceled')::int AS canceled
+         FROM campaign_recipients WHERE campaign_id = $1`,
+        [campaignId],
+      ),
     ]);
-    return { ...campaign, media: media.rows, recipients: recipients.rows, events: events.rows };
+    const deliveryProgress = progress.rows[0] || {};
+    return {
+      ...campaign,
+      media: media.rows.map(item => ({
+        ...item,
+        original_name: normalizeUploadFilename(item.original_name, item.kind === 'document' ? 'document.pdf' : 'media'),
+      })),
+      recipients: recipients.rows,
+      events: events.rows,
+      delivery_progress: {
+        total: Number(deliveryProgress.total || 0),
+        sent: Number(deliveryProgress.sent || 0),
+        remaining: Number(deliveryProgress.remaining || 0),
+        failed: Number(deliveryProgress.failed || 0),
+        skipped: Number(deliveryProgress.skipped || 0),
+        canceled: Number(deliveryProgress.canceled || 0),
+      },
+    };
   }
 
   async function create(userId, input = {}) {

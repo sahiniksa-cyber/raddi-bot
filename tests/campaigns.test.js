@@ -30,7 +30,12 @@ const {
   sendMedia,
   sendCampaignText,
 } = require('../src/workers/campaign-worker');
-const { ALLOWED_TYPES, hasValidSignature, saveCampaignMedia } = require('../src/services/campaigns/media-store');
+const {
+  ALLOWED_TYPES,
+  hasValidSignature,
+  normalizeUploadFilename,
+  saveCampaignMedia,
+} = require('../src/services/campaigns/media-store');
 const AIClient = require('../lib/ai-client');
 const ExcelJS = require('exceljs');
 const { MessageIngestService } = require('../src/services/whatsapp/message-ingest.service');
@@ -204,6 +209,15 @@ test('campaign media accepts only a real PDF signature', () => {
   assert.equal(hasValidSignature(Buffer.from('not-a-pdf-file'), 'application/pdf'), false);
 });
 
+test('campaign media restores UTF-8 Arabic filenames misread as Latin-1', () => {
+  const expected = 'شنط بالأسعار 2.pdf';
+  const mojibake = Buffer.from(expected, 'utf8').toString('latin1');
+  assert.equal(normalizeUploadFilename(mojibake), expected);
+  assert.equal(normalizeUploadFilename(expected), expected);
+  assert.equal(normalizeUploadFilename('summer-offer.pdf'), 'summer-offer.pdf');
+  assert.equal(normalizeUploadFilename('../../offers/الأسعار.pdf'), 'الأسعار.pdf');
+});
+
 test('campaign PDF upload commits its DB row and durable file together', async () => {
   const originalDataDir = process.env.DATA_DIR;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-campaign-media-success-'));
@@ -252,6 +266,47 @@ test('campaign PDF upload commits its DB row and durable file together', async (
     else process.env.DATA_DIR = originalDataDir;
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('campaign detail returns exact live delivery progress and repairs stored media names', async () => {
+  const expectedName = 'شنط بالأسعار 2.pdf';
+  const mojibakeName = Buffer.from(expectedName, 'utf8').toString('latin1');
+  const campaign = {
+    id: 'campaign-progress',
+    user_id: 'user-1',
+    name: 'حملة شنط',
+    status: 'sending',
+    audience_rules: {},
+    audience_count: 7,
+    sent_count: 2,
+    failed_count: 1,
+    skipped_count: 1,
+  };
+  const database = {
+    async query(sql) {
+      if (sql.includes('SELECT * FROM campaigns')) return { rows: [campaign] };
+      if (sql.includes('FROM campaign_media')) {
+        return { rows: [{ id: 'media-1', kind: 'document', original_name: mojibakeName, mime_type: 'application/pdf' }] };
+      }
+      if (sql.includes('SELECT * FROM campaign_recipients')) return { rows: [] };
+      if (sql.includes('FROM campaign_events')) return { rows: [] };
+      if (sql.includes('COUNT(*)::int AS total')) {
+        return { rows: [{ total: 7, sent: 2, remaining: 3, failed: 1, skipped: 1, canceled: 0 }] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  };
+  const service = createCampaignService({ database });
+  const detail = await service.get('user-1', campaign.id);
+  assert.deepEqual(detail.delivery_progress, {
+    total: 7,
+    sent: 2,
+    remaining: 3,
+    failed: 1,
+    skipped: 1,
+    canceled: 0,
+  });
+  assert.equal(detail.media[0].original_name, expectedName);
 });
 
 test('failed campaign media DB insert rolls back and removes the written file', async () => {
@@ -310,7 +365,7 @@ test('Baileys sends campaign PDF as a named WhatsApp document', async () => {
       client: { sendMessage: async (...args) => { sent.push(args); return { key: { id: 'pdf-1' } }; } },
     }, '966551234567@s.whatsapp.net', {
       kind: 'document',
-      original_name: 'العرض.pdf',
+      original_name: Buffer.from('العرض.pdf', 'utf8').toString('latin1'),
       mime_type: 'application/pdf',
       storage_path: storagePath,
     });
