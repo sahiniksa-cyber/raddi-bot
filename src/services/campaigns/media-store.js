@@ -33,6 +33,27 @@ function assertInsideRoot(candidate) {
   return resolved;
 }
 
+function normalizeUploadFilename(value, fallback = 'document.pdf') {
+  let filename = path.basename(String(value || '').replace(/\\/g, '/'))
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .normalize('NFC');
+
+  // Busboy/Multer can expose UTF-8 filename bytes as Latin-1. Decode only
+  // when every source character is byte-sized and the result is valid Arabic,
+  // so already-correct Arabic, emoji and ordinary Latin filenames stay intact.
+  if (filename && [...filename].every(character => character.codePointAt(0) <= 0xff)) {
+    const decoded = Buffer.from(filename, 'latin1').toString('utf8').normalize('NFC');
+    if (!decoded.includes('\ufffd') && /[\u0600-\u06ff]/.test(decoded)) filename = decoded;
+  }
+
+  if (!filename || filename === '.' || filename === '..') filename = fallback;
+  const extension = path.extname(filename).slice(0, 20);
+  const stemLimit = Math.max(1, 255 - [...extension].length);
+  const stem = [...filename.slice(0, filename.length - extension.length)].slice(0, stemLimit).join('');
+  return `${stem}${extension}` || fallback;
+}
+
 function hasValidSignature(buffer, mimeType) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 12) return false;
   if (mimeType === 'image/jpeg') return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
@@ -123,7 +144,7 @@ async function saveCampaignMedia({ database = db, userId, campaignId, files = []
              campaign_id, user_id, kind, original_name, mime_type, storage_path,
              size_bytes, sha256, sort_order
            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, kind, original_name, mime_type, size_bytes, sha256, sort_order, created_at`,
-          [campaignId, userId, type.kind, String(file.originalname || filename).slice(0, 255),
+          [campaignId, userId, type.kind, normalizeUploadFilename(file.originalname, filename),
             mimeType, storagePath, file.buffer.length, sha256, nextOrder + index],
         );
         saved.push({ ...result.rows[0], storage_path: storagePath });
@@ -190,5 +211,6 @@ module.exports = {
   deleteCampaignMedia,
   hasValidSignature,
   mediaRoot,
+  normalizeUploadFilename,
   saveCampaignMedia,
 };

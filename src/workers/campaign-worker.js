@@ -9,6 +9,7 @@ const { CAMPAIGN_QUEUE_NAME, enqueueCampaignRecipient } = require('../queues/cam
 const { checkMessageQuota, decrementMessageQuota } = require('../services/billing/message-quota');
 const { buildProductCatalog } = require('../services/products/product-knowledge');
 const { normalizeAudienceRules } = require('../services/campaigns/campaign-service');
+const { normalizeUploadFilename } = require('../services/campaigns/media-store');
 const {
   INTEREST_RE,
   ORDER_CLAIM_RE,
@@ -130,6 +131,10 @@ async function recoverCampaignDeliveries({ database = db, campaignQueue, staleMs
 
 async function sendMedia(bot, sender, media) {
   const buffer = await fs.readFile(media.storage_path);
+  const originalName = normalizeUploadFilename(
+    media.original_name,
+    media.kind === 'document' ? 'document.pdf' : 'media',
+  );
   const target = bot.whatsappEngine === 'whatsapp-web'
     ? String(sender).replace(/@s\.whatsapp\.net$/i, '@c.us')
     : sender;
@@ -141,13 +146,13 @@ async function sendMedia(bot, sender, media) {
         : {
             document: buffer,
             mimetype: media.mime_type,
-            fileName: media.original_name || 'document.pdf',
+            fileName: originalName,
           };
     return bot.client.sendMessage(target, content);
   }
   const { MessageMedia } = require('whatsapp-web.js');
   const encoded = buffer.toString('base64');
-  const payload = new MessageMedia(media.mime_type, encoded, media.original_name);
+  const payload = new MessageMedia(media.mime_type, encoded, originalName);
   return bot.client.sendMessage(target, payload);
 }
 
