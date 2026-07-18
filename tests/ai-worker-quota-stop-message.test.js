@@ -113,11 +113,7 @@ stub(path.resolve(__dirname, '..', 'src', 'db', 'client.js'), dbMock);
 
 // runtime-bot — minimal config, learning off.
 stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'runtime-bot.js'), {
-  resolveConfigForAI: async () => ({
-    learningEnabled: false,
-    memoryMessages: 50,
-    storeDescription: 'متجر تجريبي للاختبار',
-  }),
+  resolveConfigForAI: async () => ({ learningEnabled: false, memoryMessages: 50 }),
 });
 
 // platform-features — no auto/instant replies.

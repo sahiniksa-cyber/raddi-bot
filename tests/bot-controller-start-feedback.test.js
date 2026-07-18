@@ -108,3 +108,75 @@ test('start keeps using startBot for non-reconnecting states', async () => {
   assert.equal(startCalled, true);
   assert.equal(restartCalled, false);
 });
+
+test('auto-reply switch persists independently without stopping WhatsApp', async () => {
+  let saved = 0;
+  let stopped = 0;
+  let started = 0;
+  const queries = [];
+  const bot = {
+    config: { autoReplyEnabled: true },
+    appState: { status: 'connected' },
+    sessionDesiredState: 'running',
+    saveConfig: async () => { saved += 1; },
+    stopBot: async () => { stopped += 1; },
+    startBot: async () => { started += 1; },
+  };
+  const controller = createBotController({
+    getUserBot: () => bot,
+    database: {
+      isConfigured: () => true,
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        return { rows: [{ id: 'message-1' }], rowCount: 1 };
+      },
+    },
+  });
+  const res = createResponse();
+
+  await controller.setAutoReply({
+    session: { userId: 'user-1' },
+    body: { enabled: false },
+  }, res);
+
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.autoReplyEnabled, false);
+  assert.equal(res.body.whatsappStatus, 'connected');
+  assert.equal(res.body.desiredState, 'running');
+  assert.equal(bot.config.autoReplyEnabled, false);
+  assert.equal(saved, 1);
+  assert.equal(stopped, 0);
+  assert.equal(started, 0);
+  assert.ok(queries.some(query => /status = 'auto_reply_disabled'/.test(query.sql)));
+});
+
+test('auto-reply switch rejects an ambiguous value', async () => {
+  const controller = createBotController({
+    getUserBot: () => { throw new Error('must not load bot'); },
+  });
+  const res = createResponse();
+
+  await controller.setAutoReply({
+    session: { userId: 'user-1' },
+    body: { enabled: 'false' },
+  }, res);
+
+  assert.equal(res.code, 400);
+  assert.equal(res.body.success, false);
+});
+
+test('status exposes auto-reply separately from the connected WhatsApp state', () => {
+  const controller = createBotController({
+    getUserBot: () => ({
+      config: { autoReplyEnabled: false },
+      appState: { status: 'connected', qrString: null, logs: [] },
+      totalChatsHandled: 0,
+    }),
+  });
+  const res = createResponse();
+
+  controller.status({ session: { userId: 'user-1' } }, res);
+
+  assert.equal(res.body.status, 'connected');
+  assert.equal(res.body.autoReplyEnabled, false);
+});

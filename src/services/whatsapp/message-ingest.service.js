@@ -5,6 +5,7 @@ const { enqueueAiReply, enqueueOutgoingWhatsapp, resolveDebounceMs } = require('
 const escalationBridge = require('../escalation/escalation-bridge');
 const promptEditService = require('../prompt-edit/prompt-edit.service');
 const { isCustomerBlocked } = require('./do-not-reply');
+const { isAutoReplyEnabled } = require('../bot/auto-reply-control');
 
 // Builds an AIClient bound to a merchant's config — used by the prompt-edit
 // handler to smart-merge edits. Lazy-required to avoid a heavy import on the
@@ -359,12 +360,39 @@ class MessageIngestService {
     // config can never break ingest or silently block a customer.
     let delay;
     let blocked = false;
+    let autoReplyEnabled = true;
     try {
       const cfg = await this.configLoader(userId);
       delay = resolveDebounceMs(cfg);
       blocked = isCustomerBlocked(cfg, sender, saved.phoneNumber || phoneNumber);
+      autoReplyEnabled = isAutoReplyEnabled(cfg);
     } catch (_) {
       delay = resolveDebounceMs();
+    }
+
+    // Global auto-reply switch: store the customer's message and keep all
+    // campaign classification data flowing, but do not create an AI job.
+    // WhatsApp itself remains connected, so campaigns and manual sends keep
+    // working. The terminal status prevents ai-recovery from answering later
+    // when the merchant turns auto-reply back on.
+    if (!autoReplyEnabled) {
+      await this.db.query(
+        `UPDATE messages SET status = 'auto_reply_disabled',
+           raw_payload = COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}'
+         WHERE id = $1 AND user_id = $2`,
+        [saved.messageId, userId],
+      );
+      this.logger.info?.('message', `auto-reply disabled — inbound from ${sender} stored without AI enqueue`);
+      return {
+        accepted: true,
+        statusCode: 200,
+        userId,
+        sender,
+        providerMessageId,
+        conversationId: saved.conversationId,
+        messageId: saved.messageId,
+        reason: 'auto_reply_disabled',
+      };
     }
 
     // Do-not-reply: the merchant asked the bot to stay silent for this customer.

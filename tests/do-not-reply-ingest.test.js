@@ -79,6 +79,37 @@ test('fail-open: if config cannot be read, the customer is NOT blocked (bot keep
   assert.equal(enqueued.length, 1, 'a config error must never silently block a customer');
 });
 
+test('global auto-reply off stores inbound but never queues AI', async () => {
+  const { service, enqueued, topLevelQueries } = makeService(async () => ({
+    autoReplyEnabled: false,
+    doNotReplyList: [],
+  }));
+
+  const res = await service.ingestWhatsappMessage({
+    userId: 'u1',
+    msg: BLOCKED_MSG,
+    source: 'baileys',
+  });
+
+  assert.equal(res.accepted, true);
+  assert.equal(res.reason, 'auto_reply_disabled');
+  assert.equal(enqueued.length, 0);
+  const marked = topLevelQueries.find(query =>
+    /UPDATE messages SET status = 'auto_reply_disabled'/.test(query.sql));
+  assert.ok(marked, 'disabled auto-reply must be terminal so recovery cannot answer later');
+  assert.deepEqual(marked.params, ['msg-1', 'u1']);
+});
+
+test('global auto-reply defaults on when the merchant never used the switch', async () => {
+  const { service, enqueued } = makeService(async () => ({
+    doNotReplyList: [],
+  }));
+
+  await service.ingestWhatsappMessage({ userId: 'u1', msg: BLOCKED_MSG, source: 'baileys' });
+
+  assert.equal(enqueued.length, 1);
+});
+
 test('dashboard exposes a doNotReplyList control', () => {
   const html = fs.readFileSync(path.resolve(__dirname, '../dashboard/index.html'), 'utf8');
   assert.ok(html.includes('doNotReplyList'), 'dashboard must contain a doNotReplyList control');

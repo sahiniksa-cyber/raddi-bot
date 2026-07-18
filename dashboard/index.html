@@ -1046,13 +1046,14 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   <div class="cscreen" id="sc-connected" style="display:none">
     <div class="conn-card">
       <span class="big-icon">✅</span>
-      <div class="ctitle" style="color:var(--green2)">جواب متصل ويشتغل!</div>
-      <div class="csub">البوت يرد الآن على عملاء متجرك تلقائياً</div>
+      <div class="ctitle" style="color:var(--green2)">واتساب متصل ويعمل</div>
+      <div class="csub" id="connectedReplyStatus">رد البوت على العملاء يعمل الآن</div>
       <div class="phone-pill" id="phonePill">—</div><br>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">
         <button class="green-btn" onclick="goTab('settings')">⚙️ إعداد البوت</button>
-        <button class="red-btn" onclick="botStop(this)">⏹ إيقاف البوت</button>
+        <button class="red-btn" id="connectedAutoReplyBtn" onclick="toggleBotAutoReply(this)">⏸ إيقاف رد البوت</button>
       </div>
+      <div class="hint" style="margin-top:12px">إيقاف الرد لا يفصل واتساب؛ الحملات والرسائل اليدوية تستمر.</div>
     </div>
   </div>
 
@@ -1173,10 +1174,11 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     <div class="bot-ctrl-info">
       <div class="bcdot" id="ctrlDot"></div>
       <span class="bc-label" id="ctrlStatusTxt">⏹ متوقف</span>
+      <span class="bc-label" id="ctrlReplyTxt">— رد البوت يعمل</span>
     </div>
     <div class="ctrl-btns">
       <button class="ctrl-start" id="ctrlStartBtn" onclick="botStart(this)">▶ تشغيل</button>
-      <button class="ctrl-stop" id="ctrlStopBtn" onclick="botStop(this)" style="display:none">⏹ إيقاف</button>
+      <button class="ctrl-stop" id="ctrlAutoReplyBtn" onclick="toggleBotAutoReply(this)">⏸ إيقاف رد البوت</button>
     </div>
   </div>
 
@@ -2060,7 +2062,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
         <button class="ghost-btn" id="accWaStart" onclick="botStart(this)">تشغيل / إعادة اتصال</button>
-        <button class="ghost-btn" id="accWaStop" onclick="botStop(this)">إيقاف مؤقت</button>
+        <button class="ghost-btn" id="accWaStop" onclick="botStop(this)">فصل اتصال واتساب مؤقتاً</button>
         <button class="ghost-btn" id="accWaClear" onclick="clearSession()">مسح الربط بالكامل</button>
       </div>
     </div>
@@ -2331,9 +2333,44 @@ async function botStart(src){
 }
 async function botStop(src){
   _disableBtn(src,5000);
-  _disableBtn(document.getElementById('ctrlStopBtn'),5000);
   try{await fetch('/api/bot/stop',{method:'POST'});}catch(_){}
   setTimeout(poll,800);
+}
+async function toggleBotAutoReply(src){
+  const enable = lastAutoReplyEnabled === false;
+  const buttons=[document.getElementById('connectedAutoReplyBtn'),document.getElementById('ctrlAutoReplyBtn')]
+    .filter((btn,index,list)=>btn&&list.indexOf(btn)===index);
+  buttons.forEach(btn=>{btn.disabled=true;});
+  if(src)src.textContent='⏳ جاري الحفظ...';
+  try{
+    const r=await fetch('/api/bot/auto-reply',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled:enable})
+    });
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.success===false){
+      toast('تعذر تغيير حالة رد البوت: '+(d.message||r.status),true);
+      return;
+    }
+    lastAutoReplyEnabled=d.autoReplyEnabled!==false;
+    renderBotAutoReplyState({
+      status:lastStatus||d.whatsappStatus||'connected',
+      autoReplyEnabled:lastAutoReplyEnabled
+    });
+    toast(lastAutoReplyEnabled
+      ? 'تم تشغيل رد البوت. اتصال واتساب والحملات مستمران.'
+      : 'تم إيقاف رد البوت فقط. واتساب بقي متصلاً والحملات مستمرة.');
+  }catch(e){
+    toast('تعذر تغيير حالة رد البوت: '+e.message,true);
+  }finally{
+    buttons.forEach(btn=>{btn.disabled=false;});
+    renderBotAutoReplyState({
+      status:lastStatus||'connected',
+      autoReplyEnabled:lastAutoReplyEnabled!==false
+    });
+    setTimeout(poll,500);
+  }
 }
 async function botRestart(src){
   _disableBtn(src,9000);
@@ -2397,6 +2434,7 @@ function setModel(m){
 
 // ── STATUS POLL ──
 let lastQrVersion=0;
+let lastAutoReplyEnabled=null;
 let lastAutoRestartAt=0;
 function updateLiveLogs(logs){
   if(!logs?.length)return;
@@ -2444,6 +2482,30 @@ function maybeRecoverStuckConnecting(d){
   lastAutoRestartAt=Date.now();
   toast('الاتصال أخذ وقت طويل. إذا بقيت الحالة كما هي اضغط إعادة التهيئة يدوياً.', true);
 }
+function renderBotAutoReplyState(d={}){
+  const enabled=d.autoReplyEnabled!==false;
+  const connected=d.status==='connected';
+  const connectedText=document.getElementById('connectedReplyStatus');
+  const connectedBtn=document.getElementById('connectedAutoReplyBtn');
+  const ctrlReplyTxt=document.getElementById('ctrlReplyTxt');
+  const ctrlBtn=document.getElementById('ctrlAutoReplyBtn');
+  if(connectedText)connectedText.textContent=enabled
+    ? 'رد البوت على العملاء يعمل الآن'
+    : 'رد البوت موقوف، لكن واتساب متصل والحملات مستمرة';
+  if(connectedBtn){
+    connectedBtn.textContent=enabled?'⏸ إيقاف رد البوت':'▶ تشغيل رد البوت';
+    connectedBtn.className=enabled?'red-btn':'green-btn';
+  }
+  if(ctrlReplyTxt){
+    ctrlReplyTxt.textContent=enabled?'— رد البوت يعمل':'— رد البوت موقوف والحملات تعمل';
+    ctrlReplyTxt.style.color=enabled?'var(--green2)':'var(--amber)';
+  }
+  if(ctrlBtn){
+    ctrlBtn.textContent=enabled?'⏸ إيقاف رد البوت':'▶ تشغيل رد البوت';
+    ctrlBtn.className=enabled?'ctrl-stop':'ctrl-start';
+    ctrlBtn.style.display=connected?'':'none';
+  }
+}
 async function poll(){
   try{
     const r=await fetch('/api/status');
@@ -2453,11 +2515,13 @@ async function poll(){
     updateAccountConnection(d);
     maybeRecoverStuckConnecting(d);
     const qv=d.qrVersion||0;
-    if(d.status===lastStatus&&qv===lastQrVersion)return;
-    lastStatus=d.status;lastQrVersion=qv;
+    const autoReplyEnabled=d.autoReplyEnabled!==false;
+    renderBotAutoReplyState(d);
+    if(d.status===lastStatus&&qv===lastQrVersion&&autoReplyEnabled===lastAutoReplyEnabled)return;
+    lastStatus=d.status;lastQrVersion=qv;lastAutoReplyEnabled=autoReplyEnabled;
     const dot=document.getElementById('sDot'),txt=document.getElementById('sTxt');
     const ctrlTxt=document.getElementById('ctrlStatusTxt'),ctrlDot=document.getElementById('ctrlDot');
-    const startBtn=document.getElementById('ctrlStartBtn'),stopBtn=document.getElementById('ctrlStopBtn');
+    const startBtn=document.getElementById('ctrlStartBtn');
     const S={
       stopped:     {sc:'stopped',     dc:'gray',   badge:'متوقف',           ctrl:'⏹ متوقف',      cd:'',    showS:true, showX:false},
       waiting_qr:  {sc:'waiting',     dc:'blink',  badge:'جاري التشغيل...', ctrl:'⏳ يعمل...',    cd:'pulse',showS:false,showX:true},
@@ -2475,7 +2539,6 @@ async function poll(){
     if(ctrlTxt)ctrlTxt.textContent=s.ctrl;
     if(ctrlDot)ctrlDot.className='bcdot '+(s.cd||'');
     if(startBtn)startBtn.style.display=s.showS?'':'none';
-    if(stopBtn)stopBtn.style.display=s.showX?'':'none';
     if(d.status==='connected'){
       const ph=d.phone?'+'+d.phone:'—';
       ['phonePill','stPhone'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=ph;});
