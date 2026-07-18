@@ -13,6 +13,7 @@ let campaignHistoryPollTimer = null;
 let campaignHistoryCountdownTimer = null;
 let campaignHistoryCurrentStatus = null;
 let campaignHistoryQrVersion = 0;
+let campaignMediaUploadPromise = null;
 
 function campaignFlash(message, error = false) {
   const el = document.getElementById('campaignFlash');
@@ -34,6 +35,12 @@ async function campaignApi(url, options = {}) {
 }
 
 function campaignGoStep(step) {
+  const activePage = document.querySelector('[data-campaign-page].active');
+  const pendingMedia = document.getElementById('campaignMedia')?.files?.length || 0;
+  if (activePage?.dataset.campaignPage === 'content' && step !== 'content' && pendingMedia > 0) {
+    campaignFlash('الملف مختار لكنه لم يُرفع بعد. اضغط «حفظ والمتابعة» لرفعه تلقائياً قبل الانتقال.', true);
+    return false;
+  }
   campaignVisited.add(step);
   document.querySelectorAll('[data-campaign-page]').forEach(el => el.classList.toggle('active', el.dataset.campaignPage === step));
   document.querySelectorAll('[data-campaign-step]').forEach(el => {
@@ -43,6 +50,7 @@ function campaignGoStep(step) {
   if (step === 'review') campaignRenderReview();
   if (step === 'content') void campaignRefreshContentPreview();
   window.scrollTo(0, 0);
+  return true;
 }
 
 function campaignFormPayload() {
@@ -87,7 +95,10 @@ async function campaignSave() {
 async function campaignSaveAndNext(step) {
   try {
     await campaignSave();
-    campaignFlash('تم حفظ المسودة');
+    const uploadedCount = await campaignUploadPendingMedia();
+    campaignFlash(uploadedCount
+      ? `تم حفظ المسودة ورفع ${uploadedCount} مرفق بنجاح`
+      : 'تم حفظ المسودة');
     campaignGoStep(step);
   } catch (error) { campaignFlash(error.message, true); }
 }
@@ -104,6 +115,7 @@ function campaignNew() {
   document.querySelector('input[name="campaignSource"][value="contacts"]').checked = true;
   document.getElementById('campaignSavedAudienceOption').hidden = true;
   document.getElementById('campaignMediaList').innerHTML = '';
+  document.getElementById('campaignMedia').value = '';
   document.getElementById('campaignPicker').value = '';
   document.getElementById('campaignKeywordInput').value = '';
   document.getElementById('campaignKeywordPreview').style.display = 'none';
@@ -392,6 +404,7 @@ async function campaignOpen(id) {
   if (!id) return;
   try {
     const data = await campaignApi(`/api/campaigns/${id}`);
+    document.getElementById('campaignMedia').value = '';
     campaignFill(data.campaign);
     campaignGoStep('audience');
   } catch (error) { campaignFlash(error.message, true); }
@@ -453,8 +466,13 @@ function campaignRenderContentPreview() {
     : mediaCount === 1
       ? 'صورة أو فيديو واحد'
       : `${mediaCount} مرفقات${documentCount ? `، منها ${documentCount} PDF` : ''}`;
+  if (selectedItems.length) mediaLabel.textContent += ` · ${selectedItems.length} بانتظار الرفع`;
   audienceCount.textContent = String(campaignAudienceCount);
-  itemsCount.textContent = mediaCount ? `نص + ${mediaCount} وسائط لكل عميل` : 'نص واحد لكل عميل';
+  itemsCount.textContent = selectedItems.length
+    ? `${selectedItems.length} مرفق بانتظار الرفع`
+    : mediaCount
+      ? `نص + ${mediaCount} وسائط لكل عميل`
+      : 'نص واحد لكل عميل';
 }
 
 async function campaignRefreshContentPreview() {
@@ -539,17 +557,38 @@ async function campaignLoadSignals() {
   }
 }
 
+async function campaignUploadPendingMedia() {
+  const input = document.getElementById('campaignMedia');
+  const files = [...(input?.files || [])];
+  if (!files.length) return 0;
+  if (campaignMediaUploadPromise) return campaignMediaUploadPromise;
+
+  campaignMediaUploadPromise = (async () => {
+    if (!campaignCurrent) await campaignSave();
+    const form = new FormData();
+    files.forEach(file => form.append('media', file));
+    const result = await campaignApi(`/api/campaigns/${campaignCurrent.id}/media`, { method: 'POST', body: form });
+    input.value = '';
+    const detail = await campaignApi(`/api/campaigns/${campaignCurrent.id}`);
+    campaignFill(detail.campaign);
+    await campaignLoadList();
+    return Array.isArray(result.media) ? result.media.length : files.length;
+  })();
+
+  try {
+    return await campaignMediaUploadPromise;
+  } finally {
+    campaignMediaUploadPromise = null;
+  }
+}
+
 async function campaignUploadMedia() {
   try {
-    if (!campaignCurrent) await campaignSave();
     const input = document.getElementById('campaignMedia');
     if (!input.files.length) throw new Error('اختر صورة أو فيديو أو مستند PDF أولاً');
-    const form = new FormData(); [...input.files].forEach(file => form.append('media', file));
-    await campaignApi(`/api/campaigns/${campaignCurrent.id}/media`, { method: 'POST', body: form });
-    input.value = '';
-    await campaignOpen(campaignCurrent.id);
+    const uploadedCount = await campaignUploadPendingMedia();
     campaignGoStep('content');
-    campaignFlash('تم رفع المرفقات');
+    campaignFlash(`تم رفع ${uploadedCount} مرفق بنجاح`);
   } catch (error) { campaignFlash(error.message, true); }
 }
 
