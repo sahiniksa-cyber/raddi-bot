@@ -172,12 +172,43 @@ test('saving campaign content uploads pending media before moving to the next st
 
 test('saved campaigns are explained below the campaign workflow', () => {
   const savedIndex = campaignMarkup.indexOf('class="campaign-saved-card"');
-  const workflowEnd = campaignMarkup.lastIndexOf('</main>');
+  const workflowStart = campaignMarkup.indexOf('class="campaign-card"');
+  const workflowEnd = campaignMarkup.indexOf('</main>', workflowStart);
   assert.ok(savedIndex > workflowEnd);
   assert.match(campaignMarkup, /افتح حملة سابقة لإكمالها أو تعديلها/);
   assert.equal((campaignMarkup.match(/id="campaignPicker"/g) || []).length, 1);
   assert.match(campaignMarkup, /campaign-saved-actions\{display:grid/);
   assert.match(campaignMarkup, /campaign-saved-card\{margin:16px 236px 0 0/);
+});
+
+test('campaign archive shows outcomes and paginated customer numbers', () => {
+  for (const id of [
+    'campaignBuilderWorkspace',
+    'campaignArchiveWorkspace',
+    'campaignArchiveList',
+    'campaignArchiveDetail',
+    'campaignArchiveCount',
+  ]) {
+    assert.match(campaignMarkup, new RegExp(`id="${id}"`));
+  }
+  assert.match(campaignMarkup, /الحملات السابقة/);
+  assert.match(campaignMarkup, /اختر حملة لعرض ما حدث وأرقام العملاء/);
+  assert.match(js, /\/api\/campaigns\/archive/);
+  assert.match(js, /\/api\/campaigns\/\$\{campaignId\}\/recipients/);
+  assert.match(js, /تم الإرسال لهم/);
+  assert.match(js, /فشل الإرسال/);
+  assert.match(js, /campaignLoadArchiveRecipients/);
+  assert.match(js, /campaignArchivePage/);
+  assert.match(js, /campaignSyncArchivePolling/);
+});
+
+test('campaign archive APIs are mounted before the campaign id detail route', () => {
+  const routes = fs.readFileSync(path.join(root, 'src', 'routes', 'campaign.routes.js'), 'utf8');
+  const archiveRoute = routes.indexOf("router.get('/api/campaigns/archive'");
+  const recipientsRoute = routes.indexOf("router.get('/api/campaigns/:id/recipients'");
+  const detailRoute = routes.indexOf("router.get('/api/campaigns/:id'");
+  assert.ok(archiveRoute > 0 && archiveRoute < detailRoute);
+  assert.ok(recipientsRoute > 0 && recipientsRoute < detailRoute);
 });
 
 test('every inline campaign control points to an implemented function', () => {

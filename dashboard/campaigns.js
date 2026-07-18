@@ -15,6 +15,13 @@ let campaignHistoryCurrentStatus = null;
 let campaignHistoryQrVersion = 0;
 let campaignMediaUploadPromise = null;
 let campaignProgressPollTimer = null;
+let campaignArchiveCampaigns = [];
+let campaignArchiveSelectedId = null;
+let campaignArchiveRecipientPage = 1;
+let campaignArchiveRecipientStatus = 'all';
+let campaignArchiveRecipientSearch = '';
+let campaignArchivePollTimer = null;
+let campaignArchiveLoading = false;
 
 function campaignFlash(message, error = false) {
   const el = document.getElementById('campaignFlash');
@@ -178,6 +185,253 @@ function campaignFill(campaign) {
 
 function campaignEscape(value) {
   return String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+}
+
+function campaignStatusLabel(status) {
+  return ({
+    draft: 'مسودة',
+    ready_for_approval: 'جاهزة للمراجعة',
+    approved: 'معتمدة ولم تبدأ',
+    scheduled: 'مجدولة',
+    sending: 'جارٍ الإرسال',
+    paused: 'متوقفة مؤقتاً',
+    completed: 'مكتملة',
+    canceled: 'ملغاة',
+    failed: 'متوقفة بسبب خطأ',
+  })[status] || status || 'غير معروفة';
+}
+
+function campaignRecipientStatusLabel(status) {
+  return ({
+    pending: 'بانتظار الإرسال',
+    queued: 'مجدول للإرسال',
+    sending: 'جارٍ الإرسال',
+    sent: 'تم الإرسال',
+    failed: 'فشل الإرسال',
+    skipped: 'تم التجاوز',
+    canceled: 'أُلغي قبل الإرسال',
+  })[status] || status || 'غير معروفة';
+}
+
+function campaignFormatDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString('ar-SA', {
+    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function campaignShowWorkspace(workspace) {
+  const archive = workspace === 'archive';
+  const builder = document.getElementById('campaignBuilderWorkspace');
+  const history = document.getElementById('campaignArchiveWorkspace');
+  const builderTab = document.getElementById('campaignBuilderTab');
+  const archiveTab = document.getElementById('campaignArchiveTab');
+  if (builder) builder.hidden = archive;
+  if (history) history.hidden = !archive;
+  builderTab?.classList.toggle('active', !archive);
+  archiveTab?.classList.toggle('active', archive);
+  if (archive) {
+    void campaignLoadArchive();
+    campaignSyncArchivePolling();
+  } else {
+    campaignStopArchivePolling();
+  }
+}
+
+function campaignStopArchivePolling() {
+  if (campaignArchivePollTimer && typeof window.clearInterval === 'function') {
+    window.clearInterval(campaignArchivePollTimer);
+  }
+  campaignArchivePollTimer = null;
+}
+
+function campaignSyncArchivePolling() {
+  campaignStopArchivePolling();
+  const workspace = document.getElementById('campaignArchiveWorkspace');
+  if (!workspace || workspace.hidden) return;
+  if (!campaignArchiveCampaigns.some(item => ['scheduled', 'sending'].includes(item.status))) return;
+  if (typeof window.setInterval !== 'function') return;
+  campaignArchivePollTimer = window.setInterval(() => {
+    const campaignView = document.getElementById('view-campaigns');
+    if (campaignView && !campaignView.classList.contains('active')) {
+      campaignStopArchivePolling();
+      return;
+    }
+    void campaignLoadArchive({ preserveSelection: true });
+  }, 3000);
+}
+
+function campaignArchiveProgress(campaign) {
+  const progress = campaign?.delivery_progress || {};
+  const total = Number(progress.total ?? campaign?.audience_count) || 0;
+  const sent = Number(progress.sent ?? campaign?.sent_count) || 0;
+  const remaining = Math.max(0, Number(progress.remaining) || 0);
+  const failed = Number(progress.failed ?? campaign?.failed_count) || 0;
+  const skipped = Number(progress.skipped ?? campaign?.skipped_count) || 0;
+  const canceled = Number(progress.canceled) || 0;
+  return { total, sent, remaining, failed, skipped, canceled };
+}
+
+function campaignRenderArchiveList() {
+  const list = document.getElementById('campaignArchiveList');
+  const count = document.getElementById('campaignArchiveCount');
+  if (count) count.textContent = campaignArchiveCampaigns.length ? `(${campaignArchiveCampaigns.length.toLocaleString('ar-EG')})` : '';
+  if (!list) return;
+  if (!campaignArchiveCampaigns.length) {
+    list.innerHTML = '<div class="campaign-archive-empty">لا توجد حملات محفوظة حتى الآن.</div>';
+    return;
+  }
+  list.innerHTML = campaignArchiveCampaigns.map(item => {
+    const progress = campaignArchiveProgress(item);
+    return `<button type="button" class="campaign-archive-item${item.id === campaignArchiveSelectedId ? ' active' : ''}" onclick="campaignOpenArchive('${item.id}')">
+      <span class="campaign-archive-item-top"><b>${campaignEscape(item.name)}</b><span class="campaign-status-badge ${campaignEscape(item.status)}">${campaignEscape(campaignStatusLabel(item.status))}</span></span>
+      <p>تم الإرسال: ${progress.sent.toLocaleString('ar-EG')} من ${progress.total.toLocaleString('ar-EG')} · ${campaignEscape(campaignFormatDate(item.started_at || item.created_at))}</p>
+    </button>`;
+  }).join('');
+}
+
+async function campaignLoadArchive(options = {}) {
+  if (campaignArchiveLoading) return;
+  campaignArchiveLoading = true;
+  try {
+    const data = await campaignApi('/api/campaigns/archive');
+    campaignArchiveCampaigns = Array.isArray(data.campaigns) ? data.campaigns : [];
+    const selectedStillExists = campaignArchiveCampaigns.some(item => item.id === campaignArchiveSelectedId);
+    if (!options.preserveSelection || !selectedStillExists) {
+      const preferred = campaignArchiveCampaigns.find(item => ['scheduled', 'sending', 'paused'].includes(item.status))
+        || campaignArchiveCampaigns[0];
+      campaignArchiveSelectedId = preferred?.id || null;
+    }
+    campaignRenderArchiveList();
+    if (campaignArchiveSelectedId) await campaignRenderArchiveDetail(campaignArchiveSelectedId);
+    else {
+      const detail = document.getElementById('campaignArchiveDetail');
+      if (detail) detail.innerHTML = '<div class="campaign-archive-empty">لا توجد حملات محفوظة حتى الآن.</div>';
+    }
+    campaignSyncArchivePolling();
+  } catch (error) {
+    const list = document.getElementById('campaignArchiveList');
+    if (list) list.innerHTML = `<div class="campaign-archive-empty">${campaignEscape(error.message)}</div>`;
+  } finally {
+    campaignArchiveLoading = false;
+  }
+}
+
+async function campaignOpenArchive(campaignId) {
+  campaignArchiveSelectedId = campaignId;
+  campaignArchiveRecipientPage = 1;
+  campaignArchiveRecipientStatus = 'all';
+  campaignArchiveRecipientSearch = '';
+  campaignRenderArchiveList();
+  await campaignRenderArchiveDetail(campaignId);
+}
+
+async function campaignOpenFromArchive(campaignId) {
+  campaignShowWorkspace('builder');
+  await campaignOpen(campaignId);
+  if (campaignCurrent?.id === campaignId && ['scheduled', 'sending', 'paused', 'completed', 'canceled', 'failed'].includes(campaignCurrent.status)) {
+    campaignGoStep('review');
+  }
+}
+
+async function campaignRenderArchiveDetail(campaignId) {
+  const campaign = campaignArchiveCampaigns.find(item => item.id === campaignId);
+  const detail = document.getElementById('campaignArchiveDetail');
+  if (!campaign || !detail) return;
+  const progress = campaignArchiveProgress(campaign);
+  const notSent = progress.failed + progress.skipped + progress.canceled;
+  const percent = progress.total ? Math.min(100, Math.max(0, (progress.sent / progress.total) * 100)) : 0;
+  const message = campaign.message_text || '(الحملة بدون نص)';
+  const completedLine = campaign.completed_at
+    ? ` · اكتملت ${campaignFormatDate(campaign.completed_at)}`
+    : '';
+  detail.innerHTML = `
+    <div class="campaign-archive-title-row">
+      <div><h3>${campaignEscape(campaign.name)}</h3><p>بدأت ${campaignEscape(campaignFormatDate(campaign.started_at || campaign.scheduled_at || campaign.created_at))}${campaignEscape(completedLine)}</p></div>
+      <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><span class="campaign-status-badge ${campaignEscape(campaign.status)}">${campaignEscape(campaignStatusLabel(campaign.status))}</span><button type="button" class="campaign-archive-refresh" onclick="campaignOpenFromArchive('${campaign.id}')">فتح وإدارة الحملة</button></div>
+    </div>
+    <div class="campaign-archive-metrics">
+      <div class="campaign-archive-metric"><strong>${progress.total.toLocaleString('ar-EG')}</strong><span>إجمالي العملاء</span></div>
+      <div class="campaign-archive-metric"><strong>${progress.sent.toLocaleString('ar-EG')}</strong><span>تم الإرسال لهم</span></div>
+      <div class="campaign-archive-metric"><strong>${progress.remaining.toLocaleString('ar-EG')}</strong><span>متبقٍ</span></div>
+      <div class="campaign-archive-metric"><strong>${progress.failed.toLocaleString('ar-EG')}</strong><span>فشل الإرسال</span></div>
+      <div class="campaign-archive-metric"><strong>${(progress.skipped + progress.canceled).toLocaleString('ar-EG')}</strong><span>تم تجاوزهم أو إلغاؤهم</span></div>
+    </div>
+    <div class="campaign-progress-track" aria-label="نسبة من تم الإرسال لهم"><div class="campaign-progress-bar" style="width:${percent}%"></div></div>
+    <div class="campaign-progress-details">تم الإرسال: ${progress.sent.toLocaleString('ar-EG')} · المتبقي: ${progress.remaining.toLocaleString('ar-EG')} · لم يُرسل نهائياً: ${notSent.toLocaleString('ar-EG')}</div>
+    ${campaign.last_error ? `<div class="campaign-archive-error"><b>آخر سبب مسجل:</b> ${campaignEscape(campaign.last_error)}</div>` : ''}
+    <h4 style="margin:16px 0 7px;font-size:12px">نص الحملة</h4>
+    <div class="campaign-archive-message">${campaignEscape(message)}</div>
+    <div class="campaign-recipient-tools">
+      <input id="campaignRecipientSearch" value="${campaignEscape(campaignArchiveRecipientSearch)}" placeholder="ابحث برقم العميل أو اسمه" onkeydown="if(event.key==='Enter')campaignFilterRecipients()">
+      <select id="campaignRecipientStatus" onchange="campaignFilterRecipients()">
+        <option value="all"${campaignArchiveRecipientStatus === 'all' ? ' selected' : ''}>كل الحالات</option>
+        <option value="sent"${campaignArchiveRecipientStatus === 'sent' ? ' selected' : ''}>تم الإرسال</option>
+        <option value="pending"${campaignArchiveRecipientStatus === 'pending' ? ' selected' : ''}>بانتظار الإرسال</option>
+        <option value="queued"${campaignArchiveRecipientStatus === 'queued' ? ' selected' : ''}>مجدول للإرسال</option>
+        <option value="sending"${campaignArchiveRecipientStatus === 'sending' ? ' selected' : ''}>جارٍ الإرسال</option>
+        <option value="failed"${campaignArchiveRecipientStatus === 'failed' ? ' selected' : ''}>فشل الإرسال</option>
+        <option value="skipped"${campaignArchiveRecipientStatus === 'skipped' ? ' selected' : ''}>تم التجاوز</option>
+        <option value="canceled"${campaignArchiveRecipientStatus === 'canceled' ? ' selected' : ''}>أُلغي قبل الإرسال</option>
+      </select>
+      <button type="button" class="campaign-archive-refresh" onclick="campaignFilterRecipients()">بحث</button>
+    </div>
+    <div id="campaignRecipientResults"><div class="campaign-archive-empty">جاري تحميل أرقام العملاء...</div></div>`;
+  await campaignLoadArchiveRecipients();
+}
+
+async function campaignFilterRecipients() {
+  campaignArchiveRecipientPage = 1;
+  campaignArchiveRecipientStatus = document.getElementById('campaignRecipientStatus')?.value || 'all';
+  campaignArchiveRecipientSearch = document.getElementById('campaignRecipientSearch')?.value?.trim() || '';
+  await campaignLoadArchiveRecipients();
+}
+
+async function campaignArchivePage(page) {
+  campaignArchiveRecipientPage = Math.max(1, Number(page) || 1);
+  await campaignLoadArchiveRecipients();
+}
+
+async function campaignLoadArchiveRecipients() {
+  const campaignId = campaignArchiveSelectedId;
+  const container = document.getElementById('campaignRecipientResults');
+  if (!campaignId || !container) return;
+  try {
+    const params = new URLSearchParams({
+      page: String(campaignArchiveRecipientPage),
+      limit: '50',
+      status: campaignArchiveRecipientStatus,
+    });
+    if (campaignArchiveRecipientSearch) params.set('search', campaignArchiveRecipientSearch);
+    const data = await campaignApi(`/api/campaigns/${campaignId}/recipients?${params.toString()}`);
+    if (campaignArchiveSelectedId !== campaignId) return;
+    const rows = Array.isArray(data.recipients) ? data.recipients : [];
+    const pagination = data.pagination || { page: 1, pages: 1, total: rows.length };
+    if (!rows.length) {
+      container.innerHTML = '<div class="campaign-archive-empty">لا توجد أرقام مطابقة لهذا البحث أو الحالة.</div>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="campaign-recipient-table-wrap"><table class="campaign-recipient-table">
+        <thead><tr><th>رقم العميل</th><th>الاسم</th><th>الحالة</th><th>وقت الإرسال/التحديث</th><th>المحاولات</th><th>التفاصيل</th></tr></thead>
+        <tbody>${rows.map(row => `<tr>
+          <td class="campaign-recipient-phone">${campaignEscape(row.phone || '—')}</td>
+          <td>${campaignEscape(row.customer_name || '—')}</td>
+          <td><span class="campaign-recipient-badge ${campaignEscape(row.status)}">${campaignEscape(campaignRecipientStatusLabel(row.status))}</span></td>
+          <td>${campaignEscape(campaignFormatDate(row.sent_at || row.updated_at))}</td>
+          <td>${Number(row.attempts || 0).toLocaleString('ar-EG')}</td>
+          <td class="campaign-recipient-error">${campaignEscape(row.last_error || '—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div class="campaign-recipient-pagination">
+        <span>عرض ${rows.length.toLocaleString('ar-EG')} من ${Number(pagination.total || 0).toLocaleString('ar-EG')} · الصفحة ${Number(pagination.page || 1).toLocaleString('ar-EG')} من ${Number(pagination.pages || 1).toLocaleString('ar-EG')}</span>
+        <div><button type="button" onclick="campaignArchivePage(${Number(pagination.page || 1) - 1})" ${Number(pagination.page || 1) <= 1 ? 'disabled' : ''}>السابق</button><button type="button" onclick="campaignArchivePage(${Number(pagination.page || 1) + 1})" ${Number(pagination.page || 1) >= Number(pagination.pages || 1) ? 'disabled' : ''}>التالي</button></div>
+      </div>`;
+  } catch (error) {
+    container.innerHTML = `<div class="campaign-archive-empty">${campaignEscape(error.message)}</div>`;
+  }
 }
 
 function campaignProgressValues(campaign = campaignCurrent) {
@@ -515,7 +769,7 @@ async function campaignLoadList() {
   const data = await campaignApi('/api/campaigns');
   const picker = document.getElementById('campaignPicker');
   picker.innerHTML = '<option value="">اختر حملة محفوظة</option>' + data.campaigns.map(item =>
-    `<option value="${item.id}">${campaignEscape(item.name)} · ${campaignEscape(item.status)}</option>`
+    `<option value="${item.id}">${campaignEscape(item.name)} · ${campaignEscape(campaignStatusLabel(item.status))}</option>`
   ).join('');
   if (campaignCurrent) picker.value = campaignCurrent.id;
 }
@@ -805,9 +1059,16 @@ function campaignBindControls() {
 
 async function campaignOnTab() {
   campaignBindControls();
-  const [listResult, , , historyResult] = await Promise.allSettled([campaignLoadList(), campaignLoadCounts(), campaignLoadSignals(), campaignLoadHistoryImport()]);
+  const [listResult, , , historyResult, archiveResult] = await Promise.allSettled([
+    campaignLoadList(),
+    campaignLoadCounts(),
+    campaignLoadSignals(),
+    campaignLoadHistoryImport(),
+    campaignLoadArchive({ preserveSelection: true }),
+  ]);
   if (listResult.status === 'rejected') campaignFlash(`تعذر تحميل الحملات المحفوظة: ${listResult.reason.message}`, true);
   if (historyResult.status === 'rejected') campaignFlash(`تعذر تحميل حالة استيراد المحادثات: ${historyResult.reason.message}`, true);
+  if (archiveResult.status === 'rejected') campaignFlash(`تعذر تحميل سجل الحملات: ${archiveResult.reason.message}`, true);
 }
 
 window.campaignOnTab = campaignOnTab;

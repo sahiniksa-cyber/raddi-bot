@@ -20,6 +20,9 @@ const {
 } = require('./smart-segmentation');
 
 const EDITABLE_STATES = new Set(['draft', 'ready_for_approval', 'approved']);
+const CAMPAIGN_RECIPIENT_STATUSES = new Set([
+  'pending', 'queued', 'sending', 'sent', 'failed', 'skipped', 'canceled',
+]);
 const SIGNAL_STATES = new Set(['interested_unverified', 'ordered_confirmed', 'needs_verification']);
 const CONTACT_STATUSES = new Set(['contact', 'ordered', 'subscription']);
 const MIN_CAMPAIGN_INTERVAL_SECONDS = 30;
@@ -528,6 +531,120 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
       [userId],
     );
     return result.rows.map(campaignPublic);
+  }
+
+  async function archive(userId) {
+    const result = await database.query(
+      `SELECT c.*,
+              COALESCE(progress.total, 0)::int AS progress_total,
+              COALESCE(progress.sent, 0)::int AS progress_sent,
+              COALESCE(progress.remaining, 0)::int AS progress_remaining,
+              COALESCE(progress.failed, 0)::int AS progress_failed,
+              COALESCE(progress.skipped, 0)::int AS progress_skipped,
+              COALESCE(progress.canceled, 0)::int AS progress_canceled
+       FROM campaigns c
+       LEFT JOIN (
+         SELECT campaign_id,
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
+                COUNT(*) FILTER (WHERE status IN ('pending','queued','sending'))::int AS remaining,
+                COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+                COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped,
+                COUNT(*) FILTER (WHERE status = 'canceled')::int AS canceled
+         FROM campaign_recipients
+         WHERE user_id = $1
+         GROUP BY campaign_id
+       ) progress ON progress.campaign_id = c.id
+       WHERE c.user_id = $1
+       ORDER BY COALESCE(c.started_at, c.updated_at, c.created_at) DESC
+       LIMIT 100`,
+      [userId],
+    );
+    return result.rows.map(row => {
+      const {
+        progress_total: total,
+        progress_sent: sent,
+        progress_remaining: remaining,
+        progress_failed: failed,
+        progress_skipped: skipped,
+        progress_canceled: canceled,
+        ...campaign
+      } = row;
+      return {
+        ...campaignPublic(campaign),
+        delivery_progress: {
+          total: Number(total || 0),
+          sent: Number(sent || 0),
+          remaining: Number(remaining || 0),
+          failed: Number(failed || 0),
+          skipped: Number(skipped || 0),
+          canceled: Number(canceled || 0),
+        },
+      };
+    });
+  }
+
+  async function listRecipients(userId, campaignId, filters = {}) {
+    await getOwnedCampaign(database, userId, campaignId);
+    const status = String(filters.status || '').trim();
+    if (status && status !== 'all' && !CAMPAIGN_RECIPIENT_STATUSES.has(status)) {
+      throw badRequest('حالة المستلم غير صالحة', 'CAMPAIGN_RECIPIENT_STATUS_INVALID');
+    }
+    const requestedPage = Math.max(1, Math.floor(Number(filters.page) || 1));
+    const limit = Math.max(10, Math.min(100, Math.floor(Number(filters.limit) || 50)));
+    const search = String(filters.search || '').trim().slice(0, 80);
+    const params = [campaignId, userId];
+    const clauses = ['campaign_id = $1', 'user_id = $2'];
+    if (status && status !== 'all') {
+      params.push(status);
+      clauses.push(`status = $${params.length}`);
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      clauses.push(`(
+        COALESCE(normalized_phone, '') ILIKE $${params.length}
+        OR sender ILIKE $${params.length}
+        OR COALESCE(customer_name, '') ILIKE $${params.length}
+      )`);
+    }
+    const where = clauses.join(' AND ');
+    const countResult = await database.query(
+      `SELECT COUNT(*)::int AS count FROM campaign_recipients WHERE ${where}`,
+      params,
+    );
+    const total = Number(countResult.rows[0]?.count || 0);
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const page = Math.min(requestedPage, pages);
+    const offset = (page - 1) * limit;
+    const rowsResult = await database.query(
+      `SELECT id, sender, normalized_phone, customer_name, status, attempts,
+              scheduled_at, sent_at, last_error, created_at, updated_at
+       FROM campaign_recipients
+       WHERE ${where}
+       ORDER BY COALESCE(sent_at, updated_at, created_at) DESC, id
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset],
+    );
+    return {
+      recipients: rowsResult.rows.map(row => ({
+        id: row.id,
+        phone: row.normalized_phone || String(row.sender || '').split('@')[0],
+        customer_name: row.customer_name || '',
+        status: row.status,
+        attempts: Number(row.attempts || 0),
+        scheduled_at: row.scheduled_at || null,
+        sent_at: row.sent_at || null,
+        last_error: row.last_error || '',
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages,
+      },
+    };
   }
 
   async function get(userId, campaignId) {
@@ -1278,6 +1395,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
     addManualContacts,
     analyze,
     approve,
+    archive,
     create,
     exportSignals,
     exportContactTemplate,
@@ -1287,6 +1405,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
     finishHistoryImport,
     historyImportStatus,
     list,
+    listRecipients,
     listSignals,
     normalizePhone,
     prepareApproval,
