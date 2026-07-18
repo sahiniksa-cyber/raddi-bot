@@ -29,6 +29,7 @@ const { getPlatformSetting } = require('../services/platform/platform-settings')
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const { compactQualityGateAudit } = require('../services/ai/reply-quality-gate');
+const { merchantKnowledgeReadiness } = require('../services/ai/merchant-knowledge-readiness');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
 const {
@@ -100,6 +101,34 @@ async function recordAiUsage({ userId, model, inputTokens, outputTokens }) {
      VALUES ($1, $2, $3, $4, $5)`,
     [userId, model, inputTokens || 0, outputTokens || 0, costUsd],
   );
+}
+
+async function retireInboundMessagesWithoutMerchantKnowledge({
+  database = db,
+  messageIds = [],
+} = {}) {
+  const ids = [...new Set(messageIds.filter(Boolean))];
+  if (!ids.length || !database?.isConfigured?.()) return { retired: 0 };
+
+  const result = await database.query(
+    `UPDATE messages
+     SET status = 'skipped_missing_merchant_knowledge',
+         raw_payload =
+           (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}')
+           || $2::jsonb
+     WHERE id = ANY($1::uuid[])
+       AND direction = 'inbound'
+       AND status IN ('queued_for_ai', 'ai_failed')
+     RETURNING id`,
+    [
+      ids,
+      JSON.stringify({
+        retiredAt: new Date().toISOString(),
+        reason: 'missing_merchant_knowledge',
+      }),
+    ],
+  );
+  return { retired: result.rowCount ?? result.rows?.length ?? 0 };
 }
 
 async function loadConfig(userId) {
@@ -718,6 +747,36 @@ async function processAiReply(job) {
         conversationId: conversation.id,
       });
       return { skipped: true, reason: 'stale_message' };
+    }
+
+    const knowledge = merchantKnowledgeReadiness(config);
+    if (!knowledge.ready) {
+      const messageIds = pendingMessages.length
+        ? pendingMessages.map(message => message.id)
+        : [payload.messageId];
+      const retired = await retireInboundMessagesWithoutMerchantKnowledge({
+        database: db,
+        messageIds,
+      }).catch((error) => {
+        logger.warn('knowledge', `failed to retire ungrounded inbound messages: ${error.message}`);
+        return { retired: 0 };
+      });
+      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
+        status: 'skipped_missing_merchant_knowledge',
+        finished_at: new Date(),
+        attempts: job.attemptsMade + 1,
+        last_error: 'AI reply blocked: merchant knowledge is empty',
+      });
+      logger.warn('knowledge', 'AI reply blocked because merchant knowledge is empty', {
+        userId,
+        conversationId: conversation.id,
+        retired: retired.retired,
+      });
+      return {
+        skipped: true,
+        reason: 'missing_merchant_knowledge',
+        retired: retired.retired,
+      };
     }
 
     const mediaAnalyzer = new OpenAIMediaAnalyzer({
@@ -1341,6 +1400,7 @@ module.exports = {
   loadPendingInboundMessages,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
+  retireInboundMessagesWithoutMerchantKnowledge,
   markConversationMessagesMutedSkipped,
   messagesCoveredByTriggers,
   markInboundMessagesQuotaExceeded,
