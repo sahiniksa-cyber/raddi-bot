@@ -52,6 +52,58 @@ test('keyword targeting exposes the real recipient count', () => {
   assert.match(js, /\/api\/campaigns\/audience\/preview/);
 });
 
+test('purged imported history is explained instead of looking like lost data', () => {
+  const ids = [
+    'campaignHistoryBadge',
+    'campaignHistoryChats',
+    'campaignHistoryNumbers',
+    'campaignHistoryMessages',
+    'campaignHistoryStart',
+    'campaignHistoryFinish',
+    'campaignHistoryNote',
+    'campaignHistoryQr',
+    'campaignHistoryQrImage',
+    'campaignHistoryProgress',
+  ];
+  const nodes = Object.fromEntries(ids.map(id => [id, {
+    id,
+    textContent: '',
+    disabled: false,
+    hidden: false,
+    classList: { toggle() {} },
+  }]));
+  const context = vm.createContext({
+    document: {
+      getElementById: id => nodes[id] || null,
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+    window: {
+      setTimeout() {},
+      setInterval() { return 1; },
+      clearInterval() {},
+      scrollTo() {},
+    },
+    fetch: async () => { throw new Error('unexpected fetch'); },
+    console,
+  });
+  new vm.Script(js, { filename: 'dashboard/campaigns.js' }).runInContext(context);
+  vm.runInContext(`campaignRenderHistoryImport({
+    status: 'completed',
+    purged_at: '2026-07-18T00:00:00Z',
+    purged_conversations_count: 12,
+    purged_messages_count: 88,
+    conversations_total: 0,
+    inbound_messages_total: 0
+  })`, context);
+
+  assert.equal(nodes.campaignHistoryBadge.textContent, 'تم تنظيف بيانات البحث');
+  assert.match(nodes.campaignHistoryNote.textContent, /تم حذف 12 محادثة و88 رسالة/);
+  assert.match(nodes.campaignHistoryNote.textContent, /إعادة بنفس الجمهور/);
+  assert.match(nodes.campaignHistoryNote.textContent, /استيراد المحادثات من جديد/);
+  assert.match(js, /لا توجد محادثات مستوردة قابلة للبحث الآن/);
+});
+
 test('conversation date range is contained inside its own clear option', () => {
   assert.match(campaignMarkup, /id="campaignConversationOptions"[^>]+data-campaign-source-panel="conversations"/);
   assert.match(campaignMarkup, /بداية الفترة/);
@@ -200,6 +252,8 @@ test('campaign archive shows outcomes and paginated customer numbers', () => {
   assert.match(js, /campaignLoadArchiveRecipients/);
   assert.match(js, /campaignArchivePage/);
   assert.match(js, /campaignSyncArchivePolling/);
+  assert.match(js, /campaignReuseAudience\('\$\{campaign\.id\}'\)/);
+  assert.match(js, /إعادة بنفس الجمهور/);
 });
 
 test('campaign archive APIs are mounted before the campaign id detail route', () => {
