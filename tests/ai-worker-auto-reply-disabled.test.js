@@ -50,7 +50,7 @@ const dbMock = {
     if (text.includes('FROM messages') && text.includes("direction = 'inbound'")) {
       return { rows: [{ content: 'كم السعر؟' }], rowCount: 1 };
     }
-    if (text.includes("SET status = 'skipped_missing_merchant_knowledge'")) {
+    if (text.includes("SET status = 'auto_reply_disabled'")) {
       return {
         rows: [{ id: '00000000-0000-4000-8000-000000000001' }],
         rowCount: 1,
@@ -71,6 +71,7 @@ stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'runtime-bot.js'), 
     products: [],
     autoReplyKeywords: {},
     learningEnabled: true,
+    autoReplyEnabled: false,
   }),
 });
 stub(path.resolve(__dirname, '..', 'src', 'services', 'learning', 'owner-reply-learner.js'), {
@@ -91,13 +92,13 @@ stub(path.resolve(__dirname, '..', 'src', 'queues', 'message-queue.js'), {
 stub(path.resolve(__dirname, '..', 'lib', 'ai-client.js'), class ForbiddenAIClient {
   constructor() {
     aiConstructed = true;
-    throw new Error('AI must not be constructed without merchant knowledge');
+    throw new Error('AI must not be constructed while auto-reply is disabled');
   }
 });
 
 const { processAiReply } = require('../src/workers/ai-worker');
 
-test('empty merchant knowledge retires inbound and sends nothing', async () => {
+test('disabled auto-reply retires inbound and sends nothing while WhatsApp stays independent', async () => {
   const result = await processAiReply({
     id: 'job-empty-knowledge-1',
     data: {
@@ -112,14 +113,14 @@ test('empty merchant knowledge retires inbound and sends nothing', async () => {
 
   assert.deepEqual(result, {
     skipped: true,
-    reason: 'missing_merchant_knowledge',
+    reason: 'auto_reply_disabled',
     retired: 1,
   });
   assert.equal(aiConstructed, false);
   assert.equal(outgoing.length, 0);
   assert.ok(sqlCalls.some(call =>
-    call.text.includes("status = 'skipped_missing_merchant_knowledge'")));
+    call.text.includes("status = 'auto_reply_disabled'")));
   assert.ok(sqlCalls.some(call =>
     call.text.includes('UPDATE jobs')
-    && call.params.includes('skipped_missing_merchant_knowledge')));
+    && call.params.includes('skipped_auto_reply_disabled')));
 });

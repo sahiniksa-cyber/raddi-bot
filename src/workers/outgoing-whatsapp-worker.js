@@ -10,9 +10,7 @@ const { checkMessageQuota, decrementMessageQuota } = require('../services/billin
 const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
 const { recordThreadMessage } = require('../services/escalation/escalation-bridge');
 const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-review');
-const { merchantKnowledgeReadiness } = require('../services/ai/merchant-knowledge-readiness');
-const { resolveConfigForAI } = require('../services/bot/runtime-bot');
-const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
+const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -122,39 +120,36 @@ async function skipStaleOutgoingJob(job, { replyMessageId }) {
   return true;
 }
 
-function requiresMerchantKnowledge(payload = {}) {
-  return payload.source === 'ai_reply' || payload.source === 'ai_failure_fallback';
+async function loadAutoReplyEnabled(userId) {
+  const result = await db.query(
+    `SELECT COALESCE(config->>'autoReplyEnabled', 'true') <> 'false' AS enabled
+       FROM bot_configs WHERE user_id = $1`,
+    [userId],
+  );
+  return result.rows[0]?.enabled !== false;
 }
 
-async function loadMerchantKnowledgeReadiness(userId) {
-  const config = await resolveConfigForAI(userId);
-  config.learnedReplies = config.learningEnabled === false
-    ? []
-    : await loadActiveLearnedReplies({ userId }).catch(() => []);
-  return merchantKnowledgeReadiness(config);
-}
-
-async function cancelUngroundedOutgoing(job, { replyMessageId }) {
-  const message = 'AI reply canceled: merchant knowledge is empty';
-  await markReplyMessage(replyMessageId, 'canceled_missing_merchant_knowledge', {
+async function cancelDisabledAutoReply(job, { replyMessageId }) {
+  const message = 'Automated reply canceled: merchant disabled auto-reply';
+  await markReplyMessage(replyMessageId, 'canceled_auto_reply_disabled', {
     sentBy: WORKER_NAME,
     canceledAt: new Date().toISOString(),
-    reason: 'missing_merchant_knowledge',
+    reason: 'auto_reply_disabled',
     error: message,
   });
   await updateJobStatus(job.id, {
-    status: 'canceled_missing_merchant_knowledge',
+    status: 'canceled_auto_reply_disabled',
     finished_at: new Date(),
     attempts: job.attemptsMade,
     last_error: message,
   });
-  return { skipped: true, reason: 'missing_merchant_knowledge' };
+  return { skipped: true, reason: 'auto_reply_disabled' };
 }
 
 async function processOutgoingWhatsapp(job, {
   getUserBot,
   reviewBeforeSend = reviewOutgoingReplyBeforeSend,
-  getKnowledgeReadiness = loadMerchantKnowledgeReadiness,
+  getAutoReplyEnabled = loadAutoReplyEnabled,
 }) {
   const payload = job.data || {};
   const userId = payload.userId;
@@ -167,15 +162,14 @@ async function processOutgoingWhatsapp(job, {
   if (!sender) throw new Error('Missing sender in outgoing payload');
   if (!reply) throw new Error('Missing reply in outgoing payload');
 
-  // A second, send-time boundary catches replies queued before the merchant
-  // removed their information or before the generation-time gate was deployed.
-  // Campaigns, manual sends, escalation notices, system notices, and explicit
-  // keyword replies do not carry either of these AI source values.
-  if (requiresMerchantKnowledge(payload)) {
-    const readiness = await getKnowledgeReadiness(userId);
-    if (!readiness?.ready) {
-      console.warn(`${new Date().toISOString()} [${WORKER_NAME}] blocked ungrounded ${payload.source} for user=${userId}`);
-      return cancelUngroundedOutgoing(job, { replyMessageId });
+  // Catch automated replies that were already generated when the merchant
+  // turns the reply switch off. Campaigns and manual/team sends have different
+  // sources and continue over the same connected WhatsApp socket.
+  if (isAutomatedCustomerReply(payload)) {
+    const enabled = await getAutoReplyEnabled(userId);
+    if (!enabled) {
+      console.log(`${new Date().toISOString()} [${WORKER_NAME}] auto-reply disabled; canceled ${payload.source || payload.kind} for user=${userId}`);
+      return cancelDisabledAutoReply(job, { replyMessageId });
     }
   }
 
@@ -854,7 +848,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 }
 
 module.exports = {
-  cancelUngroundedOutgoing,
+  cancelDisabledAutoReply,
   completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
@@ -864,7 +858,7 @@ module.exports = {
   notifyOwnerOfLidFailure,
   outgoingStaleMaxAgeMs,
   processOutgoingWhatsapp,
-  requiresMerchantKnowledge,
+  loadAutoReplyEnabled,
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,
   sendWhatsappReply,

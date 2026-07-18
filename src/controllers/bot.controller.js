@@ -30,6 +30,7 @@ function createBotController({ getUserBot, database = null }) {
       const logCount = rest.status === 'error' ? 20 : 8;
       res.json({
         ...rest,
+        autoReplyEnabled: bot.config?.autoReplyEnabled !== false,
         totalChatsHandled: bot.totalChatsHandled,
         logs: state.logs.slice(0, logCount),
       });
@@ -92,6 +93,53 @@ function createBotController({ getUserBot, database = null }) {
       } catch (err) {
         res.status(500).json({ success: false, message: err.message, status: bot.appState.status });
       }
+    },
+
+    async setAutoReply(req, res) {
+      if (typeof req.body?.enabled !== 'boolean') {
+        return res.status(400).json({
+          success: false,
+          message: 'enabled must be boolean',
+        });
+      }
+
+      const bot = getUserBot(req.session.userId);
+      const enabled = req.body.enabled;
+      bot.config = { ...(bot.config || {}), autoReplyEnabled: enabled };
+      await bot.saveConfig();
+
+      // Best-effort immediate cleanup. The AI and outgoing workers also check
+      // the persisted switch, so this does not need to disconnect WhatsApp or
+      // touch campaign jobs.
+      let retired = 0;
+      if (!enabled && db?.isConfigured?.()) {
+        try {
+          const result = await db.query(
+            `UPDATE messages
+                SET status = 'auto_reply_disabled',
+                    raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}')
+                                  || $2::jsonb
+              WHERE user_id = $1
+                AND direction = 'inbound'
+                AND status = 'queued_for_ai'`,
+            [
+              req.session.userId,
+              JSON.stringify({ autoReplyDisabledAt: new Date().toISOString() }),
+            ],
+          );
+          retired = result.rowCount || 0;
+        } catch (error) {
+          bot.log?.(`warning: auto-reply queue cleanup failed: ${error.message}`);
+        }
+      }
+
+      return res.json({
+        success: true,
+        autoReplyEnabled: enabled,
+        whatsappStatus: bot.appState?.status || 'unknown',
+        desiredState: bot.sessionDesiredState || 'running',
+        retired,
+      });
     },
 
     async restart(req, res) {

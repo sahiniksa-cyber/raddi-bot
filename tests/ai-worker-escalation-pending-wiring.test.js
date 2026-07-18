@@ -55,11 +55,7 @@ const dbMock = {
 
 stub(path.resolve(__dirname, '..', 'src', 'db', 'client.js'), dbMock);
 stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'runtime-bot.js'), {
-  resolveConfigForAI: async () => ({
-    learningEnabled: false,
-    memoryMessages: 50,
-    storeDescription: 'متجر تجريبي للاختبار',
-  }),
+  resolveConfigForAI: async () => ({ learningEnabled: false, memoryMessages: 50 }),
 });
 stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'platform-features.js'), {
   findAutoReply: () => null,
