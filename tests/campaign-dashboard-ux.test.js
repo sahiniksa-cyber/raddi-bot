@@ -76,6 +76,41 @@ test('content section shows send count and a WhatsApp campaign preview', () => {
   assert.match(campaignMarkup, /application\/pdf/);
   assert.match(campaignMarkup, /\.pdf/);
   assert.match(campaignMarkup, /مستندات PDF/);
+  assert.match(campaignMarkup, /وسيُرفع تلقائياً قبل الانتقال/);
+  assert.match(js, /campaignUploadPendingMedia/);
+  assert.match(js, /مرفق بانتظار الرفع/);
+});
+
+test('saving campaign content uploads pending media before moving to the next step', async () => {
+  const events = [];
+  const flash = { style: {}, textContent: '' };
+  const context = vm.createContext({
+    document: {
+      getElementById(id) {
+        if (id === 'campaignFlash') return flash;
+        if (id === 'campaignMedia') return { files: [{ name: 'offer.pdf' }], value: 'offer.pdf' };
+        return null;
+      },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+    window: { setTimeout() {}, scrollTo() {} },
+    fetch: async () => { throw new Error('unexpected fetch'); },
+    FormData: class {},
+    console,
+    events,
+  });
+  new vm.Script(js, { filename: 'dashboard/campaigns.js' }).runInContext(context);
+  vm.runInContext(`
+    campaignSave = async () => { events.push('save'); };
+    campaignUploadPendingMedia = async () => { events.push('upload'); return 1; };
+    campaignGoStep = step => { events.push('go:' + step); };
+  `, context);
+
+  await vm.runInContext("campaignSaveAndNext('timing')", context);
+
+  assert.deepEqual(events, ['save', 'upload', 'go:timing']);
+  assert.match(flash.textContent, /رفع 1 مرفق بنجاح/);
 });
 
 test('saved campaigns are explained below the campaign workflow', () => {
