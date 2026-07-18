@@ -136,7 +136,13 @@ async function sendMedia(bot, sender, media) {
   if (bot.whatsappEngine === 'baileys') {
     const content = media.kind === 'image'
       ? { image: buffer, mimetype: media.mime_type }
-      : { video: buffer, mimetype: media.mime_type };
+      : media.kind === 'video'
+        ? { video: buffer, mimetype: media.mime_type }
+        : {
+            document: buffer,
+            mimetype: media.mime_type,
+            fileName: media.original_name || 'document.pdf',
+          };
     return bot.client.sendMessage(target, content);
   }
   const { MessageMedia } = require('whatsapp-web.js');
@@ -450,6 +456,7 @@ module.exports = {
   recoverCampaignDeliveries,
   recipientMatchesKeywordAudience,
   randomDelayMs,
+  sendMedia,
   sendCampaignText,
   scheduleNextRecipient,
 };

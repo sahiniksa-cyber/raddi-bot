@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const {
@@ -26,9 +27,10 @@ const {
   recoverCampaignDeliveries,
   recipientMatchesKeywordAudience,
   scheduleNextRecipient,
+  sendMedia,
   sendCampaignText,
 } = require('../src/workers/campaign-worker');
-const { hasValidSignature } = require('../src/services/campaigns/media-store');
+const { ALLOWED_TYPES, hasValidSignature } = require('../src/services/campaigns/media-store');
 const AIClient = require('../lib/ai-client');
 const ExcelJS = require('exceljs');
 const { MessageIngestService } = require('../src/services/whatsapp/message-ingest.service');
@@ -193,6 +195,39 @@ test('campaign text delivery uses the live WhatsApp client with the correct engi
     ['278571713060916@lid', 'عرض لعميل LID'],
     ['966551234567@c.us', 'عرض آخر'],
   ]);
+});
+
+test('campaign media accepts only a real PDF signature', () => {
+  const pdf = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF');
+  assert.equal(ALLOWED_TYPES.get('application/pdf')?.kind, 'document');
+  assert.equal(hasValidSignature(pdf, 'application/pdf'), true);
+  assert.equal(hasValidSignature(Buffer.from('not-a-pdf-file'), 'application/pdf'), false);
+});
+
+test('Baileys sends campaign PDF as a named WhatsApp document', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-campaign-pdf-'));
+  const storagePath = path.join(directory, 'stored.pdf');
+  fs.writeFileSync(storagePath, Buffer.from('%PDF-1.7\n%%EOF'));
+  const sent = [];
+  try {
+    await sendMedia({
+      whatsappEngine: 'baileys',
+      client: { sendMessage: async (...args) => { sent.push(args); return { key: { id: 'pdf-1' } }; } },
+    }, '966551234567@s.whatsapp.net', {
+      kind: 'document',
+      original_name: 'العرض.pdf',
+      mime_type: 'application/pdf',
+      storage_path: storagePath,
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], '966551234567@s.whatsapp.net');
+  assert.equal(Buffer.isBuffer(sent[0][1].document), true);
+  assert.equal(sent[0][1].mimetype, 'application/pdf');
+  assert.equal(sent[0][1].fileName, 'العرض.pdf');
+  assert.equal('video' in sent[0][1], false);
 });
 
 test('campaign start refuses immediately when WhatsApp is not connected', async () => {

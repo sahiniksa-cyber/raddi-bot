@@ -148,8 +148,9 @@ function campaignFill(campaign) {
   campaignRenderKeywordTags();
   campaignToggleKeywordOptions();
   campaignUpdateNumbersCount();
+  const mediaKindLabels = { image: 'صورة', video: 'فيديو', document: 'مستند PDF' };
   document.getElementById('campaignMediaList').innerHTML = (campaign.media || []).map(item =>
-    `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px;border-bottom:1px solid var(--border)"><span>${campaignEscape(item.original_name)} · ${campaignEscape(item.kind)}</span><button class="campaign-btn secondary" onclick="campaignDeleteMedia('${item.id}')">حذف</button></div>`
+    `<div style="display:flex;justify-content:space-between;gap:10px;padding:9px;border-bottom:1px solid var(--border)"><span>${campaignEscape(item.original_name)} · ${campaignEscape(mediaKindLabels[item.kind] || item.kind)}</span><button class="campaign-btn secondary" onclick="campaignDeleteMedia('${item.id}')">حذف</button></div>`
   ).join('') || '<div class="hint">لا توجد وسائط مرفوعة.</div>';
   campaignRenderContentPreview();
   campaignUpdateButtons();
@@ -441,11 +442,17 @@ function campaignRenderContentPreview() {
   time.textContent = 'الآن ✓✓';
   bubble.appendChild(time);
 
-  const savedMedia = Array.isArray(campaignCurrent?.media) ? campaignCurrent.media.length : 0;
-  const selectedMedia = document.getElementById('campaignMedia')?.files?.length || 0;
-  const mediaCount = savedMedia + selectedMedia;
+  const savedItems = Array.isArray(campaignCurrent?.media) ? campaignCurrent.media : [];
+  const selectedItems = [...(document.getElementById('campaignMedia')?.files || [])];
+  const mediaCount = savedItems.length + selectedItems.length;
+  const documentCount = savedItems.filter(item => item.kind === 'document').length
+    + selectedItems.filter(file => file.type === 'application/pdf' || /\.pdf$/i.test(file.name)).length;
   mediaBox.classList.toggle('visible', mediaCount > 0);
-  mediaLabel.textContent = mediaCount === 1 ? 'عنصر وسائط واحد' : `${mediaCount} صور أو فيديوهات`;
+  mediaLabel.textContent = mediaCount === 1 && documentCount === 1
+    ? 'مستند PDF واحد'
+    : mediaCount === 1
+      ? 'صورة أو فيديو واحد'
+      : `${mediaCount} مرفقات${documentCount ? `، منها ${documentCount} PDF` : ''}`;
   audienceCount.textContent = String(campaignAudienceCount);
   itemsCount.textContent = mediaCount ? `نص + ${mediaCount} وسائط لكل عميل` : 'نص واحد لكل عميل';
 }
@@ -536,13 +543,13 @@ async function campaignUploadMedia() {
   try {
     if (!campaignCurrent) await campaignSave();
     const input = document.getElementById('campaignMedia');
-    if (!input.files.length) throw new Error('اختر صورة أو فيديو أولاً');
+    if (!input.files.length) throw new Error('اختر صورة أو فيديو أو مستند PDF أولاً');
     const form = new FormData(); [...input.files].forEach(file => form.append('media', file));
     await campaignApi(`/api/campaigns/${campaignCurrent.id}/media`, { method: 'POST', body: form });
     input.value = '';
     await campaignOpen(campaignCurrent.id);
     campaignGoStep('content');
-    campaignFlash('تم رفع الوسائط');
+    campaignFlash('تم رفع المرفقات');
   } catch (error) { campaignFlash(error.message, true); }
 }
 

@@ -13,6 +13,7 @@ const ALLOWED_TYPES = new Map([
   ['video/mp4', { kind: 'video', extension: '.mp4' }],
   ['video/quicktime', { kind: 'video', extension: '.mov' }],
   ['video/webm', { kind: 'video', extension: '.webm' }],
+  ['application/pdf', { kind: 'document', extension: '.pdf' }],
 ]);
 
 function resolveDataDir() {
@@ -39,6 +40,7 @@ function hasValidSignature(buffer, mimeType) {
   if (mimeType === 'image/webp') return buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
   if (mimeType === 'video/mp4' || mimeType === 'video/quicktime') return buffer.subarray(4, 8).toString('ascii') === 'ftyp';
   if (mimeType === 'video/webm') return buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  if (mimeType === 'application/pdf') return buffer.subarray(0, 5).toString('ascii') === '%PDF-';
   return false;
 }
 
@@ -92,9 +94,10 @@ async function saveCampaignMedia({ database = db, userId, campaignId, files = []
   try {
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
-      const type = ALLOWED_TYPES.get(String(file.mimetype || '').toLowerCase());
-      if (!type || !hasValidSignature(file.buffer, file.mimetype)) {
-        const error = new Error('نوع الملف غير مدعوم. استخدم JPG أو PNG أو WEBP أو MP4 أو MOV أو WEBM');
+      const mimeType = String(file.mimetype || '').toLowerCase();
+      const type = ALLOWED_TYPES.get(mimeType);
+      if (!type || !hasValidSignature(file.buffer, mimeType)) {
+        const error = new Error('نوع الملف غير مدعوم. استخدم JPG أو PNG أو WEBP أو MP4 أو MOV أو WEBM أو PDF');
         error.statusCode = 400;
         throw error;
       }
@@ -108,7 +111,7 @@ async function saveCampaignMedia({ database = db, userId, campaignId, files = []
            size_bytes, sha256, sort_order
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, kind, original_name, mime_type, size_bytes, sha256, sort_order, created_at`,
         [campaignId, userId, type.kind, String(file.originalname || filename).slice(0, 255),
-          file.mimetype, storagePath, file.buffer.length, sha256, nextOrder + index],
+          mimeType, storagePath, file.buffer.length, sha256, nextOrder + index],
       );
       saved.push({ ...result.rows[0], storage_path: storagePath });
     }
