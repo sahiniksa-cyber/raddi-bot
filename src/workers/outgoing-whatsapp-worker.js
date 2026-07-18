@@ -10,6 +10,9 @@ const { checkMessageQuota, decrementMessageQuota } = require('../services/billin
 const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
 const { recordThreadMessage } = require('../services/escalation/escalation-bridge');
 const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-review');
+const { merchantKnowledgeReadiness } = require('../services/ai/merchant-knowledge-readiness');
+const { resolveConfigForAI } = require('../services/bot/runtime-bot');
+const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -119,7 +122,40 @@ async function skipStaleOutgoingJob(job, { replyMessageId }) {
   return true;
 }
 
-async function processOutgoingWhatsapp(job, { getUserBot, reviewBeforeSend = reviewOutgoingReplyBeforeSend }) {
+function requiresMerchantKnowledge(payload = {}) {
+  return payload.source === 'ai_reply' || payload.source === 'ai_failure_fallback';
+}
+
+async function loadMerchantKnowledgeReadiness(userId) {
+  const config = await resolveConfigForAI(userId);
+  config.learnedReplies = config.learningEnabled === false
+    ? []
+    : await loadActiveLearnedReplies({ userId }).catch(() => []);
+  return merchantKnowledgeReadiness(config);
+}
+
+async function cancelUngroundedOutgoing(job, { replyMessageId }) {
+  const message = 'AI reply canceled: merchant knowledge is empty';
+  await markReplyMessage(replyMessageId, 'canceled_missing_merchant_knowledge', {
+    sentBy: WORKER_NAME,
+    canceledAt: new Date().toISOString(),
+    reason: 'missing_merchant_knowledge',
+    error: message,
+  });
+  await updateJobStatus(job.id, {
+    status: 'canceled_missing_merchant_knowledge',
+    finished_at: new Date(),
+    attempts: job.attemptsMade,
+    last_error: message,
+  });
+  return { skipped: true, reason: 'missing_merchant_knowledge' };
+}
+
+async function processOutgoingWhatsapp(job, {
+  getUserBot,
+  reviewBeforeSend = reviewOutgoingReplyBeforeSend,
+  getKnowledgeReadiness = loadMerchantKnowledgeReadiness,
+}) {
   const payload = job.data || {};
   const userId = payload.userId;
   const sender = payload.sender;
@@ -130,6 +166,18 @@ async function processOutgoingWhatsapp(job, { getUserBot, reviewBeforeSend = rev
   if (!userId) throw new Error('Missing userId in outgoing payload');
   if (!sender) throw new Error('Missing sender in outgoing payload');
   if (!reply) throw new Error('Missing reply in outgoing payload');
+
+  // A second, send-time boundary catches replies queued before the merchant
+  // removed their information or before the generation-time gate was deployed.
+  // Campaigns, manual sends, escalation notices, system notices, and explicit
+  // keyword replies do not carry either of these AI source values.
+  if (requiresMerchantKnowledge(payload)) {
+    const readiness = await getKnowledgeReadiness(userId);
+    if (!readiness?.ready) {
+      console.warn(`${new Date().toISOString()} [${WORKER_NAME}] blocked ungrounded ${payload.source} for user=${userId}`);
+      return cancelUngroundedOutgoing(job, { replyMessageId });
+    }
+  }
 
   // Guard: @lid JIDs have no phone number — Baileys cannot reliably send to them.
   // Attempt a best-effort send anyway (some sessions allow it) and alert the owner
@@ -806,6 +854,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 }
 
 module.exports = {
+  cancelUngroundedOutgoing,
   completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
@@ -815,6 +864,7 @@ module.exports = {
   notifyOwnerOfLidFailure,
   outgoingStaleMaxAgeMs,
   processOutgoingWhatsapp,
+  requiresMerchantKnowledge,
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,
   sendWhatsappReply,
