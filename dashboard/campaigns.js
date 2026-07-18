@@ -347,10 +347,13 @@ async function campaignRenderArchiveDetail(campaignId) {
   const completedLine = campaign.completed_at
     ? ` · اكتملت ${campaignFormatDate(campaign.completed_at)}`
     : '';
+  const reuseButton = campaign.approved_at && progress.total > 0
+    ? `<button type="button" class="campaign-archive-refresh" onclick="campaignReuseAudience('${campaign.id}')">إعادة بنفس الجمهور</button>`
+    : '';
   detail.innerHTML = `
     <div class="campaign-archive-title-row">
       <div><h3>${campaignEscape(campaign.name)}</h3><p>بدأت ${campaignEscape(campaignFormatDate(campaign.started_at || campaign.scheduled_at || campaign.created_at))}${campaignEscape(completedLine)}</p></div>
-      <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><span class="campaign-status-badge ${campaignEscape(campaign.status)}">${campaignEscape(campaignStatusLabel(campaign.status))}</span><button type="button" class="campaign-archive-refresh" onclick="campaignOpenFromArchive('${campaign.id}')">فتح وإدارة الحملة</button></div>
+      <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><span class="campaign-status-badge ${campaignEscape(campaign.status)}">${campaignEscape(campaignStatusLabel(campaign.status))}</span>${reuseButton}<button type="button" class="campaign-archive-refresh" onclick="campaignOpenFromArchive('${campaign.id}')">فتح وإدارة الحملة</button></div>
     </div>
     <div class="campaign-archive-metrics">
       <div class="campaign-archive-metric"><strong>${progress.total.toLocaleString('ar-EG')}</strong><span>إجمالي العملاء</span></div>
@@ -605,6 +608,15 @@ async function campaignPreviewKeywords() {
     });
     const preview = document.getElementById('campaignKeywordPreview');
     document.getElementById('campaignKeywordAudienceCount').textContent = String(data.count);
+    const historyWasPurged = Boolean(campaignHistoryCurrentStatus?.purged_at)
+      && !(Number(campaignHistoryCurrentStatus?.conversations_total)
+        || Number(campaignHistoryCurrentStatus?.inbound_messages_total));
+    if (!data.count && historyWasPurged) {
+      preview.innerHTML = '<b>لا توجد محادثات مستوردة قابلة للبحث الآن.</b><div class="hint" style="margin-top:7px">تم تنظيف المحادثات القديمة بعد اعتماد الحملة لتوفير المساحة. أرقام الجمهور السابق محفوظة في الحملة السابقة؛ استخدم «الحملات السابقة ← إعادة بنفس الجمهور». أما الكلمات المختلفة فتحتاج استيراداً جديداً.</div>';
+      preview.style.display = 'block';
+      campaignFlash('المحادثات المستوردة نُظفت بعد الحملة السابقة؛ الأرقام محفوظة ويمكن إعادة استخدامها من الحملات السابقة.', true);
+      return;
+    }
     const rows = (data.recipients || []).map(row => {
       const number = row.normalized_phone || row.sender;
       const name = row.customer_name ? ` · ${campaignEscape(row.customer_name)}` : '';
@@ -619,6 +631,8 @@ async function campaignPreviewKeywords() {
 function campaignRenderHistoryImport(status = {}) {
   campaignHistoryCurrentStatus = status;
   const active = ['starting', 'running'].includes(status.status);
+  const historyWasPurged = Boolean(status.purged_at)
+    && !(Number(status.conversations_total) || Number(status.inbound_messages_total));
   const labels = {
     not_started: 'لم يبدأ',
     starting: 'يبدأ الآن',
@@ -630,7 +644,9 @@ function campaignRenderHistoryImport(status = {}) {
   };
   const badge = document.getElementById('campaignHistoryBadge');
   if (!badge) return;
-  badge.textContent = labels[status.status] || status.status || 'غير معروف';
+  badge.textContent = historyWasPurged
+    ? 'تم تنظيف بيانات البحث'
+    : (labels[status.status] || status.status || 'غير معروف');
   document.getElementById('campaignHistoryChats').textContent = String(Number(status.conversations_total) || 0);
   document.getElementById('campaignHistoryNumbers').textContent = String(Number(status.numbers_total) || 0);
   document.getElementById('campaignHistoryMessages').textContent = String(Number(status.inbound_messages_total) || 0);
@@ -648,6 +664,10 @@ function campaignRenderHistoryImport(status = {}) {
   if (!active) campaignHistoryQrVersion = 0;
   if (status.last_error) {
     note.textContent = `تعذر الاستيراد: ${status.last_error}`;
+  } else if (historyWasPurged) {
+    const removedChats = Number(status.purged_conversations_count) || 0;
+    const removedMessages = Number(status.purged_messages_count) || 0;
+    note.textContent = `تم حذف ${removedChats} محادثة و${removedMessages} رسالة مستوردة بعد اعتماد الحملة لتوفير المساحة، كما طلبت سابقاً. أرقام المستلمين ما زالت محفوظة داخل الحملة السابقة. لإعادة نفس الجمهور افتح «الحملات السابقة» واضغط «إعادة بنفس الجمهور». للبحث بكلمات مختلفة يلزم استيراد المحادثات من جديد.`;
   } else if (active && status.explicit_complete) {
     note.textContent = 'وصلت إشارة اكتمال السجل من واتساب. سيُنهي النظام جهاز الاستيراد المؤقت، بينما يبقى البوت الأساسي متصلاً.';
   } else if (active) {
@@ -751,13 +771,15 @@ async function campaignOpen(id) {
   } catch (error) { campaignFlash(error.message, true); }
 }
 
-async function campaignReuseAudience() {
+async function campaignReuseAudience(sourceCampaignId = '') {
   try {
-    if (!campaignCurrent?.id) throw new Error('اختر حملة محفوظة أولاً');
+    const campaignId = String(sourceCampaignId || campaignCurrent?.id || '').trim();
+    if (!campaignId) throw new Error('اختر حملة محفوظة أولاً');
     const confirmed = window.confirm('سيتم إنشاء مسودة جديدة بنفس قائمة المستلمين والنص. لن يبدأ أي إرسال، والوسائط تحتاج إضافتها من جديد. هل تريد المتابعة؟');
     if (!confirmed) return;
-    const data = await campaignApi(`/api/campaigns/${campaignCurrent.id}/reuse-audience`, { method: 'POST' });
+    const data = await campaignApi(`/api/campaigns/${campaignId}/reuse-audience`, { method: 'POST' });
     const detail = await campaignApi(`/api/campaigns/${data.campaign.id}`);
+    campaignShowWorkspace('builder');
     campaignFill(detail.campaign);
     campaignGoStep('audience');
     await campaignLoadList();
