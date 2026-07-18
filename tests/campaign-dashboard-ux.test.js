@@ -73,6 +73,9 @@ test('content section shows send count and a WhatsApp campaign preview', () => {
   assert.match(campaignMarkup, /id="campaignWhatsappMessage"/);
   assert.match(js, /campaignRefreshContentPreview/);
   assert.match(js, /\/preview/);
+  assert.match(campaignMarkup, /application\/pdf/);
+  assert.match(campaignMarkup, /\.pdf/);
+  assert.match(campaignMarkup, /مستندات PDF/);
 });
 
 test('saved campaigns are explained below the campaign workflow', () => {
