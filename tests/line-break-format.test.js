@@ -75,6 +75,19 @@ test('sentence mode still creates lines when merchant settings removed sentence 
   assert.match(out, /\n/);
 });
 
+test('sentence mode formats a long unpunctuated body even when the greeting already has its own line', () => {
+  const input = [
+    'وعليكم السلام ورحمة الله',
+    'حياك الله حالياً ما عندنا نظام بيع بالجملة للاشتراكات لكن إذا عندك فكرة معينة للتعاون ممكن نتواصل مع الإدارة ونشوف كيف نقدر نخدمك',
+  ].join('\n');
+  const out = applyLineBreakFormat(input, {
+    replyStyle: { lineBreakMode: 'sentence', lineBreakWords: 12 },
+  });
+
+  assert.ok((out.match(/\n/g) || []).length >= 3, out);
+  assert.match(out, /^وعليكم السلام ورحمة الله\n/);
+});
+
 test('sentence mode does NOT split a decimal number', () => {
   const out = applyLineBreakFormat('السعر 5.2 ريال فقط', { replyStyle: { lineBreakMode: 'sentence' } });
   assert.equal(out, 'السعر 5.2 ريال فقط');
@@ -101,6 +114,19 @@ test('topic mode normalises any blank-line run to exactly count newlines', () =>
 test('topic mode creates topic gaps when the model returned one long block', () => {
   const out = applyLineBreakFormat('السعر 99 ريال. التوصيل خلال يومين.', { replyStyle: { lineBreakMode: 'topic', lineBreakCount: 2 } });
   assert.match(out, /\n\n/);
+});
+
+test('topic mode formats a long body after an existing greeting boundary', () => {
+  const input = [
+    'وعليكم السلام ورحمة الله',
+    'حياك الله حالياً ما عندنا نظام بيع بالجملة للاشتراكات لكن إذا عندك فكرة معينة للتعاون ممكن نتواصل مع الإدارة ونشوف كيف نقدر نخدمك',
+  ].join('\n');
+  const out = applyLineBreakFormat(input, {
+    replyStyle: { lineBreakMode: 'topic', lineBreakCount: 2, lineBreakWords: 12 },
+  });
+
+  assert.ok((out.match(/\n\n/g) || []).length >= 2, out);
+  assert.doesNotMatch(out, /\n{3,}/);
 });
 
 
