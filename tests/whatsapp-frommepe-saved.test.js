@@ -10,6 +10,10 @@ function createFakeDb() {
   return {
     calls,
     isConfigured: () => true,
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: [] };
+    },
     transaction: async (fn) => fn({
       query: async (sql, params) => {
         calls.push({ sql, params });
@@ -32,6 +36,7 @@ test('fromMe=true message is stored as outbound+assistant+sent_by_human and NOT 
     database,
     logger: { info: () => {} },
     queue: { enqueueAiReply: async (payload, options) => enqueued.push({ payload, options }) },
+    ownerEchoSettleMs: 0,
   });
 
   const result = await service.ingestWhatsappMessage({
@@ -68,6 +73,7 @@ test('fromMe with empty body is ignored', async () => {
     database,
     logger: { info: () => {} },
     queue: { enqueueAiReply: async (p, o) => enqueued.push({ p, o }) },
+    ownerEchoSettleMs: 0,
   });
 
   const result = await service.ingestWhatsappMessage({

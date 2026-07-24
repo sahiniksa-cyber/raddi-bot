@@ -204,13 +204,22 @@ async function getPendingEscalation({ database = db, userId, conversationId }) {
     return { pending: false, since: null };
   }
   const result = await database.query(
-    `SELECT created_at
+    `SELECT escalation_threads.created_at
        FROM escalation_threads
       WHERE conversation_id = $1
         AND user_id = $2
         AND resolved_at IS NULL
         AND created_at > NOW() - INTERVAL '7 days'
-      ORDER BY created_at DESC, id DESC
+        AND NOT EXISTS (
+          SELECT 1
+            FROM messages
+           WHERE messages.user_id = escalation_threads.user_id
+             AND messages.conversation_id = escalation_threads.conversation_id
+             AND messages.direction = 'outbound'
+             AND messages.status = 'sent_by_human'
+             AND messages.created_at > escalation_threads.created_at
+        )
+      ORDER BY escalation_threads.created_at DESC, escalation_threads.id DESC
       LIMIT 1`,
     [conversationId, userId],
   );

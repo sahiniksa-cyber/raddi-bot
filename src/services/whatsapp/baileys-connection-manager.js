@@ -9,6 +9,7 @@ const {
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  generateMessageIDV2,
   jidNormalizedUser,
   makeWASocket,
   proto,
@@ -153,6 +154,7 @@ function toWhatsappWebMessage(msg) {
     phoneNumber: extractPhoneNumber(msg.key),
     body: textFromBaileysMessage(msg.message || {}),
     timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : null,
+    receivedAt: Date.now(),
     type: Object.keys(msg.message || {})[0] || 'unknown',
     hasMedia: !!detectMediaPart(msg.message || {}),
     quotedStanzaId: quotedStanzaIdFromBaileysMessage(msg.message || {}),
@@ -166,24 +168,66 @@ function timestampToMs(timestamp) {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
+async function reserveBotSendId({ database, userId, messageId, target }) {
+  if (!database?.isConfigured?.() || !userId || !messageId) {
+    const error = new Error('database, tenant, and WhatsApp message id are required for bot-send reservation');
+    error.code = 'BOT_SEND_ID_RESERVATION_UNAVAILABLE';
+    throw error;
+  }
+  const result = await database.query(
+    `INSERT INTO whatsapp_bot_send_ids (user_id, whatsapp_message_id, target_jid)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, whatsapp_message_id) DO UPDATE
+       SET target_jid = whatsapp_bot_send_ids.target_jid
+     WHERE whatsapp_bot_send_ids.target_jid IS NOT DISTINCT FROM EXCLUDED.target_jid
+     RETURNING whatsapp_message_id`,
+    [userId, messageId, target],
+  );
+  if (!result.rows[0]?.whatsapp_message_id) {
+    const error = new Error('WhatsApp bot-send id is already reserved for a different target');
+    error.code = 'BOT_SEND_ID_SCOPE_MISMATCH';
+    throw error;
+  }
+  return result.rows[0].whatsapp_message_id;
+}
+
 function createDefaultIngestService(logger) {
   return new MessageIngestService({ logger, campaignSegmentation: enqueueCampaignSegmentation });
 }
 
-function createBaileysClientWrapper({ sock, isReady, isReadOnly, status }) {
+function createBaileysClientWrapper({
+  sock,
+  isReady,
+  isReadOnly,
+  status,
+  reserveBotSend = null,
+  confirmBotSend = null,
+}) {
   return {
-    sendMessage: async (target, content) => {
+    sendMessage: async (target, content, options = {}) => {
       if (isReadOnly()) {
         const error = new Error('WhatsApp history import is read-only; sending is disabled');
         error.code = 'HISTORY_IMPORT_READ_ONLY';
         throw error;
       }
-      return sock.sendMessage(
-        normalizeOutboundJid(target),
+      const normalizedTarget = normalizeOutboundJid(target);
+      const messageId = options.messageId || generateMessageIDV2(sock.user?.id);
+      if (reserveBotSend) {
+        // Load-bearing order: persist ownership before WhatsApp can emit the
+        // fromMe echo. If persistence fails, do not send; the queue can retry.
+        await reserveBotSend({ messageId, target: normalizedTarget });
+      }
+      const result = await sock.sendMessage(
+        normalizedTarget,
         content && typeof content === 'object' && !Buffer.isBuffer(content)
           ? content
           : { text: String(content || '') },
+        { ...options, messageId },
       );
+      if (confirmBotSend) {
+        await confirmBotSend({ messageId, target: normalizedTarget }).catch(() => {});
+      }
+      return result;
     },
     sendPresenceUpdate: async (state, target) => sock.sendPresenceUpdate(state, normalizeOutboundJid(target)),
     getState: async () => (isReady() ? 'CONNECTED' : status().toUpperCase()),
@@ -390,6 +434,22 @@ class BaileysConnectionManager extends EventEmitter {
         isReady: () => this.ready,
         isReadOnly: () => historyImportMode || this._historyImport.enabled || this._historySendLock,
         status: () => this.status,
+        reserveBotSend: async ({ messageId, target }) => {
+          await reserveBotSendId({
+            database: this.db,
+            userId: this.userId,
+            messageId,
+            target,
+          });
+        },
+        confirmBotSend: async ({ messageId }) => {
+          await this.db.query(
+            `UPDATE whatsapp_bot_send_ids
+                SET sent_at = COALESCE(sent_at, NOW())
+              WHERE user_id = $1 AND whatsapp_message_id = $2`,
+            [this.userId, messageId],
+          );
+        },
       });
 
       sock.ev.on('creds.update', saveCreds);
@@ -795,6 +855,7 @@ class BaileysConnectionManager extends EventEmitter {
     const distinctSenders = new Set();
     for (const message of event.messages) {
       const msg = toWhatsappWebMessage(message);
+      msg.syncBatch = ownerSyncOnly;
       // In a sync/backlog batch, only the owner's own (fromMe) replies are
       // honored; synced customer/history messages are ignored to avoid
       // re-answering old conversations.
@@ -855,8 +916,33 @@ class BaileysConnectionManager extends EventEmitter {
         this.log('warn', 'message', `media download error: ${err.message}`);
       }
     }
-    const result = await this.ingestService.ingestWhatsappMessage({ userId: this.userId, msg, source: 'baileys' });
-    this.emit('message_ingested', result);
+    // Default 0 means keep retrying for the life of this manager. A true owner
+    // reply must not disappear during a database incident; after a process
+    // restart WhatsApp's synced fromMe history is the durable upstream replay.
+    const maxAttempts = Math.max(0, parseInt(process.env.WA_FROM_ME_INGEST_ATTEMPTS || '0', 10));
+    for (let attempt = 1; ; attempt++) {
+      const result = await this.ingestService.ingestWhatsappMessage({
+        userId: this.userId,
+        msg,
+        source: 'baileys',
+      });
+      if (result?.reason !== 'from_me_ownership_unverified') {
+        this.emit('message_ingested', result);
+        return result;
+      }
+      if (!msg?.fromMe || (maxAttempts > 0 && attempt >= maxAttempts)) {
+        const error = new Error('fromMe ownership could not be verified after retries');
+        error.code = 'FROM_ME_OWNERSHIP_UNVERIFIED';
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, this.ingestRetryDelayMs(attempt)));
+    }
+    return null;
+  }
+
+  ingestRetryDelayMs(attempt) {
+    const baseMs = Math.max(0, parseInt(process.env.WA_FROM_ME_INGEST_RETRY_MS || '500', 10));
+    return Math.min(30000, baseMs * (2 ** Math.max(0, attempt - 1)));
   }
 
   clearWebCache(reason) {
@@ -892,6 +978,7 @@ class BaileysConnectionManager extends EventEmitter {
 module.exports = {
   BaileysConnectionManager,
   createBaileysClientWrapper,
+  reserveBotSendId,
   normalizeOutboundJid,
   extractPhoneNumber,
   toWhatsappWebMessage,

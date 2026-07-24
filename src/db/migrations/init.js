@@ -552,6 +552,21 @@ const statements = [
     ON messages(user_id, whatsapp_message_id)
     WHERE whatsapp_message_id IS NOT NULL`,
 
+  // Reserve every Baileys-generated outbound id BEFORE the network send.
+  // messages.upsert can echo a bot send before the worker records it on the
+  // message row; this tenant-scoped registry makes ownership durable first.
+  `CREATE TABLE IF NOT EXISTS whatsapp_bot_send_ids (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    whatsapp_message_id TEXT NOT NULL,
+    target_jid TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sent_at TIMESTAMPTZ,
+    PRIMARY KEY (user_id, whatsapp_message_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS whatsapp_bot_send_ids_created_idx
+    ON whatsapp_bot_send_ids (created_at DESC)`,
+
   // ── Added 2026-06-10: true sent-message counter. The dashboard used to
   //    derive used = last_topup_amount - messages_remaining, which freezes at 0
   //    whenever topups accumulate (remaining > last topup). Track usage

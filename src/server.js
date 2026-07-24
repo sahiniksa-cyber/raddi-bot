@@ -851,6 +851,13 @@ async function retryMigrate(maxAttempts = 5, delayMs = 3000) {
   }
 }
 
+async function runRequiredStartupMigration(startupState) {
+  startupState.phase = 'migrating';
+  startupState.migration = 'running';
+  await retryMigrate();
+  startupState.migration = 'completed';
+}
+
 async function runPostStartupTasks(startupState) {
   try {
     cleanupRuntimeStorage(DATA_DIR);
@@ -859,9 +866,6 @@ async function runPostStartupTasks(startupState) {
   }
 
   try {
-    startupState.migration = 'running';
-    await retryMigrate();
-    startupState.migration = 'completed';
     const recovered = await recoverQueuedAiReplyJobs();
     if (recovered.recovered > 0) {
       console.log(`${new Date().toISOString()} [server] recovered ${recovered.recovered} queued AI reply jobs`);
@@ -875,9 +879,9 @@ async function runPostStartupTasks(startupState) {
       log: (m) => console.log(`${new Date().toISOString()} [server] ${m}`),
     });
   } catch (err) {
-    startupState.migration = 'failed';
-    startupState.migrationError = err.message;
-    console.error(`${new Date().toISOString()} [server] background migration failed: ${err.stack || err.message}`);
+    startupState.recovery = 'failed';
+    startupState.recoveryError = err.message;
+    console.error(`${new Date().toISOString()} [server] post-startup recovery failed: ${err.stack || err.message}`);
   }
 }
 
@@ -971,6 +975,9 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 
   try {
+    // Load-bearing startup gate: schema changes must commit before createApp,
+    // bot recovery, or any sending worker can observe the new code.
+    await runRequiredStartupMigration(startupState);
     startupState.phase = 'loading_app';
     startupState.app = createApp();
     startupState.ready = true;
@@ -980,6 +987,10 @@ async function main() {
     startupState.ready = false;
     startupState.phase = 'failed';
     startupState.error = err.message;
+    if (startupState.migration === 'running') {
+      startupState.migration = 'failed';
+      startupState.migrationError = err.message;
+    }
     console.error(`${new Date().toISOString()} [server] startup failed: ${err.stack || err.message}`);
     await shutdown('startup-failed', 1);
     return;

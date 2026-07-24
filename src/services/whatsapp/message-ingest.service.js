@@ -132,14 +132,22 @@ async function insertInboundMessage(client, { userId, conversationId, sender, te
   return { id: existing.rows[0].id, inserted: false };
 }
 
-async function insertOutboundHumanMessage(client, { userId, conversationId, sender, text, providerMessageId, rawPayload }) {
+async function insertOutboundHumanMessage(client, {
+  userId,
+  conversationId,
+  sender,
+  text,
+  providerMessageId,
+  rawPayload,
+  occurredAt = null,
+}) {
   // Records a reply that the human owner sent from their own phone (fromMe=true) so
   // it shows up in the conversation history and so the AI never tries to answer it.
   const result = await client.query(
-    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-     VALUES ($1, $2, 'whatsapp', $3, 'outbound', 'assistant', $4, $5, 'sent_by_human', $6::jsonb)
+    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload, created_at)
+     VALUES ($1, $2, 'whatsapp', $3, 'outbound', 'assistant', $4, $5, 'sent_by_human', $6::jsonb, COALESCE($7::timestamptz, NOW()))
      ON CONFLICT (user_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
-     RETURNING id`,
+     RETURNING id, created_at`,
     [
       conversationId,
       userId,
@@ -147,9 +155,38 @@ async function insertOutboundHumanMessage(client, { userId, conversationId, send
       text,
       providerMessageId,
       JSON.stringify(rawPayload),
+      occurredAt,
     ],
   );
-  return result.rows[0]?.id || null;
+  if (result.rows[0]?.id) {
+    return {
+      id: result.rows[0].id,
+      createdAt: result.rows[0].created_at || occurredAt || new Date(),
+      inserted: true,
+    };
+  }
+
+  const existing = await client.query(
+    `SELECT id, created_at FROM messages
+      WHERE user_id = $1
+        AND provider_message_id = $2
+        AND conversation_id = $3
+        AND sender = $4
+        AND channel_id = 'whatsapp'
+        AND direction = 'outbound'
+      LIMIT 1`,
+    [userId, providerMessageId, conversationId, sender],
+  );
+  if (!existing.rows[0]?.id) {
+    const error = new Error('owner provider message id already exists outside the expected conversation scope');
+    error.code = 'PROVIDER_MESSAGE_SCOPE_MISMATCH';
+    throw error;
+  }
+  return {
+    id: existing.rows[0].id,
+    createdAt: existing.rows[0].created_at || null,
+    inserted: false,
+  };
 }
 
 function recipientFromFromMeMessage(msg) {
@@ -160,6 +197,22 @@ function recipientFromFromMeMessage(msg) {
 
 function isFromMeMessage(msg) {
   return msg?.fromMe === true;
+}
+
+function occurredAtFromWhatsappMessage(msg) {
+  const value = Number(msg?.timestamp ?? msg?.messageTimestamp);
+  const providerMs = Number.isFinite(value) && value > 0
+    ? (value > 1_000_000_000_000 ? value : value * 1000)
+    : null;
+  const receivedMs = Number(msg?.receivedAt);
+  const usePreciseReceiveTime = Number.isFinite(receivedMs) && receivedMs > 0 && (
+    msg?.syncBatch !== true
+    || (providerMs && Math.abs(receivedMs - providerMs) <= 10000)
+  );
+  const selectedMs = usePreciseReceiveTime ? receivedMs : providerMs;
+  if (!Number.isFinite(selectedMs) || selectedMs <= 0) return null;
+  const occurredAt = new Date(selectedMs);
+  return Number.isNaN(occurredAt.getTime()) ? null : occurredAt;
 }
 
 const DEFAULT_OWNER_PAUSE_MINUTES = 30;
@@ -588,23 +641,36 @@ class MessageIngestService {
   }
 
   /**
-   * True when this WhatsApp message id was sent by the BOT itself (the outgoing
-   * worker records every send's Baileys key.id as whatsapp_message_id). Used to
-   * avoid mistaking the bot's own echoed message for an owner manual reply and
-   * self-pausing. Fail-open to false (treat as owner reply) on any error.
+   * True when this WhatsApp message id was sent by the BOT itself. Baileys
+   * reserves every id in whatsapp_bot_send_ids before the network send, while
+   * the outgoing worker also records delivered ids on messages. Used to avoid
+   * mistaking a bot echo for an owner manual reply and self-pausing. Returns
+   * null when ownership cannot be verified, so callers fail closed.
    */
   async isOwnBotSend({ userId, whatsappId }) {
-    if (!userId || !whatsappId) return false;
+    if (!userId || !whatsappId) return null;
     try {
       const r = await this.db.query(
-        `SELECT 1 FROM messages
-          WHERE user_id = $1 AND whatsapp_message_id = $2 AND direction = 'outbound'
+        `SELECT 1
+           FROM (
+             SELECT whatsapp_message_id
+               FROM messages
+              WHERE user_id = $1
+                AND whatsapp_message_id = $2
+                AND direction = 'outbound'
+             UNION ALL
+             SELECT whatsapp_message_id
+               FROM whatsapp_bot_send_ids
+              WHERE user_id = $1
+                AND whatsapp_message_id = $2
+           ) bot_sends
           LIMIT 1`,
         [userId, whatsappId],
       );
       return r.rows.length > 0;
-    } catch (_) {
-      return false;
+    } catch (error) {
+      this.logger?.warn?.('from-me-ownership', `failed to verify WhatsApp send ownership: ${error.message}`);
+      return null;
     }
   }
 
@@ -623,12 +689,23 @@ class MessageIngestService {
     // CRITICAL: tell the OWNER's manual reply (which MUST pause the bot) apart
     // from the BOT's OWN outgoing message echoed back by WhatsApp as fromMe
     // (which must NOT pause — otherwise the bot silences itself after every
-    // reply it sends). The outgoing worker records the Baileys key.id of every
-    // message it sends as whatsapp_message_id, so a fromMe whose id we already
-    // sent is our own echo, not a human reply.
+    // reply it sends). Baileys durably reserves the id before sending, so the
+    // ownership lookup is valid even if the echo beats the worker's post-send
+    // update of messages.whatsapp_message_id.
     const whatsappId = messageIdFromWhatsappMessage(msg);
-    if (whatsappId && (await this.isOwnBotSend({ userId, whatsappId }))) {
-      return { accepted: true, statusCode: 200, reason: 'own_bot_echo', fromMe: true };
+    if (whatsappId) {
+      const ownership = await this.isOwnBotSend({ userId, whatsappId });
+      if (ownership === true) {
+        return { accepted: true, statusCode: 200, reason: 'own_bot_echo', fromMe: true };
+      }
+      if (ownership === null) {
+        return {
+          accepted: false,
+          statusCode: 503,
+          reason: 'from_me_ownership_unverified',
+          fromMe: true,
+        };
+      }
     }
 
     const text = contentFromWhatsappMessage(msg);
@@ -650,6 +727,7 @@ class MessageIngestService {
       fromMe: true,
       ...toSafeRawPayload(msg, { includeMediaData: false }),
     };
+    const occurredAt = occurredAtFromWhatsappMessage(msg);
 
     const saved = await this.db.transaction(async (client) => {
       const { id: conversationId, phoneNumber: storedPhoneNumber } = await upsertConversation(client, {
@@ -657,16 +735,45 @@ class MessageIngestService {
         sender: recipient,
         phoneNumber,
       });
-      const messageId = await insertOutboundHumanMessage(client, {
+      const message = await insertOutboundHumanMessage(client, {
         userId,
         conversationId,
         sender: recipient,
         text,
         providerMessageId,
         rawPayload,
+        occurredAt,
       });
-      return { conversationId, messageId, phoneNumber: storedPhoneNumber };
+      if (message.inserted) {
+        await client.query(
+          `UPDATE escalation_threads
+              SET resolved_at = NOW()
+            WHERE user_id = $1
+              AND conversation_id = $2
+              AND resolved_at IS NULL
+              AND created_at <= $3`,
+          [userId, conversationId, message.createdAt],
+        );
+      }
+      return {
+        conversationId,
+        messageId: message.id,
+        messageInserted: message.inserted,
+        phoneNumber: storedPhoneNumber,
+      };
     });
+
+    if (!saved.messageInserted) {
+      return {
+        accepted: true,
+        statusCode: 200,
+        reason: 'duplicate_owner_message',
+        fromMe: true,
+        providerMessageId,
+        conversationId: saved.conversationId,
+        messageId: saved.messageId,
+      };
+    }
 
     this.logger.info?.('message', `recorded fromMe human reply ${providerMessageId} to ${recipient}`);
 

@@ -41,6 +41,29 @@ test('getPendingEscalation reports not pending when there is no unresolved threa
   assert.equal(r.pending, false);
 });
 
+test('getPendingEscalation ignores an unresolved thread after a direct owner reply', async () => {
+  let queryText = '';
+  const database = {
+    isConfigured: () => true,
+    query: async (sql) => {
+      queryText = sql;
+      return { rows: [] };
+    },
+  };
+
+  const r = await getPendingEscalation({
+    database,
+    userId: 'u-1',
+    conversationId: 'c-1',
+  });
+
+  assert.equal(r.pending, false);
+  assert.match(queryText, /NOT EXISTS/);
+  assert.match(queryText, /messages/);
+  assert.match(queryText, /sent_by_human/);
+  assert.match(queryText, /created_at > escalation_threads\.created_at/);
+});
+
 test('getPendingEscalation is safe when the database is not configured', async () => {
   const r = await getPendingEscalation({
     database: { isConfigured: () => false },
