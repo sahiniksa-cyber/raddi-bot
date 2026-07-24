@@ -20,13 +20,16 @@ const dbMock = {
   isConfigured: () => true,
   async query(sql) {
     const s = String(sql);
-    if (s.includes('FROM conversations') && s.includes('WHERE id = $1 AND user_id = $2')) {
+    if (s.includes('FROM conversations')
+        && s.includes('WHERE id = $1')
+        && s.includes('user_id = $2')
+        && !s.includes('escalated_until')) {
       return { rows: [{ id: 'conv-1', sender: '966500000000@s.whatsapp.net', phone_number: '966500000000' }], rowCount: 1 };
     }
     if (s.includes('escalated_until') && s.includes('escalated_until > NOW()')) {
       return { rows: [], rowCount: 0 };
     }
-    if (s.includes('FROM messages') && s.includes("direction = 'inbound'") && s.includes('WHERE id = $1 AND user_id = $2')) {
+    if (s.includes('FROM messages') && s.includes("direction = 'inbound'") && s.includes('WHERE id = $1') && s.includes('user_id = $2')) {
       return { rows: [{ content: 'ايش صار بخصوص المشكلة؟' }], rowCount: 1 };
     }
     if (s.includes('last_assistant') && s.includes("status IN ('queued_for_ai', 'ai_failed')")) {

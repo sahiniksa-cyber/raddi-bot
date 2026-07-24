@@ -4,13 +4,14 @@ const { Worker } = require('bullmq');
 
 const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
-const { QUEUE_NAMES, getQueues } = require('../queues/message-queue');
-const { normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
+const { QUEUE_NAMES, enqueueOutgoingWhatsapp, getQueues } = require('../queues/message-queue');
+const { buildEscalationJobKey, normalizeOutgoingJobKey } = require('../queues/outgoing-job-key');
 const { checkMessageQuota, decrementMessageQuota } = require('../services/billing/message-quota');
 const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
 const { recordThreadMessage } = require('../services/escalation/escalation-bridge');
 const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-review');
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
+const { prepareEscalation } = require('./escalation-routing');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -34,15 +35,125 @@ async function updateJobStatus(jobKey, fields) {
   );
 }
 
-async function markReplyMessage(replyMessageId, status, rawPayload = {}) {
-  if (!replyMessageId) return;
+function messageScope(payload = {}) {
+  return {
+    userId: payload.userId,
+    channelId: payload.channelId || 'whatsapp',
+    conversationId: payload.conversationId || null,
+  };
+}
+
+async function markReplyMessage(replyMessageId, status, rawPayload = {}, scope = {}) {
+  if (!replyMessageId || !scope.userId || scope.channelId !== 'whatsapp') return;
+  const conversationFilter = scope.conversationId ? ' AND conversation_id = $5' : '';
+  const params = [
+    replyMessageId,
+    status,
+    JSON.stringify(rawPayload),
+    scope.userId,
+  ];
+  if (scope.conversationId) params.push(scope.conversationId);
   await db.query(
     `UPDATE messages
      SET status = $2,
          raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $3::jsonb
-     WHERE id = $1`,
-    [replyMessageId, status, JSON.stringify(rawPayload)],
+     WHERE id = $1
+       AND user_id = $4
+       AND channel_id = 'whatsapp'${conversationFilter}`,
+    params,
   );
+}
+
+async function validateOutgoingScope({
+  database = db,
+  userId,
+  channelId = 'whatsapp',
+  conversationId,
+  sender,
+  replyMessageId,
+} = {}) {
+  if (!database?.isConfigured?.()) throw new Error('outgoing scope validation requires the database');
+  if (!userId || channelId !== 'whatsapp' || !conversationId || !sender) {
+    const error = new Error('outgoing scope requires tenant, WhatsApp channel, conversation, and customer');
+    error.code = 'OUTGOING_SCOPE_MISMATCH';
+    throw error;
+  }
+
+  const result = replyMessageId
+    ? await database.query(
+      `SELECT m.id, m.content, m.status, m.whatsapp_message_id
+         FROM messages m
+         JOIN conversations c
+          ON c.id = m.conversation_id
+          AND c.user_id = m.user_id
+          AND c.channel_id = m.channel_id
+          AND c.sender = m.sender
+        WHERE m.id = $1
+          AND m.user_id = $2
+          AND m.conversation_id = $3
+          AND m.sender = $4
+          AND m.channel_id = $5
+        LIMIT 1`,
+      [replyMessageId, userId, conversationId, sender, channelId],
+    )
+    : await database.query(
+      `SELECT c.id, NULL::text AS content
+         FROM conversations c
+        WHERE c.id = $1 AND c.user_id = $2 AND c.sender = $3 AND c.channel_id = $4
+        LIMIT 1`,
+      [conversationId, userId, sender, channelId],
+    );
+
+  if (!result.rows[0]) {
+    const error = new Error('outgoing payload does not match the persisted tenant/conversation/customer scope');
+    error.code = 'OUTGOING_SCOPE_MISMATCH';
+    throw error;
+  }
+  return result.rows[0];
+}
+
+async function routePreSendEscalation({
+  finalReply,
+  config = {},
+  userId,
+  conversationId,
+  sender,
+  replyMessageId,
+  handoffKey,
+  inboundText = '',
+  customerPhoneNumber = null,
+  enqueueOutgoing = enqueueOutgoingWhatsapp,
+} = {}) {
+  const prepared = prepareEscalation({
+    reply: finalReply,
+    config,
+    customerSender: sender,
+    customerPhoneNumber,
+    inboundText,
+  });
+  if (!prepared.ownerMessage) {
+    return { reply: prepared.customerReply, escalated: false };
+  }
+
+  const baseKey = `${replyMessageId || handoffKey || conversationId}-pre-send-handoff`;
+  await enqueueOutgoing({
+    userId,
+    tenantId: userId,
+    channelId: 'whatsapp',
+    customerId: sender,
+    conversationId,
+    sender: prepared.ownerMessage.sender,
+    reply: prepared.ownerMessage.reply,
+    escalation: true,
+    escalationSummary: prepared.ownerMessage.summary,
+    customerSender: sender,
+    customerPhoneNumber,
+    source: 'pre_send_handoff',
+  }, {
+    jobKey: buildEscalationJobKey(baseKey),
+    delay: 0,
+  });
+  return { reply: prepared.customerReply, escalated: true };
 }
 
 // Records the Baileys-assigned WhatsApp message ID so getMessage(key) can look
@@ -52,11 +163,23 @@ async function markReplyMessage(replyMessageId, status, rawPayload = {}) {
 // The user_id filter is load-bearing: getMessage looks up by (user_id, key.id),
 // and we MUST guarantee the row we write under one user's key.id can never be
 // updated by a different user's worker even if they share a Postgres pool.
-async function recordWhatsappMessageId(userId, replyMessageId, whatsappMessageId) {
-  if (!userId || !replyMessageId || !whatsappMessageId) return;
+async function recordWhatsappMessageId({
+  userId,
+  conversationId,
+  sender,
+  replyMessageId,
+  whatsappMessageId,
+}) {
+  if (!userId || !conversationId || !sender || !replyMessageId || !whatsappMessageId) return;
   await db.query(
-    `UPDATE messages SET whatsapp_message_id = $3 WHERE user_id = $1 AND id = $2`,
-    [userId, replyMessageId, String(whatsappMessageId)],
+    `UPDATE messages
+        SET whatsapp_message_id = $5
+      WHERE user_id = $1
+        AND conversation_id = $2
+        AND sender = $3
+        AND id = $4
+        AND channel_id = 'whatsapp'`,
+    [userId, conversationId, sender, replyMessageId, String(whatsappMessageId)],
   ).catch((err) => {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] failed to record whatsapp_message_id: ${err.message}`);
   });
@@ -110,7 +233,7 @@ async function skipStaleOutgoingJob(job, { replyMessageId }) {
     sentBy: WORKER_NAME,
     expiredAt: new Date().toISOString(),
     error: message,
-  });
+  }, messageScope(job.data));
   await updateJobStatus(job.id, {
     status: 'expired',
     finished_at: new Date(),
@@ -136,7 +259,7 @@ async function cancelDisabledAutoReply(job, { replyMessageId }) {
     canceledAt: new Date().toISOString(),
     reason: 'auto_reply_disabled',
     error: message,
-  });
+  }, messageScope(job.data));
   await updateJobStatus(job.id, {
     status: 'canceled_auto_reply_disabled',
     finished_at: new Date(),
@@ -150,17 +273,56 @@ async function processOutgoingWhatsapp(job, {
   getUserBot,
   reviewBeforeSend = reviewOutgoingReplyBeforeSend,
   getAutoReplyEnabled = loadAutoReplyEnabled,
+  scopeValidator = validateOutgoingScope,
+  enqueueOutgoing = enqueueOutgoingWhatsapp,
 }) {
   const payload = job.data || {};
   const userId = payload.userId;
   const sender = payload.sender;
-  const reply = String(payload.reply || '').trim();
+  let reply = String(payload.reply || '').trim();
   const replyMessageId = payload.replyMessageId;
   const providerMessageId = payload.providerMessageId;
 
   if (!userId) throw new Error('Missing userId in outgoing payload');
   if (!sender) throw new Error('Missing sender in outgoing payload');
   if (!reply) throw new Error('Missing reply in outgoing payload');
+  const authoritativeCustomer = payload.escalation ? payload.customerSender : sender;
+  if (payload.tenantId && payload.tenantId !== userId) {
+    const error = new Error('outgoing payload tenant alias mismatch');
+    error.code = 'OUTGOING_SCOPE_MISMATCH';
+    throw error;
+  }
+  if (payload.channelId && payload.channelId !== 'whatsapp') {
+    const error = new Error('outgoing payload channel mismatch');
+    error.code = 'OUTGOING_SCOPE_MISMATCH';
+    throw error;
+  }
+  if (payload.customerId && authoritativeCustomer && payload.customerId !== authoritativeCustomer) {
+    const error = new Error('outgoing payload customer alias mismatch');
+    error.code = 'OUTGOING_SCOPE_MISMATCH';
+    throw error;
+  }
+
+  if (!payload.escalation && payload.conversationId) {
+    const scoped = await scopeValidator({
+      database: db,
+      userId,
+      channelId: payload.channelId || 'whatsapp',
+      conversationId: payload.conversationId,
+      sender,
+      replyMessageId,
+    });
+    if (replyMessageId && scoped?.content) reply = String(scoped.content).trim();
+  } else if (payload.escalation && payload.conversationId && payload.customerSender) {
+    await scopeValidator({
+      database: db,
+      userId,
+      channelId: payload.channelId || 'whatsapp',
+      conversationId: payload.conversationId,
+      sender: payload.customerSender,
+      replyMessageId: null,
+    });
+  }
 
   // Catch automated replies that were already generated when the merchant
   // turns the reply switch off. Campaigns and manual/team sends have different
@@ -178,7 +340,17 @@ async function processOutgoingWhatsapp(job, {
   // if it fails so the customer doesn't fall through the cracks silently.
   if (sender.endsWith('@lid')) {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid sender detected: jid=${sender} replyMessageId=${replyMessageId} userId=${userId}`);
-    return handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot, reviewBeforeSend });
+    return handleLidOutgoing({
+      job,
+      payload,
+      userId,
+      sender,
+      reply,
+      replyMessageId,
+      getUserBot,
+      reviewBeforeSend,
+      enqueueOutgoing,
+    });
   }
 
   if (await skipStaleOutgoingJob(job, { replyMessageId })) {
@@ -192,7 +364,7 @@ async function processOutgoingWhatsapp(job, {
       sentBy: WORKER_NAME,
       canceledAt: new Date().toISOString(),
       error: message,
-    });
+    }, messageScope(payload));
     await updateJobStatus(job.id, {
       status: 'canceled',
       finished_at: new Date(),
@@ -202,13 +374,18 @@ async function processOutgoingWhatsapp(job, {
     return { skipped: true, reason: 'bot_stopped_by_owner' };
   }
 
-  if (!payload.escalation && await isConversationOwnerPaused({ userId, sender, replyMessageId })) {
+  if (!payload.escalation && await isConversationOwnerPaused({
+    userId,
+    conversationId: payload.conversationId,
+    sender,
+    replyMessageId,
+  })) {
     const message = 'outgoing reply canceled because owner replied (escalated_until active)';
     await markReplyMessage(replyMessageId, 'canceled', {
       sentBy: WORKER_NAME,
       canceledAt: new Date().toISOString(),
       error: message,
-    });
+    }, messageScope(payload));
     await updateJobStatus(job.id, {
       status: 'canceled',
       finished_at: new Date(),
@@ -223,7 +400,11 @@ async function processOutgoingWhatsapp(job, {
     return { skipped: true, reason: 'quota_empty' };
   }
 
-  if (await isReplyAlreadySent({ replyMessageId })) {
+  if (await isReplyAlreadySent({
+    replyMessageId,
+    userId,
+    conversationId: payload.conversationId,
+  })) {
     await updateJobStatus(job.id, {
       status: 'completed',
       finished_at: new Date(),
@@ -269,7 +450,7 @@ async function processOutgoingWhatsapp(job, {
         sentBy: WORKER_NAME,
         canceledAt: new Date().toISOString(),
         error: message,
-      });
+      }, messageScope(payload));
       await updateJobStatus(job.id, {
         status: 'canceled',
         finished_at: new Date(),
@@ -302,13 +483,33 @@ async function processOutgoingWhatsapp(job, {
   if (preSend.suppressed) {
     return completeSuppressedOutgoing(job, { replyMessageId, lid: false });
   }
-  const finalReply = String(preSend.reply || '').trim();
+  let finalReply = String(preSend.reply || '').trim();
   if (!finalReply) throw new Error('pre-send review returned no sendable reply');
+  const routed = await routePreSendEscalation({
+    finalReply,
+    config: bot?.ai?.config || bot?.config || {},
+    userId,
+    conversationId: payload.conversationId,
+    sender,
+    replyMessageId,
+    handoffKey: payload.messageId || payload.providerMessageId || job.id,
+    inboundText: preSend?.audit?.handoffSummary || payload.text || '',
+    customerPhoneNumber: payload.phoneNumber || null,
+    enqueueOutgoing,
+  });
+  finalReply = String(routed.reply || '').trim();
+  if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
 
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
   const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
-  await recordWhatsappMessageId(userId, replyMessageId, sendResult?.key?.id);
+  await recordWhatsappMessageId({
+    userId,
+    conversationId: payload.conversationId,
+    sender: payload.escalation ? payload.customerSender : sender,
+    replyMessageId,
+    whatsappMessageId: sendResult?.key?.id,
+  });
 
   // Escalation bridge: remember which customer this team-bound message is
   // about, keyed by its WhatsApp id, so a quote-reply in the group can be
@@ -345,7 +546,7 @@ async function processOutgoingWhatsapp(job, {
     sentBy: WORKER_NAME,
     sentAt: new Date().toISOString(),
     quotaRemainingAfter: dec.remaining ?? 0,
-  });
+  }, messageScope(payload));
   await updateJobStatus(job.id, {
     status: 'completed',
     finished_at: new Date(),
@@ -375,7 +576,17 @@ function isSocketOpen(bot) {
   return ws.readyState === 1;
 }
 
-async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMessageId, getUserBot, reviewBeforeSend = reviewOutgoingReplyBeforeSend }) {
+async function handleLidOutgoing({
+  job,
+  payload,
+  userId,
+  sender,
+  reply,
+  replyMessageId,
+  getUserBot,
+  reviewBeforeSend = reviewOutgoingReplyBeforeSend,
+  enqueueOutgoing = enqueueOutgoingWhatsapp,
+}) {
   // Try a best-effort send first. Some sessions can deliver to @lid even though
   // it's unreliable in general — better to attempt than to silently drop.
   let sendError = null;
@@ -388,13 +599,18 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     // the @lid branch (which is the VAST majority of customers on privacy-masked
     // numbers) sent the AI reply even after the owner had replied manually, so
     // "stop when I step in" silently never worked for ~98% of conversations.
-    if (!payload.escalation && await isConversationOwnerPaused({ userId, sender, replyMessageId })) {
+    if (!payload.escalation && await isConversationOwnerPaused({
+      userId,
+      conversationId: payload.conversationId,
+      sender,
+      replyMessageId,
+    })) {
       const message = 'outgoing reply canceled because owner replied (escalated_until active)';
       await markReplyMessage(replyMessageId, 'canceled', {
         sentBy: WORKER_NAME,
         canceledAt: new Date().toISOString(),
         error: message,
-      });
+      }, messageScope(payload));
       await updateJobStatus(job.id, {
         status: 'canceled',
         finished_at: new Date(),
@@ -407,7 +623,11 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
       await cancelOutgoingForQuota(job, { replyMessageId });
       return { skipped: true, reason: 'quota_empty', lid: true };
     }
-    if (await isReplyAlreadySent({ replyMessageId })) {
+    if (await isReplyAlreadySent({
+      replyMessageId,
+      userId,
+      conversationId: payload.conversationId,
+    })) {
       await updateJobStatus(job.id, {
         status: 'completed',
         finished_at: new Date(),
@@ -443,10 +663,30 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     if (preSend.suppressed) {
       return completeSuppressedOutgoing(job, { replyMessageId, lid: true });
     }
-    const finalReply = String(preSend.reply || '').trim();
+    let finalReply = String(preSend.reply || '').trim();
     if (!finalReply) throw new Error('pre-send review returned no sendable reply');
+    const routed = await routePreSendEscalation({
+      finalReply,
+      config: bot?.ai?.config || bot?.config || {},
+      userId,
+      conversationId: payload.conversationId,
+      sender,
+      replyMessageId,
+      handoffKey: payload.messageId || payload.providerMessageId || job.id,
+      inboundText: preSend?.audit?.handoffSummary || payload.text || '',
+      customerPhoneNumber: payload.phoneNumber || null,
+      enqueueOutgoing,
+    });
+    finalReply = String(routed.reply || '').trim();
+    if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
     const lidResult = await bot.client.sendMessage(sender, finalReply);
-    await recordWhatsappMessageId(userId, replyMessageId, lidResult?.key?.id);
+    await recordWhatsappMessageId({
+      userId,
+      conversationId: payload.conversationId,
+      sender,
+      replyMessageId,
+      whatsappMessageId: lidResult?.key?.id,
+    });
     // Same rule as the main path: a successful send consumes one quota unit.
     // Without this, @lid customers (the majority on privacy-masked numbers)
     // were never metered and the dashboard counter froze. System notices
@@ -463,7 +703,7 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
       sentAt: new Date().toISOString(),
       lid: true,
       quotaRemainingAfter: dec.remaining ?? 0,
-    });
+    }, messageScope(payload));
     await updateJobStatus(job.id, {
       status: 'completed',
       finished_at: new Date(),
@@ -486,7 +726,7 @@ async function handleLidOutgoing({ job, payload, userId, sender, reply, replyMes
     skippedAt: new Date().toISOString(),
     reason: 'sender_is_lid_only',
     error: sendError?.message || null,
-  });
+  }, messageScope(payload));
 
   await notifyOwnerOfLidFailure({ userId, sender, getUserBot }).catch((notifyErr) => {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] owner notify for @lid failed: ${notifyErr.message}`);
@@ -501,7 +741,7 @@ async function completeSuppressedOutgoing(job, { replyMessageId, lid = false } =
     sentBy: WORKER_NAME,
     suppressedAt: new Date().toISOString(),
     error: message,
-  });
+  }, messageScope(job.data));
   await updateJobStatus(job.id, {
     status: 'completed',
     finished_at: new Date(),
@@ -541,12 +781,20 @@ function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
 // process died before the status update. A reply whose message row is already
 // 'sent' (or carries a recorded WhatsApp id) must never ship again. Fail-open:
 // an unknown state must not block real replies.
-async function isReplyAlreadySent({ replyMessageId, database = db } = {}) {
-  if (!replyMessageId || !database?.isConfigured?.()) return false;
+async function isReplyAlreadySent({
+  replyMessageId,
+  userId,
+  conversationId,
+  database = db,
+} = {}) {
+  if (!replyMessageId || !userId || !conversationId || !database?.isConfigured?.()) return false;
   try {
     const result = await database.query(
-      `SELECT status, whatsapp_message_id FROM messages WHERE id = $1 LIMIT 1`,
-      [replyMessageId],
+      `SELECT status, whatsapp_message_id
+         FROM messages
+        WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+        LIMIT 1`,
+      [replyMessageId, userId, conversationId],
     );
     const row = result.rows[0];
     if (!row) return false;
@@ -577,7 +825,7 @@ async function cancelOutgoingForQuota(job, { replyMessageId }) {
     sentBy: WORKER_NAME,
     canceledAt: new Date().toISOString(),
     error: message,
-  });
+  }, messageScope(job.data));
   await updateJobStatus(job.id, {
     status: 'canceled',
     finished_at: new Date(),
@@ -592,14 +840,23 @@ async function cancelOutgoingForQuota(job, { replyMessageId }) {
 // in (humanization delay 50-75s) would still fire after their message and
 // "interrupt" the conversation. Cancel it here. Fail-open on every edge so a
 // missing column / DB hiccup can never block customer replies.
-async function isConversationOwnerPaused({ userId, sender, replyMessageId = null, database = db }) {
+async function isConversationOwnerPaused({
+  userId,
+  conversationId,
+  sender,
+  replyMessageId = null,
+  database = db,
+}) {
   if (!userId || !sender || !database?.isConfigured?.()) return false;
   try {
     const result = await database.query(
       `SELECT escalated_until FROM conversations
-       WHERE user_id = $1 AND sender = $2
+       WHERE user_id = $1
+         AND ($3::uuid IS NULL OR id = $3)
+         AND sender = $2
+         AND channel_id = 'whatsapp'
        LIMIT 1`,
-      [userId, sender],
+      [userId, sender, conversationId || null],
     );
     const until = result.rows[0]?.escalated_until;
     if (until && new Date(until).getTime() > Date.now()) return true;
@@ -616,16 +873,24 @@ async function isConversationOwnerPaused({ userId, sender, replyMessageId = null
     if (replyMessageId) {
       const human = await database.query(
         `SELECT 1
-           FROM messages ai
-           JOIN messages hum ON hum.conversation_id = ai.conversation_id
+          FROM messages ai
+           JOIN messages hum
+             ON hum.conversation_id = ai.conversation_id
+            AND hum.user_id = ai.user_id
+            AND hum.channel_id = ai.channel_id
+            AND hum.sender = ai.sender
           WHERE ai.id = $1
+            AND ai.user_id = $2
+            AND ($3::uuid IS NULL OR ai.conversation_id = $3)
+            AND ai.sender = $4
+            AND ai.channel_id = 'whatsapp'
             AND hum.id <> ai.id
             AND hum.direction = 'outbound'
             AND hum.created_at >= ai.created_at
             AND (hum.status = 'sent_by_human'
                  OR (hum.status = 'sent' AND hum.raw_payload->>'source' = 'manual_send'))
           LIMIT 1`,
-        [replyMessageId],
+        [replyMessageId, userId, conversationId || null, sender],
       );
       if (human.rows.length > 0) return true;
     }
@@ -836,7 +1101,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
         sentBy: WORKER_NAME,
         failedAt: new Date().toISOString(),
         error: err.message,
-      }).catch(() => {});
+      }, messageScope(job.data)).catch(() => {});
     }
   });
 
@@ -858,6 +1123,7 @@ module.exports = {
   notifyOwnerOfLidFailure,
   outgoingStaleMaxAgeMs,
   processOutgoingWhatsapp,
+  routePreSendEscalation,
   loadAutoReplyEnabled,
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,
@@ -866,5 +1132,6 @@ module.exports = {
   shouldCancelOutgoingForStoppedBot,
   shouldSkipStaleOutgoingPayload,
   updatePersistedJobKey,
+  validateOutgoingScope,
   waitForConnectedBot,
 };

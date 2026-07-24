@@ -29,6 +29,7 @@ require.cache[require.resolve(quotaModulePath)] = {
 };
 
 const { processOutgoingWhatsapp } = require('../src/workers/outgoing-whatsapp-worker');
+const validateScope = async () => ({ content: null });
 
 function makeJob(sender = '966500000001@s.whatsapp.net') {
   return {
@@ -72,6 +73,7 @@ test('normal WhatsApp path sends only the final reviewed text', async () => {
   try {
     const result = await processOutgoingWhatsapp(makeJob(), {
       getUserBot: async () => makeBot(sent),
+      scopeValidator: validateScope,
       reviewBeforeSend: async () => ({ reply: 'النص النهائي المراجع', suppressed: false }),
     });
     assert.equal(result.sent, true);
@@ -86,6 +88,7 @@ test('suppressed duplicate completes without any WhatsApp send', async () => {
   const sent = [];
   const result = await processOutgoingWhatsapp(makeJob(), {
     getUserBot: async () => makeBot(sent),
+    scopeValidator: validateScope,
     reviewBeforeSend: async () => ({ reply: '', suppressed: true }),
   });
   assert.equal(result.reason, 'pre_send_suppressed');
@@ -97,6 +100,7 @@ test('review failure is fail-closed on the normal path', async () => {
   await assert.rejects(
     processOutgoingWhatsapp(makeJob(), {
       getUserBot: async () => makeBot(sent),
+      scopeValidator: validateScope,
       reviewBeforeSend: async () => { throw new Error('review timeout'); },
     }),
     /review timeout/,
@@ -108,6 +112,7 @@ test('review failure is retried, not swallowed, on the @lid path', async () => {
   await assert.rejects(
     processOutgoingWhatsapp(makeJob('278571713060916@lid'), {
       getUserBot: async () => makeBot(sent),
+      scopeValidator: validateScope,
       reviewBeforeSend: async () => { throw new Error('review timeout'); },
     }),
     /review timeout/,
@@ -123,6 +128,7 @@ test('disabled auto-reply cancels an already queued AI reply before review or se
       botLookups++;
       return makeBot([]);
     },
+    scopeValidator: validateScope,
     reviewBeforeSend: async () => {
       reviews++;
       return { reply: 'should never send', suppressed: false };

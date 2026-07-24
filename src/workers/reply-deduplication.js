@@ -91,18 +91,12 @@ async function findDuplicateRecentReply({
   lookback = 3,
   threshold = 0.85,
   userId,
+  channelId = 'whatsapp',
 } = {}) {
-  if (!database || !conversationId || !candidate) return null;
+  if (!database || !conversationId || !candidate || !userId || channelId !== 'whatsapp') return null;
   if (typeof database.query !== 'function') return null;
 
-  // Defense-in-depth: scope by userId when the caller threads it. Backward
-  // compatible — without a userId the params stay [conversationId, lookback].
-  const params = [conversationId, Math.max(1, Number(lookback) || 1)];
-  let userFilter = '';
-  if (userId) {
-    params.push(userId);
-    userFilter = `\n         AND user_id = $${params.length}`;
-  }
+  const params = [conversationId, Math.max(1, Number(lookback) || 1), userId, channelId];
 
   let rows;
   try {
@@ -110,9 +104,11 @@ async function findDuplicateRecentReply({
       `SELECT content
        FROM messages
        WHERE conversation_id = $1
+         AND user_id = $3
+         AND channel_id = $4
          AND direction = 'outbound'
-         AND role = 'assistant'${userFilter}
-       ORDER BY created_at DESC
+         AND role = 'assistant'
+       ORDER BY created_at DESC, id DESC
        LIMIT $2`,
       params,
     );

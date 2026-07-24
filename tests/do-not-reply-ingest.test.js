@@ -58,7 +58,7 @@ test('blocked customer: message is stored (accepted) but NO AI reply is enqueued
   // re-enqueues (and answers) the blocked customer ~30s later.
   const marked = topLevelQueries.find((q) => /UPDATE messages SET status = 'do_not_reply'/.test(q.sql));
   assert.ok(marked, 'blocked inbound row must be marked do_not_reply');
-  assert.deepEqual(marked.params, ['msg-1', 'u1']);
+  assert.deepEqual(marked.params, ['msg-1', 'u1', 'conv-1', '966501234567@s.whatsapp.net']);
 });
 
 test('non-blocked customer: AI reply is still enqueued normally', async () => {
@@ -97,7 +97,7 @@ test('global auto-reply off stores inbound but never queues AI', async () => {
   const marked = topLevelQueries.find(query =>
     /UPDATE messages SET status = 'auto_reply_disabled'/.test(query.sql));
   assert.ok(marked, 'disabled auto-reply must be terminal so recovery cannot answer later');
-  assert.deepEqual(marked.params, ['msg-1', 'u1']);
+  assert.deepEqual(marked.params, ['msg-1', 'u1', 'conv-1', '966501234567@s.whatsapp.net']);
 });
 
 test('global auto-reply defaults on when the merchant never used the switch', async () => {

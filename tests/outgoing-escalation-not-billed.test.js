@@ -58,6 +58,7 @@ stubModule(bridgePath, {
 // Must happen AFTER db/quota stubs are in require.cache.
 
 const { processOutgoingWhatsapp } = require('../src/workers/outgoing-whatsapp-worker');
+const validateScope = async () => ({ content: null });
 
 // ── Bot factory helpers ───────────────────────────────────────────────────────
 
@@ -103,7 +104,7 @@ test('escalation message is sent but quota is NOT decremented', async () => {
   try {
     const result = await processOutgoingWhatsapp(
       makeJob({ escalation: true, customerSender: '966500000001@s.whatsapp.net', conversationId: 'conv-1' }),
-      { getUserBot: async () => makeConnectedBot() },
+      { getUserBot: async () => makeConnectedBot(), scopeValidator: validateScope },
     );
     assert.equal(result.sent, true, 'escalation message must be sent');
     assert.equal(decrementCalls, 0, 'quota must NOT be decremented for escalation');
@@ -124,7 +125,7 @@ test('escalation message is sent even when quota is 0 (never blocked)', async ()
   try {
     const result = await processOutgoingWhatsapp(
       makeJob({ escalation: true, customerSender: '966500000001@s.whatsapp.net', conversationId: 'conv-1' }),
-      { getUserBot: async () => makeConnectedBot() },
+      { getUserBot: async () => makeConnectedBot(), scopeValidator: validateScope },
     );
     assert.equal(result.sent, true, 'escalation must be sent even at zero quota');
     assert.equal(decrementCalls, 0, 'quota must NOT be decremented for escalation at zero');

@@ -30,19 +30,21 @@ function makeDb(rows) {
 test('getPendingEscalation reports pending when an unresolved escalation thread exists', async () => {
   const r = await getPendingEscalation({
     database: makeDb([{ created_at: new Date('2026-06-27T09:00:00Z') }]),
+    userId: 'u-1',
     conversationId: 'c-1',
   });
   assert.equal(r.pending, true);
 });
 
 test('getPendingEscalation reports not pending when there is no unresolved thread', async () => {
-  const r = await getPendingEscalation({ database: makeDb([]), conversationId: 'c-1' });
+  const r = await getPendingEscalation({ database: makeDb([]), userId: 'u-1', conversationId: 'c-1' });
   assert.equal(r.pending, false);
 });
 
 test('getPendingEscalation is safe when the database is not configured', async () => {
   const r = await getPendingEscalation({
     database: { isConfigured: () => false },
+    userId: 'u-1',
     conversationId: 'c-1',
   });
   assert.equal(r.pending, false);

@@ -63,22 +63,20 @@ function extractFromText(text) {
  * exists or when the table is missing (so the worker keeps running on
  * pre-migration databases).
  */
-async function getProfile({ conversationId, database = db, userId } = {}) {
-  if (!conversationId) return null;
+async function getProfile({
+  conversationId,
+  database = db,
+  userId,
+  channelId = 'whatsapp',
+} = {}) {
+  if (!conversationId || !userId || channelId !== 'whatsapp') return null;
   if (!database?.isConfigured?.()) return null;
   try {
-    // Defense-in-depth: scope by userId when the caller threads it. Backward
-    // compatible — without a userId the params stay [conversationId].
-    const params = [conversationId];
-    let userFilter = '';
-    if (userId) {
-      params.push(userId);
-      userFilter = ` AND user_id = $${params.length}`;
-    }
     const r = await database.query(
       `SELECT name, email, phone, last_order_ref, preferences, open_question, notes
-         FROM customer_profiles WHERE conversation_id = $1${userFilter}`,
-      params,
+         FROM customer_profiles
+        WHERE conversation_id = $1 AND user_id = $2 AND channel_id = $3`,
+      [conversationId, userId, channelId],
     );
     return r.rows[0] || null;
   } catch (_err) {
@@ -91,8 +89,14 @@ async function getProfile({ conversationId, database = db, userId } = {}) {
  * Upsert allowed fields for a (conversationId, userId). Silently no-ops
  * when nothing to write or when the table is missing.
  */
-async function upsertProfile({ conversationId, userId, fields, database = db } = {}) {
-  if (!conversationId || !userId) return;
+async function upsertProfile({
+  conversationId,
+  userId,
+  channelId = 'whatsapp',
+  fields,
+  database = db,
+} = {}) {
+  if (!conversationId || !userId || channelId !== 'whatsapp') return;
   if (!fields || typeof fields !== 'object') return;
   if (!database?.isConfigured?.()) return;
 
@@ -101,8 +105,8 @@ async function upsertProfile({ conversationId, userId, fields, database = db } =
   );
   if (present.length === 0) return;
 
-  const insertCols = ['conversation_id', 'user_id', ...present].join(', ');
-  const insertPlaceholders = ['$1', '$2', ...present.map((_, i) => `$${i + 3}`)].join(', ');
+  const insertCols = ['conversation_id', 'user_id', 'channel_id', ...present].join(', ');
+  const insertPlaceholders = ['$1', '$2', "'whatsapp'", ...present.map((_, i) => `$${i + 3}`)].join(', ');
   const updates = present.map((k, i) => `${k} = $${i + 3}`).join(', ');
   const values = [conversationId, userId, ...present.map(k => fields[k])];
 
@@ -111,7 +115,9 @@ async function upsertProfile({ conversationId, userId, fields, database = db } =
       `INSERT INTO customer_profiles (${insertCols})
        VALUES (${insertPlaceholders})
        ON CONFLICT (conversation_id) DO UPDATE
-         SET ${updates}, updated_at = NOW()`,
+         SET ${updates}, updated_at = NOW()
+       WHERE customer_profiles.user_id = EXCLUDED.user_id
+         AND customer_profiles.channel_id = EXCLUDED.channel_id`,
       values,
     );
   } catch (err) {
@@ -125,12 +131,18 @@ async function upsertProfile({ conversationId, userId, fields, database = db } =
  * Fire-and-forget extraction. Returns synchronously; the actual DB work
  * happens on the next macrotask. Never throws.
  */
-function extractAsync({ conversationId, userId, customerText, database = db } = {}) {
+function extractAsync({
+  conversationId,
+  userId,
+  channelId = 'whatsapp',
+  customerText,
+  database = db,
+} = {}) {
   setImmediate(async () => {
     try {
       const fields = extractFromText(customerText);
       if (Object.keys(fields).length > 0) {
-        await upsertProfile({ conversationId, userId, fields, database });
+        await upsertProfile({ conversationId, userId, channelId, fields, database });
       }
     } catch (err) {
       console.warn(

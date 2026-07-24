@@ -70,7 +70,7 @@ test('fromMe owner reply sets escalated_until using ownerPauseMinutes from confi
   const res = await service.ingestWhatsappMessage({ userId: 'user-1', msg: fromMeMsg(), source: 'baileys' });
   assert.equal(res.fromMe, true);
 
-  const update = database.calls.find(c => /UPDATE conversations SET escalated_until/.test(c.sql));
+  const update = database.calls.find(c => /UPDATE conversations[\s\S]*SET escalated_until/.test(c.sql));
   assert.ok(update, 'must UPDATE conversations.escalated_until');
   assert.equal(update.params[0], 'conv-1', 'first param is conversationId');
   assert.ok(update.params[1] instanceof Date, 'second param is expiry Date');
@@ -82,7 +82,7 @@ test('fromMe owner reply defaults to 30 minutes when config has no ownerPauseMin
 
   const before = Date.now();
   await service.ingestWhatsappMessage({ userId: 'user-1', msg: fromMeMsg(), source: 'baileys' });
-  const update = database.calls.find(c => /UPDATE conversations SET escalated_until/.test(c.sql));
+  const update = database.calls.find(c => /UPDATE conversations[\s\S]*SET escalated_until/.test(c.sql));
   assert.ok(update, 'must UPDATE conversations.escalated_until with default 30');
   const expiry = update.params[1];
   assert.ok(expiry instanceof Date);
@@ -96,7 +96,7 @@ test('fromMe owner reply does NOT pause when ownerPauseMinutes is 0', async () =
   const service = new MessageIngestService({ database, logger: { info: () => {}, warn: () => {} } });
 
   await service.ingestWhatsappMessage({ userId: 'user-1', msg: fromMeMsg(), source: 'baileys' });
-  const update = database.calls.find(c => /UPDATE conversations SET escalated_until/.test(c.sql));
+  const update = database.calls.find(c => /UPDATE conversations[\s\S]*SET escalated_until/.test(c.sql));
   assert.equal(update, undefined, 'must not set escalated_until when pause disabled');
 });
 
@@ -105,7 +105,7 @@ test('fromMe pause failure does not break message ingest', async () => {
   // Make the UPDATE throw; ingest must still succeed.
   const origQuery = database.query;
   database.query = async (sql, params) => {
-    if (/UPDATE conversations SET escalated_until/.test(sql)) throw new Error('boom');
+    if (/UPDATE conversations[\s\S]*SET escalated_until/.test(sql)) throw new Error('boom');
     return origQuery(sql, params);
   };
   const warnings = [];

@@ -1,15 +1,11 @@
 'use strict';
 
-function asObject(value) {
-  if (!value) return {};
-  if (typeof value === 'object' && !Array.isArray(value)) return value;
-  try {
-    const parsed = JSON.parse(String(value));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch (_) {
-    return {};
-  }
-}
+const {
+  asObject,
+  normalizeReviewMessage,
+  normalizeSessionGapMs,
+  trimToCurrentSession,
+} = require('./conversation-context');
 
 function compactAudit(audit = {}, source = 'ai_reply') {
   const shortList = (value, limit = 10) => Array.isArray(value)
@@ -23,6 +19,10 @@ function compactAudit(audit = {}, source = 'ai_reply') {
     violations: shortList(audit.violations),
     unsupportedClaims: shortList(audit.unsupportedClaims),
     hardFallback: audit.hardFallback === true,
+    confidence: Math.min(1, Math.max(0, Number.isFinite(Number(audit.confidence)) ? Number(audit.confidence) : 1)),
+    requiresHuman: audit.requiresHuman === true,
+    humanReason: String(audit.humanReason || '').slice(0, 240),
+    handoffSummary: String(audit.handoffSummary || '').slice(0, 240),
     latencyMs: Math.max(0, parseInt(audit.latencyMs, 10) || 0),
     source: String(source || 'ai_reply').slice(0, 64),
     reviewedAt: new Date().toISOString(),
@@ -30,21 +30,36 @@ function compactAudit(audit = {}, source = 'ai_reply') {
 }
 
 function normalizeHistory(rows = []) {
-  return rows.slice().reverse().map((row) => ({
-    role: row.role === 'assistant' || row.direction === 'outbound' ? 'assistant' : 'user',
-    content: String(row.content || '').trim(),
-  })).filter(message => message.content);
+  const chronological = rows.slice().reverse();
+  const sessionGapMs = normalizeSessionGapMs(process.env.PRE_SEND_REVIEW_SESSION_GAP_MS);
+  return trimToCurrentSession(chronological, sessionGapMs)
+    .map(normalizeReviewMessage)
+    .filter(message => message.content);
 }
 
-async function loadReviewContext({ database, userId, conversationId, replyMessageId }) {
+async function loadReviewContext({
+  database,
+  userId,
+  channelId = 'whatsapp',
+  conversationId,
+  customerId,
+  replyMessageId,
+}) {
+  if (!userId || channelId !== 'whatsapp' || !conversationId || !customerId) {
+    throw new Error('pre-send review context requires tenant, channel, conversation, and customer');
+  }
   let currentMessage = null;
   if (replyMessageId) {
     const current = await database.query(
       `SELECT id, content, raw_payload
          FROM messages
-        WHERE user_id = $1 AND id = $2
+        WHERE user_id = $1
+          AND conversation_id = $3
+          AND channel_id = $4
+          AND sender = $5
+          AND id = $2
         LIMIT 1`,
-      [userId, replyMessageId],
+      [userId, replyMessageId, conversationId, channelId, customerId],
     );
     currentMessage = current.rows[0];
     if (!currentMessage) throw new Error('pre-send review could not find the outbound message');
@@ -64,18 +79,20 @@ async function loadReviewContext({ database, userId, conversationId, replyMessag
   }
 
   const recent = await database.query(
-    `SELECT role, direction, content, status, created_at
+    `SELECT role, direction, content, status, raw_payload, created_at
        FROM messages
       WHERE user_id = $1
         AND conversation_id = $2
+        AND channel_id = $4
+        AND sender = $5
         AND ($3::uuid IS NULL OR id <> $3)
         AND (
           direction = 'inbound'
-          OR (direction = 'outbound' AND status = 'sent')
+          OR (direction = 'outbound' AND status IN ('sent', 'sent_by_human'))
         )
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT 16`,
-    [userId, conversationId, replyMessageId],
+    [userId, conversationId, replyMessageId, channelId, customerId],
   );
   const history = normalizeHistory(recent.rows);
   const customerText = [...history].reverse().find(message => message.role === 'user')?.content || '';
@@ -89,19 +106,36 @@ async function loadReviewContext({ database, userId, conversationId, replyMessag
   };
 }
 
-async function persistReview({ database, userId, replyMessageId, reply, suppressed, audit }) {
+async function persistReview({
+  database,
+  userId,
+  channelId = 'whatsapp',
+  conversationId,
+  customerId,
+  replyMessageId,
+  reply,
+  suppressed,
+  audit,
+}) {
   await database.query(
     `UPDATE messages
         SET content = $3,
             status = CASE WHEN $4::boolean THEN 'canceled' ELSE status END,
             raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $5::jsonb
-      WHERE user_id = $1 AND id = $2`,
+      WHERE user_id = $1
+        AND id = $2
+        AND conversation_id = $6
+        AND channel_id = $7
+        AND sender = $8`,
     [
       userId,
       replyMessageId,
       suppressed ? '' : reply,
       suppressed,
       JSON.stringify({ preSendReview: audit }),
+      conversationId,
+      channelId,
+      customerId,
     ],
   );
 }
@@ -131,7 +165,20 @@ async function reviewOutgoingReplyBeforeSend({
     throw new Error('pre-send reviewer is unavailable on the connected bot');
   }
 
-  const context = await loadReviewContext({ database, userId, conversationId, replyMessageId });
+  const channelId = payload.channelId || 'whatsapp';
+  if (channelId !== 'whatsapp') throw new Error('pre-send review channel mismatch');
+  const customerId = payload.customerId || payload.sender;
+  if (!customerId || (payload.customerId && payload.sender && payload.customerId !== payload.sender)) {
+    throw new Error('pre-send review customer scope mismatch');
+  }
+  const context = await loadReviewContext({
+    database,
+    userId,
+    channelId,
+    conversationId,
+    customerId,
+    replyMessageId,
+  });
   if (context.reused) return { ...context, bypassed: false };
 
   // The database row is the source of truth. It contains the post-composition
@@ -152,9 +199,26 @@ async function reviewOutgoingReplyBeforeSend({
     decision: suppressed ? 'suppress' : (reviewed?.audit?.decision || 'pass'),
   }, payload.source);
   if (replyMessageId) {
-    await persistReview({ database, userId, replyMessageId, reply, suppressed, audit });
+    await persistReview({
+      database,
+      userId,
+      channelId,
+      conversationId,
+      customerId,
+      replyMessageId,
+      reply,
+      suppressed,
+      audit,
+    });
   }
-  return { reply, suppressed, audit, reused: false, bypassed: false };
+  return {
+    reply,
+    suppressed,
+    requiresHuman: reviewed?.requiresHuman === true || audit.requiresHuman === true,
+    audit,
+    reused: false,
+    bypassed: false,
+  };
 }
 
 module.exports = {

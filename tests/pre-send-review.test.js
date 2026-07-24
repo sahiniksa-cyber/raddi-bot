@@ -36,7 +36,12 @@ function makeDatabase({ persisted = null } = {}) {
 }
 
 const base = {
-  payload: { source: 'ai_reply', preSendReviewRequired: true },
+  payload: {
+    source: 'ai_reply',
+    preSendReviewRequired: true,
+    sender: 'customer-1@s.whatsapp.net',
+    customerId: 'customer-1@s.whatsapp.net',
+  },
   userId: 'user-1',
   conversationId: 'conversation-1',
   replyMessageId: 'reply-2',
@@ -123,11 +128,117 @@ test('AI failure fallback is still reviewed even though it has no stored reply r
     database,
     bot,
     ...base,
-    payload: { source: 'ai_failure_fallback', preSendReviewRequired: true },
+    payload: {
+      source: 'ai_failure_fallback',
+      preSendReviewRequired: true,
+      sender: 'customer-1@s.whatsapp.net',
+      customerId: 'customer-1@s.whatsapp.net',
+    },
     replyMessageId: null,
     draft: 'لحظات من فضلك، نراجع طلبك ونرجعلك بأقرب وقت',
   });
   assert.equal(result.reply, 'لحظات من فضلك، نراجع طلبك ونرجعلك بأقرب وقت');
   assert.equal(calls, 1);
   assert.equal(database.updates.length, 0, 'there is no outbound row to persist for this legacy fallback path');
+});
+
+test('final review sees only the current session and distinguishes the owner from the bot', async () => {
+  let received;
+  const database = {
+    isConfigured: () => true,
+    query: async (sql) => {
+      if (/SELECT id, content, raw_payload/.test(sql)) {
+        return {
+          rows: [{
+            id: 'reply-incident',
+            content: 'لا تشيل هم، تقدر تشترك بكرة براحتك بالنسبة للخصم، الاشتراك عليه تخفيض حالياً.',
+            raw_payload: {},
+          }],
+        };
+      }
+      if (/SELECT role, direction, content/.test(sql)) {
+        return {
+          rows: [
+            {
+              role: 'user',
+              direction: 'inbound',
+              status: 'answered_by_ai',
+              content: 'الين بكرة اقدر حاليا اليوم م اقدر اشترك',
+              raw_payload: {},
+              created_at: '2026-07-18T09:01:00.000Z',
+            },
+            {
+              role: 'assistant',
+              direction: 'outbound',
+              status: 'sent',
+              content: 'السلام عليكم اكدي لنا اذا حابه التفعيل اليوم عشان قبل ما نقفل النظام',
+              raw_payload: { source: 'manual_send' },
+              created_at: '2026-07-18T09:00:00.000Z',
+            },
+            {
+              role: 'assistant',
+              direction: 'outbound',
+              status: 'sent_by_human',
+              content: 'لا والله عشان الان عليه فعلاً خصم',
+              raw_payload: { fromMe: true },
+              created_at: '2026-07-17T14:01:00.000Z',
+            },
+            {
+              role: 'user',
+              direction: 'inbound',
+              status: 'answered_by_human',
+              content: 'لو بشترك ادوبي ٨ اشهر هل في خصم؟',
+              raw_payload: {},
+              created_at: '2026-07-17T14:00:00.000Z',
+            },
+          ],
+        };
+      }
+      if (/UPDATE messages/.test(sql)) return { rowCount: 1, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  };
+  const bot = {
+    reviewReplyBeforeSend: async (input) => {
+      received = input;
+      return {
+        reply: 'أبد وقت ما تحبي، بين يدينك.',
+        suppressed: false,
+        audit: { decision: 'repair' },
+      };
+    },
+  };
+
+  await reviewOutgoingReplyBeforeSend({
+    database,
+    bot,
+    payload: {
+      source: 'ai_reply',
+      preSendReviewRequired: true,
+      sender: 'customer-1@s.whatsapp.net',
+      customerId: 'customer-1@s.whatsapp.net',
+    },
+    userId: 'user-1',
+    conversationId: 'conversation-1',
+    replyMessageId: 'reply-incident',
+    draft: 'stale',
+  });
+
+  assert.deepEqual(received.history.map(message => ({
+    role: message.role,
+    speaker: message.speaker,
+    content: message.content,
+  })), [
+    {
+      role: 'assistant',
+      speaker: 'owner',
+      content: 'السلام عليكم اكدي لنا اذا حابه التفعيل اليوم عشان قبل ما نقفل النظام',
+    },
+    {
+      role: 'user',
+      speaker: 'customer',
+      content: 'الين بكرة اقدر حاليا اليوم م اقدر اشترك',
+    },
+  ]);
+  assert.equal(received.history.some(message => /خصم/.test(message.content)), false);
 });

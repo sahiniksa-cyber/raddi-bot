@@ -156,13 +156,26 @@ async function relayResolutionToCustomer({
   // ship, whatever their origin.
   reply = reply.replace(/\s*\[تحويل:[^\]]*\]\s*/g, ' ').replace(/\s{2,}/g, ' ').trim() || teamAnswer;
 
+  let conversationId = thread.conversation_id || null;
+  if (!conversationId) {
+    const resolved = await database.query(
+      `INSERT INTO conversations (user_id, channel_id, sender, last_message_at)
+       VALUES ($1, 'whatsapp', $2, NOW())
+       ON CONFLICT (user_id, sender) DO UPDATE SET last_message_at = NOW()
+       RETURNING id`,
+      [userId, thread.customer_sender],
+    );
+    conversationId = resolved.rows[0]?.id || null;
+  }
+  if (!conversationId) throw new Error('escalation bridge could not resolve a scoped conversation');
+
   const providerMessageId = `bridge:${thread.id || 'x'}:${Date.now()}`;
   const inserted = await database.query(
-    `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-     VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
+    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+     VALUES ($1, $2, 'whatsapp', $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
      RETURNING id`,
     [
-      thread.conversation_id || null,
+      conversationId,
       userId,
       thread.customer_sender,
       reply,
@@ -174,7 +187,10 @@ async function relayResolutionToCustomer({
 
   await enqueue({
     userId,
-    conversationId: thread.conversation_id || null,
+    tenantId: userId,
+    channelId: 'whatsapp',
+    customerId: thread.customer_sender,
+    conversationId,
     sender: thread.customer_sender,
     reply,
     replyMessageId,
@@ -192,12 +208,15 @@ async function relayResolutionToCustomer({
   ).catch(() => {});
 
   // Hand the conversation back to the AI immediately.
-  if (thread.conversation_id) {
-    await database.query(
-      `UPDATE conversations SET escalated_until = NULL WHERE id = $1`,
-      [thread.conversation_id],
-    ).catch(() => {});
-  }
+  await database.query(
+    `UPDATE conversations
+        SET escalated_until = NULL
+      WHERE id = $1
+        AND user_id = $2
+        AND channel_id = 'whatsapp'
+        AND sender = $3`,
+    [conversationId, userId, thread.customer_sender],
+  ).catch(() => {});
 
   return { relayed: true, replyMessageId };
 }

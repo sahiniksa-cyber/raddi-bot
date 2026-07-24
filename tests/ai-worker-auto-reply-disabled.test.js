@@ -23,7 +23,10 @@ const dbMock = {
   async query(sql, params) {
     const text = String(sql);
     sqlCalls.push({ text, params });
-    if (text.includes('FROM conversations') && text.includes('WHERE id = $1 AND user_id = $2')) {
+    if (text.includes('FROM conversations')
+        && text.includes('WHERE id = $1')
+        && text.includes('user_id = $2')
+        && !text.includes('escalated_until')) {
       return {
         rows: [{
           id: 'conv-1',

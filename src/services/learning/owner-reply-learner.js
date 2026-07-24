@@ -39,6 +39,10 @@ function learningEnabled() {
   return process.env.LEARNED_REPLIES_ENABLED !== 'false';
 }
 
+function learnedRepliesInjectionEnabled() {
+  return process.env.LEARNED_REPLIES_INJECTION_ENABLED === 'true';
+}
+
 // Per-merchant switch: config.learningEnabled (default ON). Lets a merchant turn
 // self-learning off from the dashboard without affecting other merchants.
 async function userLearningEnabled({ database = db, userId } = {}) {
@@ -219,7 +223,7 @@ async function saveLearnedReplies({ database = db, userId, pairs = [] } = {}) {
 // carries BOTH the original question and the owner's answer so the AI sees
 // the full context, clearly attributed to the store owner.
 async function loadActiveLearnedReplies({ database = db, userId } = {}) {
-  if (!learningEnabled() || !userId || !database?.isConfigured?.()) return [];
+  if (!learningEnabled() || !learnedRepliesInjectionEnabled() || !userId || !database?.isConfigured?.()) return [];
   try {
     const result = await database.query(
       `SELECT question, answer FROM learned_replies

@@ -16,18 +16,26 @@ const { MessageIngestService } = require('../src/services/whatsapp/message-inges
 
 test('isReplyAlreadySent detects an already-delivered reply (status sent / whatsapp id recorded)', async () => {
   const dbSent = { isConfigured: () => true, query: async () => ({ rows: [{ status: 'sent', whatsapp_message_id: null }] }) };
-  assert.equal(await isReplyAlreadySent({ replyMessageId: 'r1', database: dbSent }), true);
+  assert.equal(await isReplyAlreadySent({
+    replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', database: dbSent,
+  }), true);
 
   const dbWaId = { isConfigured: () => true, query: async () => ({ rows: [{ status: 'queued_for_send', whatsapp_message_id: 'WAMID9' }] }) };
-  assert.equal(await isReplyAlreadySent({ replyMessageId: 'r1', database: dbWaId }), true, 'a recorded WhatsApp id proves delivery');
+  assert.equal(await isReplyAlreadySent({
+    replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', database: dbWaId,
+  }), true, 'a recorded WhatsApp id proves delivery');
 });
 
 test('isReplyAlreadySent fails open (send) on unknown/missing data', async () => {
   const dbQueued = { isConfigured: () => true, query: async () => ({ rows: [{ status: 'queued_for_send', whatsapp_message_id: null }] }) };
-  assert.equal(await isReplyAlreadySent({ replyMessageId: 'r1', database: dbQueued }), false);
+  assert.equal(await isReplyAlreadySent({
+    replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', database: dbQueued,
+  }), false);
   assert.equal(await isReplyAlreadySent({ replyMessageId: null, database: dbQueued }), false, 'no id → cannot check → send');
   const dbErr = { isConfigured: () => true, query: async () => { throw new Error('boom'); } };
-  assert.equal(await isReplyAlreadySent({ replyMessageId: 'r1', database: dbErr }), false, 'db hiccup must not block replies');
+  assert.equal(await isReplyAlreadySent({
+    replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', database: dbErr,
+  }), false, 'db hiccup must not block replies');
 });
 
 test('the outgoing chokepoint checks already-sent BEFORE sending (both paths)', () => {

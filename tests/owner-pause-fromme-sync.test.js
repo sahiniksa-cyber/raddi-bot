@@ -100,7 +100,7 @@ test('ingestOutboundHumanMessage: a genuine owner reply DOES pause the bot (esca
     isConfigured: () => true,
     query: async (text, params) => {
       if (/whatsapp_message_id/.test(text)) return { rows: [] };                  // NOT our own send
-      if (/UPDATE conversations SET escalated_until/.test(text)) { updates.push(params); return { rowCount: 1 }; }
+      if (/UPDATE conversations[\s\S]*SET escalated_until/.test(text)) { updates.push(params); return { rowCount: 1 }; }
       return { rows: [] };
     },
     transaction: async (fn) => fn({

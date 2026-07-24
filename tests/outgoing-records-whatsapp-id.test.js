@@ -32,20 +32,20 @@ test('worker records whatsapp_message_id after a successful send (with userId fo
   // retry-receipt lookup could return content from a different tenant's row.
   assert.match(WORKER_SRC, /const\s+sendResult\s*=\s*await\s+sendWhatsappReply/,
     'main path must capture the send result');
-  assert.match(WORKER_SRC, /recordWhatsappMessageId\(\s*userId\s*,\s*replyMessageId\s*,\s*sendResult\?\.key\?\.id\s*\)/,
-    'main path must record (userId, replyMessageId, key.id)');
+  assert.match(WORKER_SRC, /recordWhatsappMessageId\(\{[\s\S]*whatsappMessageId:\s*sendResult\?\.key\?\.id/,
+    'main path must record the full scope and key.id');
 });
 
 test('LID path also records whatsapp_message_id when the best-effort send succeeds', () => {
   assert.match(WORKER_SRC, /const\s+lidResult\s*=\s*await\s+bot\.client\.sendMessage/,
     '@lid path must use bot.client.sendMessage');
-  assert.match(WORKER_SRC, /recordWhatsappMessageId\(\s*userId\s*,\s*replyMessageId\s*,\s*lidResult\?\.key\?\.id\s*\)/,
-    '@lid path must record (userId, replyMessageId, key.id)');
+  assert.match(WORKER_SRC, /recordWhatsappMessageId\(\{[\s\S]*whatsappMessageId:\s*lidResult\?\.key\?\.id/,
+    '@lid path must record the full scope and key.id');
 });
 
 test('recordWhatsappMessageId UPDATE is scoped by user_id', () => {
-  assert.match(WORKER_SRC, /UPDATE messages SET whatsapp_message_id\s*=\s*\$3\s+WHERE user_id\s*=\s*\$1\s+AND id\s*=\s*\$2/,
-    'UPDATE must filter by user_id to prevent cross-tenant writes');
+  assert.match(WORKER_SRC, /SET whatsapp_message_id\s*=\s*\$5[\s\S]*WHERE user_id\s*=\s*\$1[\s\S]*conversation_id\s*=\s*\$2[\s\S]*sender\s*=\s*\$3[\s\S]*id\s*=\s*\$4/,
+    'UPDATE must filter by tenant, conversation, customer, and message id');
 });
 
 test('migration uses UNIQUE index on (user_id, whatsapp_message_id)', () => {

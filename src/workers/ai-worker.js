@@ -114,17 +114,23 @@ async function loadConfig(userId) {
 async function resolveConversation({ userId, conversationId, sender }) {
   if (conversationId) {
     const result = await db.query(
-      'SELECT id, sender, phone_number FROM conversations WHERE id = $1 AND user_id = $2',
-      [conversationId, userId],
+      `SELECT id, sender, phone_number
+         FROM conversations
+        WHERE id = $1
+          AND user_id = $2
+          AND channel_id = 'whatsapp'
+          AND ($3::text IS NULL OR sender = $3)`,
+      [conversationId, userId, sender || null],
     );
     if (result.rows[0]) return result.rows[0];
+    return null;
   }
 
   if (!sender) return null;
 
   const result = await db.query(
-    `INSERT INTO conversations (user_id, sender)
-     VALUES ($1, $2)
+    `INSERT INTO conversations (user_id, channel_id, sender)
+     VALUES ($1, 'whatsapp', $2)
      ON CONFLICT (user_id, sender) DO UPDATE SET last_message_at = NOW()
      RETURNING id, sender`,
     [userId, sender],
@@ -137,17 +143,18 @@ async function resolveConversation({ userId, conversationId, sender }) {
  * (`escalated_until > NOW()`). When muted, the AI worker must skip generation
  * and outbound send entirely so the human operator can take over.
  */
-async function isConversationEscalationMuted({ database = db, conversationId }) {
-  if (!conversationId || !database?.isConfigured?.()) return false;
+async function isConversationEscalationMuted({ database = db, userId, conversationId }) {
+  if (!userId || !conversationId || !database?.isConfigured?.()) return false;
   try {
     const result = await database.query(
       `SELECT escalated_until
          FROM conversations
         WHERE id = $1
+          AND user_id = $2
           AND escalated_until IS NOT NULL
           AND escalated_until > NOW()
         LIMIT 1`,
-      [conversationId],
+      [conversationId, userId],
     );
     return result.rows.length > 0;
   } catch (_err) {
@@ -162,16 +169,17 @@ async function isConversationEscalationMuted({ database = db, conversationId }) 
  * returns the timestamp of the most recent one. Used to enforce a per-
  * conversation escalation cap and a minimum gap between escalations.
  */
-async function getConversationEscalationStats({ database = db, conversationId }) {
-  if (!conversationId || !database?.isConfigured?.()) {
+async function getConversationEscalationStats({ database = db, userId, conversationId }) {
+  if (!userId || !conversationId || !database?.isConfigured?.()) {
     return { count24h: 0, lastSentAt: null };
   }
   const result = await database.query(
     `SELECT COUNT(*)::int AS n, MAX(sent_at) AS last_sent_at
        FROM escalation_log
       WHERE conversation_id = $1
+        AND user_id = $2
         AND sent_at > NOW() - INTERVAL '24 hours'`,
-    [conversationId],
+    [conversationId, userId],
   );
   const row = result.rows[0] || {};
   return {
@@ -191,19 +199,20 @@ async function getConversationEscalationStats({ database = db, conversationId })
  * bot resumes normal handling automatically. A 7-day window keeps an ancient,
  * never-resolved thread from silencing the bot on a genuinely new issue.
  */
-async function getPendingEscalation({ database = db, conversationId }) {
-  if (!conversationId || !database?.isConfigured?.()) {
+async function getPendingEscalation({ database = db, userId, conversationId }) {
+  if (!userId || !conversationId || !database?.isConfigured?.()) {
     return { pending: false, since: null };
   }
   const result = await database.query(
     `SELECT created_at
        FROM escalation_threads
       WHERE conversation_id = $1
+        AND user_id = $2
         AND resolved_at IS NULL
         AND created_at > NOW() - INTERVAL '7 days'
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT 1`,
-    [conversationId],
+    [conversationId, userId],
   );
   const row = result.rows[0];
   return {
@@ -212,18 +221,28 @@ async function getPendingEscalation({ database = db, conversationId }) {
   };
 }
 
-async function loadInboundMessage({ userId, messageId, text }) {
-  if (text) return text;
+async function loadInboundMessage({
+  userId,
+  conversationId,
+  sender,
+  messageId,
+  text,
+}) {
   if (!messageId) return '';
 
   const result = await db.query(
     `SELECT content FROM messages
-     WHERE id = $1 AND user_id = $2 AND direction = 'inbound'
+     WHERE id = $1
+       AND user_id = $2
+       AND conversation_id = $3
+       AND sender = $4
+       AND channel_id = 'whatsapp'
+       AND direction = 'inbound'
      LIMIT 1`,
-    [messageId, userId],
+    [messageId, userId, conversationId, sender],
   );
 
-  return result.rows[0]?.content || '';
+  return result.rows[0]?.content || (text && !conversationId ? text : '');
 }
 
 async function loadPendingInboundMessages({
@@ -250,18 +269,20 @@ async function loadPendingInboundMessages({
        FROM messages
        WHERE conversation_id = $1
          AND user_id = $2
+         AND channel_id = 'whatsapp'
          AND direction = 'outbound'
          AND role = 'assistant'
      )
-     SELECT id, content, provider_message_id, raw_payload
+     SELECT id, sender, content, provider_message_id, raw_payload
      FROM messages m
      WHERE conversation_id = $1
        AND user_id = $2
+       AND channel_id = 'whatsapp'
        AND direction = 'inbound'
        AND status IN ('queued_for_ai', 'ai_failed')
        AND created_at > COALESCE((SELECT created_at FROM last_assistant), '-infinity'::timestamptz)
        AND m.created_at >= NOW() - ($4 * interval '1 millisecond')
-     ORDER BY created_at ASC
+     ORDER BY created_at ASC, id ASC
      LIMIT $3`,
     [
       conversationId,
@@ -309,7 +330,15 @@ async function enqueueFollowupIfPending({
   if (!pending.length) return { enqueued: false, pending: 0 };
 
   await enqueue(
-    { userId, conversationId, source: 'followup' },
+    {
+      userId,
+      tenantId: userId,
+      channelId: 'whatsapp',
+      customerId: pending[0].sender,
+      conversationId,
+      sender: pending[0].sender,
+      source: 'followup',
+    },
     { jobKey: `conversation-${conversationId}`, delay: debounceMs },
   );
 
@@ -397,15 +426,22 @@ async function enrichInboundMessagesWithMedia({ messages = [], analyzer, recordU
   return enriched;
 }
 
-async function markInboundMessagesAnswered({ database = db, messageIds = [] }) {
+async function markInboundMessagesAnswered({
+  database = db,
+  userId,
+  conversationId,
+  messageIds = [],
+}) {
   const ids = messageIds.filter(Boolean);
-  if (!ids.length || !database.isConfigured?.()) return;
+  if (!userId || !conversationId || !ids.length || !database.isConfigured?.()) return;
   await database.query(
     `UPDATE messages
      SET status = 'answered_by_ai',
          raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}') || $2::jsonb
-     WHERE id = ANY($1::uuid[])`,
-    [ids, JSON.stringify({ answeredByAiAt: new Date().toISOString() })],
+     WHERE id = ANY($1::uuid[])
+       AND user_id = $3
+       AND conversation_id = $4`,
+    [ids, JSON.stringify({ answeredByAiAt: new Date().toISOString() }), userId, conversationId],
   );
 }
 
@@ -448,8 +484,8 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
   const providerMessageId = `ai-worker:${jobId}:${crypto.randomUUID()}`;
 
   const result = await database.query(
-    `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-     VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
+    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+     VALUES ($1, $2, 'whatsapp', $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
      RETURNING id`,
     [
       conversationId,
@@ -468,22 +504,30 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
   await database.query(
     `UPDATE conversations
      SET last_message_at = NOW()
-     WHERE id = $1`,
-    [conversationId],
+     WHERE id = $1 AND user_id = $2 AND sender = $3`,
+    [conversationId, userId, sender],
   );
 
   return result.rows[0].id;
 }
 
-async function markInboundMessagesQuotaExceeded({ database = db, messageIds = [], reason = 'empty' }) {
+async function markInboundMessagesQuotaExceeded({
+  database = db,
+  userId,
+  conversationId,
+  messageIds = [],
+  reason = 'empty',
+}) {
   const ids = messageIds.filter(Boolean);
-  if (!ids.length || !database.isConfigured?.()) return;
+  if (!userId || !conversationId || !ids.length || !database.isConfigured?.()) return;
   await database.query(
     `UPDATE messages
      SET status = 'quota_exceeded',
          raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}') || $2::jsonb
-     WHERE id = ANY($1::uuid[])`,
-    [ids, JSON.stringify({ quotaExceededAt: new Date().toISOString(), reason })],
+     WHERE id = ANY($1::uuid[])
+       AND user_id = $3
+       AND conversation_id = $4`,
+    [ids, JSON.stringify({ quotaExceededAt: new Date().toISOString(), reason }), userId, conversationId],
   );
 }
 
@@ -516,8 +560,8 @@ async function quotaStopNoticeAlreadySent({ database = db, userId, conversationI
 async function storeQuotaStopNotice({ database = db, userId, conversationId, sender, text, jobId }) {
   const providerMessageId = `ai-worker:quota_stop:${jobId}:${crypto.randomUUID()}`;
   const result = await database.query(
-    `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-     VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
+    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+     VALUES ($1, $2, 'whatsapp', $3, 'outbound', 'assistant', $4, $5, 'queued_for_send', $6::jsonb)
      ON CONFLICT (user_id, conversation_id) WHERE (raw_payload->>'kind') = 'quota_stop' DO NOTHING
      RETURNING id`,
     [
@@ -532,13 +576,19 @@ async function storeQuotaStopNotice({ database = db, userId, conversationId, sen
   return result.rows[0]?.id ?? null;
 }
 
-async function markInboundMessageFailed({ database = db, messageId, error }) {
-  if (!messageId || !database.isConfigured()) return;
+async function markInboundMessageFailed({
+  database = db,
+  userId,
+  conversationId,
+  messageId,
+  error,
+}) {
+  if (!userId || !conversationId || !messageId || !database.isConfigured()) return;
   await database.query(
     `UPDATE messages
      SET status = $2,
          raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $3::jsonb
-     WHERE id = $1`,
+     WHERE id = $1 AND user_id = $4 AND conversation_id = $5`,
     [
       messageId,
       'ai_failed',
@@ -546,6 +596,8 @@ async function markInboundMessageFailed({ database = db, messageId, error }) {
         aiFailedAt: new Date().toISOString(),
         error: error?.message || String(error || 'AI failed'),
       }),
+      userId,
+      conversationId,
     ],
   );
 }
@@ -603,6 +655,9 @@ async function sendInstantAutoReply({
 
   await enqueueOutgoing({
     userId,
+    tenantId: userId,
+    channelId: 'whatsapp',
+    customerId: conversation.sender,
     conversationId: conversation.id,
     messageId: payload.messageId,
     providerMessageId: payload.providerMessageId,
@@ -622,6 +677,8 @@ async function sendInstantAutoReply({
   // reprocess them (which previously threw on empty text and ended in a
   // confusing filler reply).
   await markAnswered({
+    userId,
+    conversationId: conversation.id,
     messageIds: enrichedMessages.map(message => message.id),
   });
 
@@ -698,7 +755,7 @@ async function processAiReply(job) {
     // conversation, we silence the bot for 30 minutes so the operator can
     // reply without the AI talking over them. We do not consume quota and we
     // do not send any outbound message.
-    if (await isConversationEscalationMuted({ database: db, conversationId: conversation.id })) {
+    if (await isConversationEscalationMuted({ database: db, userId, conversationId: conversation.id })) {
       logger.info('escalation', 'muted by escalation — skipping AI reply', {
         conversationId: conversation.id,
       });
@@ -719,6 +776,8 @@ async function processAiReply(job) {
 
     const fallbackText = await loadInboundMessage({
       userId,
+      conversationId: conversation.id,
+      sender: conversation.sender,
       messageId: payload.messageId,
       text: payload.text,
     });
@@ -743,8 +802,15 @@ async function processAiReply(job) {
       await db.query(
         `UPDATE messages SET status = 'ai_failed',
                 raw_payload = (COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}') || $2::jsonb
-          WHERE id = ANY($1::uuid[])`,
-        [pendingMessages.map(m => m.id), JSON.stringify({ retiredAt: new Date().toISOString(), reason: 'stale_message' })],
+          WHERE id = ANY($1::uuid[])
+            AND user_id = $3
+            AND conversation_id = $4`,
+        [
+          pendingMessages.map(m => m.id),
+          JSON.stringify({ retiredAt: new Date().toISOString(), reason: 'stale_message' }),
+          userId,
+          conversation.id,
+        ],
       ).catch(() => {});
       await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
         status: 'skipped_stale',
@@ -787,6 +853,8 @@ async function processAiReply(job) {
       } else {
         if (payload.messageId) {
           await markInboundMessageFailed({
+            userId,
+            conversationId: conversation.id,
             messageId: payload.messageId,
             error: new Error('no pending inbound text (expired/stale job)'),
           }).catch(() => {});
@@ -804,6 +872,8 @@ async function processAiReply(job) {
     const quota = await checkMessageQuota(userId);
     if (!quota.canReply) {
       await markInboundMessagesQuotaExceeded({
+        userId,
+        conversationId: conversation.id,
         messageIds: enrichedMessages.map(m => m.id),
         reason: quota.reason,
       });
@@ -843,6 +913,9 @@ async function processAiReply(job) {
             if (noticeId) {
               await enqueueOutgoingWhatsapp({
                 userId,
+                tenantId: userId,
+                channelId: 'whatsapp',
+                customerId: conversation.sender,
                 conversationId: conversation.id,
                 messageId: payload.messageId,
                 providerMessageId: payload.providerMessageId,
@@ -891,6 +964,7 @@ async function processAiReply(job) {
       config,
       inboundText: text,
       userId,
+      customerId: conversation.sender,
     });
 
     // Customer profile (best-effort). Never blocks the reply: any failure
@@ -907,7 +981,11 @@ async function processAiReply(job) {
     // on every follow-up ("بسجل طلبك / بيتواصل معك الفريق").
     let escalationPending = false;
     try {
-      const pending = await getPendingEscalation({ database: db, conversationId: conversation.id });
+      const pending = await getPendingEscalation({
+        database: db,
+        userId,
+        conversationId: conversation.id,
+      });
       escalationPending = pending.pending;
     } catch (pendingErr) {
       logger.warn('escalation', `pending-escalation check failed: ${pendingErr.message}`);
@@ -1025,6 +1103,8 @@ async function processAiReply(job) {
       // retry/recovery/follow-up regenerates another near-duplicate. No outbound
       // is enqueued; the completed-handler skips follow-up on a skipped result.
       await markInboundMessagesAnswered({
+        userId,
+        conversationId: conversation.id,
         messageIds: enrichedMessages.map(message => message.id),
       });
       await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
@@ -1052,11 +1132,16 @@ async function processAiReply(job) {
     // ai-recovery regenerates a SECOND reply with a fresh replyMessageId that
     // escapes the per-replyMessageId dedup guard (the production duplicate).
     await markInboundMessagesAnswered({
+      userId,
+      conversationId: conversation.id,
       messageIds: enrichedMessages.map(message => message.id),
     });
 
     await enqueueOutgoingWhatsapp({
       userId,
+      tenantId: userId,
+      channelId: 'whatsapp',
+      customerId: conversation.sender,
       conversationId: conversation.id,
       messageId: payload.messageId,
       providerMessageId: payload.providerMessageId,
@@ -1090,6 +1175,7 @@ async function processAiReply(job) {
       // against AI loops dragging the owner into noise.
       const escStats = await getConversationEscalationStats({
         database: db,
+        userId,
         conversationId: conversation.id,
       });
       const tenMinAgo = Date.now() - 10 * 60 * 1000;
@@ -1124,6 +1210,9 @@ async function processAiReply(job) {
         });
         await enqueueOutgoingWhatsapp({
           userId,
+          tenantId: userId,
+          channelId: 'whatsapp',
+          customerId: conversation.sender,
           conversationId: conversation.id,
           sender: escalation.ownerMessage.sender,
           reply: buildCustomerUpdateText({ customerSender: conversation.sender, text }),
@@ -1137,6 +1226,9 @@ async function processAiReply(job) {
       } else {
         await enqueueOutgoingWhatsapp({
           userId,
+          tenantId: userId,
+          channelId: 'whatsapp',
+          customerId: conversation.sender,
           conversationId: conversation.id,
           messageId: payload.messageId,
           providerMessageId: payload.providerMessageId,
@@ -1166,8 +1258,8 @@ async function processAiReply(job) {
             await db.query(
               `UPDATE conversations
                   SET escalated_until = NOW() + ($2 * INTERVAL '1 minute')
-                WHERE id = $1`,
-              [conversation.id, pauseMin],
+                WHERE id = $1 AND user_id = $3`,
+              [conversation.id, pauseMin, userId],
             );
           } catch (muteErr) {
             logger.warn('escalation', `failed to set escalated_until: ${muteErr.message}`);
@@ -1202,7 +1294,12 @@ async function processAiReply(job) {
 
     return { replyMessageId, queuedForSend: true };
   } catch (err) {
-    await markInboundMessageFailed({ messageId: payload.messageId, error: err }).catch(() => {});
+    await markInboundMessageFailed({
+      userId: payload.userId,
+      conversationId: payload.conversationId,
+      messageId: payload.messageId,
+      error: err,
+    }).catch(() => {});
 
     // Final-attempt fallback: when BullMQ has exhausted its retries we send a
     // brief reassurance message so the customer isn't left in silence. We
@@ -1223,6 +1320,9 @@ async function processAiReply(job) {
 
         await enqueueOutgoingWhatsapp({
           userId: payload.userId,
+          tenantId: payload.userId,
+          channelId: payload.channelId || 'whatsapp',
+          customerId: payload.customerId || payload.sender,
           conversationId: payload.conversationId,
           messageId: payload.messageId,
           providerMessageId: payload.providerMessageId,

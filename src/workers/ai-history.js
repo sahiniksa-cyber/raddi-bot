@@ -1,5 +1,11 @@
 'use strict';
 
+const {
+  classifyMessageSpeaker,
+  normalizeSessionGapMs,
+  trimToCurrentSession,
+} = require('../services/ai/conversation-context');
+
 const PENDING_USER_STATUSES = new Set(['queued_for_ai', 'ai_failed']);
 const UNSENT_ASSISTANT_STATUSES = new Set(['queued_for_send', 'expired', 'canceled', 'send_failed']);
 
@@ -7,28 +13,41 @@ function normalizeMemoryLimit(config = {}) {
   return Math.max(2, parseInt(config.memoryMessages, 10) || 50);
 }
 
-async function loadHistory(database, conversationId, limit, userId) {
-  // Defense-in-depth: when the caller threads a userId, scope the query by it
-  // too. Backward compatible — without a userId the params stay [conv, limit].
-  const params = [conversationId, limit];
-  let userFilter = '';
-  if (userId) {
-    params.push(userId);
-    userFilter = `\n       AND user_id = $${params.length}`;
-  }
+async function loadHistory(
+  database,
+  conversationId,
+  limit,
+  userId,
+  channelId = 'whatsapp',
+  customerId,
+) {
+  if (!userId) throw new Error('userId is required for AI history');
+  if (channelId !== 'whatsapp') throw new Error('invalid channelId for WhatsApp AI history');
+  if (!customerId) throw new Error('customerId is required for AI history');
 
   const result = await database.query(
-    `SELECT role, content, status, direction
+    `SELECT id, role, content, status, direction, raw_payload, created_at
      FROM messages
-     WHERE conversation_id = $1${userFilter}
-     ORDER BY created_at DESC
+     WHERE conversation_id = $1
+       AND user_id = $3
+       AND channel_id = $4
+       AND sender = $5
+     ORDER BY created_at DESC, id DESC
      LIMIT $2`,
-    params,
+    [conversationId, limit, userId, channelId, customerId],
   );
 
   return result.rows
     .reverse()
-    .map(row => ({ role: row.role, content: row.content, status: row.status, direction: row.direction }));
+    .map(row => ({
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      status: row.status,
+      direction: row.direction,
+      raw_payload: row.raw_payload,
+      created_at: row.created_at,
+    }));
 }
 
 function filterHistoryForAi(rows = []) {
@@ -37,13 +56,42 @@ function filterHistoryForAi(rows = []) {
     if (row.role === 'assistant' && row.status && UNSENT_ASSISTANT_STATUSES.has(row.status)) return false;
     if (row.role === 'user' && row.status && PENDING_USER_STATUSES.has(row.status)) return false;
     return true;
-  }).map(row => ({ role: row.role, content: row.content }));
+  }).map(row => {
+    const speaker = classifyMessageSpeaker(row);
+    const content = String(row.content || '').trim();
+    return {
+      role: speaker === 'customer' ? 'user' : 'assistant',
+      content: speaker === 'owner' ? `رسالة من مالك المتجر: ${content}` : content,
+    };
+  }).filter(message => message.content);
 }
 
-async function buildHistoryForReply({ database, conversationId, config, inboundText, userId }) {
+async function buildHistoryForReply({
+  database,
+  conversationId,
+  config,
+  inboundText,
+  userId,
+  channelId = 'whatsapp',
+  customerId,
+}) {
+  if (!userId) throw new Error('userId is required for AI history');
   const memSize = normalizeMemoryLimit(config);
-  const rawHistory = await loadHistory(database, conversationId, memSize, userId);
-  const history = filterHistoryForAi(rawHistory);
+  const rawHistory = await loadHistory(
+    database,
+    conversationId,
+    memSize,
+    userId,
+    channelId,
+    customerId,
+  );
+  const sessionGapMs = normalizeSessionGapMs(
+    config?.historySessionGapMs ?? process.env.AI_HISTORY_SESSION_GAP_MS,
+  );
+  // Trim before filtering: the pending inbound row anchors the new session,
+  // even though it is appended from inboundText rather than sent to the model
+  // directly from the database.
+  const history = filterHistoryForAi(trimToCurrentSession(rawHistory, sessionGapMs));
   const text = String(inboundText || '').trim();
   const last = history[history.length - 1];
 
