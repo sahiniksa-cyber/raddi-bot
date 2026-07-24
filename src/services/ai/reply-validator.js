@@ -159,13 +159,48 @@ function needsRepairForCopOut(reply, matched = []) {
 // ملاحظة: تم توسيع البادئة لتشمل (م) لالتقاط الصيغ المصدرية (مساعدتك، معاونتك)
 // مقارنة بالخطة الأصلية، دون إضافة false positives (اختبر بشمول على 8+ حالات).
 const OFFER_HELP = /\s*،?\s*(?:كيف|كيفاش|وش)\s+(?:أقدر|اقدر|يمكنني|ممكن|تحب|تبي)?\s*(?:أ|ا|م)?(?:ساعد|خدم|عاون)\S*\s*(?:اليوم|حضرتك)?\s*[؟?]*/g;
+const AVAILABILITY_CLOSING = /\s*(?:[،,.!؟]\s*)?(?:و\s*)?(?:إذا|اذا|لو)\s+(?:(?:عندك|في|تحتاج|احتجت)\s+)?(?:أي|اي)?\s*(?:استفسار|سؤال|شي(?:ء)?)(?:\s+ثاني)?[،,\s]*(?:أنا|انا|احنا|نحن)\s+(?:هنا|موجود(?:ين)?|بالخدمة|في\s+الخدمة)\s*[.!؟!]*\s*$/;
 
-function stripStyleViolations(reply) {
+function merchantForbidsAvailabilityClosing(config = {}) {
+  const style = config?.replyStyle || {};
+  const avoided = [
+    ...(Array.isArray(style.avoidWords) ? style.avoidWords : []),
+    ...(Array.isArray(style.avoidPhrases) ? style.avoidPhrases : []),
+  ].join(' ')
+    .replace(/[إأآ]/g, 'ا')
+    .replace(/[\u064B-\u065F\u0670ـ]/g, '')
+    .toLowerCase();
+  return /انا\s+(?:هنا|موجود)|(?:استفسار|سؤال|شي(?:ء)?\s+ثاني)/.test(avoided);
+}
+
+function stripStyleViolations(reply, config = {}) {
   let out = String(reply || '').replace(OFFER_HELP, '');
+  if (merchantForbidsAvailabilityClosing(config)) {
+    out = out.replace(AVAILABILITY_CLOSING, '');
+  }
   out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
   // نظّف علامة ترقيم متدلية في النهاية (مثل "! ," بعد الحذف)
   out = out.replace(/[،,]\s*$/, '').replace(/!\s*$/, '!').trim();
   return out;
+}
+
+function isShortReplyMode(config = {}) {
+  const style = config?.replyStyle || {};
+  return style.replyLength === 'short' || style.useShortReplies === true;
+}
+
+function enforceShortReply(reply, config = {}) {
+  if (!isShortReplyMode(config)) {
+    return String(reply || '').trim();
+  }
+
+  const text = String(reply || '').trim();
+  const sentences = text
+    .split(/(?<=[.!؟?])\s+|\n+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+  if (sentences.length <= 2) return text;
+  return sentences.slice(0, 2).join(' ');
 }
 
 // المنسّق: إصلاحات حتمية أولاً، ثم إعادة توليد واحدة عند تهرّب رغم سياسة مطابقة.
@@ -183,15 +218,19 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
 
   // 2) إصلاحات حتمية (لا تحتاج نموذجاً)
   // فلتر أسلوب حتمي (يمسح عبارات عرض الخدمة الآلية)
-  current = stripStyleViolations(current);
-  current = enforceStyleRules(current, config);
+  current = stripStyleViolations(current, config);
 
   // حدّد العلامة النهائية (من النموذج إن وُجدت، أو حتمياً عند النية)
   const tagged = enforceEscalationTag(current, config, customerText);
   const tagMatch = tagged.match(/\s*\[تحويل:[^\]]*\]\s*$/);
   const tag = tagMatch ? tagMatch[0].trim() : '';
-  const body = tagMatch ? tagged.slice(0, tagMatch.index).trim() : tagged;
-  const trimmedBody = enforceLength(body, scaledMaxLength(maxLen, customerText));   // القصّ على المتن فقط
+  let body = tagMatch ? tagged.slice(0, tagMatch.index).trim() : tagged;
+  body = enforceShortReply(body, config);
+  body = enforceStyleRules(body, config);
+  const lengthLimit = isShortReplyMode(config)
+    ? (Math.max(40, parseInt(maxLen, 10) || 300))
+    : scaledMaxLength(maxLen, customerText);
+  const trimmedBody = enforceLength(body, lengthLimit);   // القصّ على المتن فقط
   current = tag ? `${trimmedBody} ${tag}` : trimmedBody;
   return current;
 }
@@ -217,5 +256,5 @@ function enforceStyleRules(reply, config = {}) {
 module.exports = {
   enforceLength, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
-  enforceStyleRules, botSignalsTransfer, customerRequestedEscalation,
+  enforceStyleRules, enforceShortReply, botSignalsTransfer, customerRequestedEscalation,
 };

@@ -111,6 +111,20 @@ function normalizeForFacts(text) {
     .trim();
 }
 
+const BATCHED_CUSTOMER_CONTROL_LINE = 'هذه رسائل متتالية من نفس العميل. افهم نيته الكاملة منها مجتمعةً وردّ برد واحد متماسك يجاوب على كل ما سأل عنه بدون أن تترك أي سؤال، دون أن تكرر أو تتناقض:';
+
+function extractActualCustomerText(text) {
+  const input = String(text || '').trim();
+  const lines = input.split('\n');
+  if (lines[0]?.trim() !== BATCHED_CUSTOMER_CONTROL_LINE) return input;
+  const customerLines = lines.slice(1);
+  if (!customerLines.some(line => /^\s*\d+\.\s+/.test(line))) return input;
+  return customerLines
+    .map(line => line.replace(/^\s*\d+\.\s+/, ''))
+    .join('\n')
+    .trim();
+}
+
 function cleanUrl(url) {
   return String(url || '').replace(/[،,.!?؟]+$/u, '').toLowerCase();
 }
@@ -376,7 +390,7 @@ function detectMandatoryHumanHandoff({
   if (Array.isArray(unsupportedIssues) && unsupportedIssues.length) {
     return { required: true, reason: 'unsupported_information' };
   }
-  const normalized = normalizeForFacts(customerText);
+  const normalized = normalizeForFacts(extractActualCustomerText(customerText));
   const matched = HUMAN_HANDOFF_PATTERNS.find(pattern => pattern.re.test(normalized));
   return matched ? { required: true, reason: matched.reason } : { required: false, reason: '' };
 }
@@ -434,7 +448,11 @@ function historyForReview(history = []) {
       : message?.speaker === 'bot' || message?.role === 'assistant'
         ? 'البوت'
         : 'العميل';
-    return `${role}: ${String(message?.content || '').slice(0, 3000)}`;
+    const rawContent = String(message?.content || '');
+    const content = role === 'العميل'
+      ? extractActualCustomerText(rawContent)
+      : rawContent;
+    return `${role}: ${content.slice(0, 3000)}`;
   }).join('\n');
 }
 
@@ -612,6 +630,7 @@ function buildFinalPreSendReviewMessages({
   matchedPolicies = [],
   source = 'ai_reply',
 } = {}) {
+  const actualCustomerText = extractActualCustomerText(customerText);
   const style = {
     lineBreakMode: config?.replyStyle?.lineBreakMode || (config?.replyStyle?.multilineFormat ? 'ai' : 'connected'),
     lineBreakCount: config?.replyStyle?.lineBreakCount,
@@ -655,7 +674,7 @@ ${historyForReview(history)}
 </سجل_المحادثة_السابق_غير_الموثوق>
 
 <أحدث_رسالة_للعميل_غير_الموثوقة>
-${String(customerText || '')}
+${actualCustomerText}
 </أحدث_رسالة_للعميل_غير_الموثوقة>
 
 <الرسالة_النهائية_قبل_الإرسال_غير_الموثوقة>
@@ -682,6 +701,7 @@ async function reviewFinalReplyBeforeSend({
   onUsage,
 } = {}) {
   const startedAt = Date.now();
+  const actualCustomerText = extractActualCustomerText(customerText);
   const cleanedDraft = cleanupFinalReplyDeterministically(draft);
   if (!cleanedDraft) {
     return {
@@ -692,7 +712,7 @@ async function reviewFinalReplyBeforeSend({
   }
   const messages = buildFinalPreSendReviewMessages({
     draft: cleanedDraft,
-    customerText,
+    customerText: actualCustomerText,
     history,
     config,
     matchedPolicies,
@@ -712,12 +732,12 @@ async function reviewFinalReplyBeforeSend({
   // be able to silence a refund/financial/angry customer (or its own
   // needs_human decision) merely by returning decision=suppress.
   const preSuppressionHandoff = detectMandatoryHumanHandoff({
-    customerText,
+    customerText: actualCustomerText,
     parsed,
     unsupportedIssues: [],
   });
   if (preSuppressionHandoff.required) {
-    const handoffSummary = parsed.handoffSummary || customerText || preSuppressionHandoff.reason;
+    const handoffSummary = parsed.handoffSummary || actualCustomerText || preSuppressionHandoff.reason;
     const audit = {
       status: 'reviewed',
       decision: 'repair',
@@ -737,7 +757,7 @@ async function reviewFinalReplyBeforeSend({
       `human handoff overrides ${parsed.decision} reason=${preSuppressionHandoff.reason}`,
     );
     return {
-      reply: buildHumanHandoffReply(config, customerText, handoffSummary),
+      reply: buildHumanHandoffReply(config, actualCustomerText, handoffSummary),
       suppressed: false,
       requiresHuman: true,
       audit,
@@ -778,21 +798,21 @@ async function reviewFinalReplyBeforeSend({
 
   const relevant = enforceCurrentTurnRelevance(
     cleanupFinalReplyDeterministically(parsed.finalReply),
-    { history, customerText },
+    { history, customerText: actualCustomerText },
   );
   const grounded = applyGroundingFallback({
     reply: relevant.reply,
     config,
     matchedPolicies,
-    customerText,
+    customerText: actualCustomerText,
   });
   const handoff = detectMandatoryHumanHandoff({
-    customerText,
+    customerText: actualCustomerText,
     parsed,
     unsupportedIssues: grounded.issues,
   });
   if (handoff.required) {
-    const handoffSummary = parsed.handoffSummary || customerText || handoff.reason;
+    const handoffSummary = parsed.handoffSummary || actualCustomerText || handoff.reason;
     const audit = {
       status: 'reviewed',
       decision: 'repair',
@@ -815,7 +835,7 @@ async function reviewFinalReplyBeforeSend({
       `human handoff required reason=${handoff.reason} confidence=${parsed.confidence}`,
     );
     return {
-      reply: buildHumanHandoffReply(config, customerText, handoffSummary),
+      reply: buildHumanHandoffReply(config, actualCustomerText, handoffSummary),
       suppressed: false,
       requiresHuman: true,
       audit,
@@ -869,6 +889,7 @@ function buildQualityReviewMessages({
   matchedPolicies = [],
   deterministicIssues = [],
 } = {}) {
+  const actualCustomerText = extractActualCustomerText(customerText);
   const style = {
     lineBreakMode: config?.replyStyle?.lineBreakMode || (config?.replyStyle?.multilineFormat ? 'ai' : 'connected'),
     lineBreakCount: config?.replyStyle?.lineBreakCount,
@@ -908,7 +929,7 @@ ${historyForReview(history)}
 </سجل_المحادثة_غير_الموثوق>
 
 <أحدث_رسالة_غير_الموثوقة>
-${String(customerText || '')}
+${actualCustomerText}
 </أحدث_رسالة_غير_الموثوقة>
 
 <المسودة_غير_الموثوقة>
@@ -943,9 +964,19 @@ async function reviewReplyQuality({
   onUsage,
 } = {}) {
   const startedAt = Date.now();
-  const deterministicIssues = findUnsupportedFacts(draft, { config, matchedPolicies, customerText });
+  const actualCustomerText = extractActualCustomerText(customerText);
+  const deterministicIssues = findUnsupportedFacts(draft, {
+    config,
+    matchedPolicies,
+    customerText: actualCustomerText,
+  });
   const messages = buildQualityReviewMessages({
-    draft, customerText, history, config, matchedPolicies, deterministicIssues,
+    draft,
+    customerText: actualCustomerText,
+    history,
+    config,
+    matchedPolicies,
+    deterministicIssues,
   });
   const response = await openai.chat.completions.create({
     model,
@@ -961,10 +992,10 @@ async function reviewReplyQuality({
     reply: parsed.finalReply,
     config,
     matchedPolicies,
-    customerText,
+    customerText: actualCustomerText,
   });
   const handoff = detectMandatoryHumanHandoff({
-    customerText,
+    customerText: actualCustomerText,
     parsed,
     unsupportedIssues: grounded.issues,
   });
@@ -975,7 +1006,7 @@ async function reviewReplyQuality({
     confidence: parsed.confidence,
     requiresHuman: handoff.required || parsed.decision === 'escalate',
     humanReason: handoff.reason || parsed.humanReason,
-    handoffSummary: parsed.handoffSummary || (handoff.required ? customerText : ''),
+    handoffSummary: parsed.handoffSummary || (handoff.required ? actualCustomerText : ''),
     unanswered: parsed.unanswered,
     violations: parsed.violations,
     unsupportedClaims: parsed.unsupportedClaims,
@@ -987,7 +1018,7 @@ async function reviewReplyQuality({
   logger?.info?.('quality-gate', `decision=${audit.decision} violations=${audit.violations.length} hardFallback=${audit.hardFallback}`);
   return {
     reply: handoff.required
-      ? buildHumanHandoffReply(config, customerText, audit.handoffSummary)
+      ? buildHumanHandoffReply(config, actualCustomerText, audit.handoffSummary)
       : grounded.reply,
     audit,
   };

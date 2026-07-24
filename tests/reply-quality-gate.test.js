@@ -9,6 +9,7 @@ const {
   buildFinalPreSendReviewMessages,
   buildQualityReviewMessages,
   cleanupFinalReplyDeterministically,
+  detectMandatoryHumanHandoff,
   deterministicDuplicateGuard,
   findUnsupportedFacts,
   normalizeEmojiSuitability,
@@ -17,8 +18,57 @@ const {
   reviewFinalReplyBeforeSend,
   reviewReplyQuality,
 } = require('../src/services/ai/reply-quality-gate');
+const { buildCombinedInboundText } = require('../src/workers/ai-worker');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
+
+test('batched-message control text cannot trigger a false data-contradiction handoff', () => {
+  const customerText = buildCombinedInboundText([
+    { content: 'السلام عليكم' },
+    { content: 'أبي اشتراك أدوبي لمدة سنة' },
+    { content: 'أبشتري الآن' },
+  ]);
+  const result = detectMandatoryHumanHandoff({
+    customerText,
+    parsed: { decision: 'repair', confidence: 0.95, needsHuman: false },
+    unsupportedIssues: [],
+  });
+  assert.deepEqual(result, { required: false, reason: '' });
+});
+
+test('a real customer contradiction inside a batched message still requires handoff', () => {
+  const customerText = buildCombinedInboundText([
+    { content: 'كلامكم مختلف' },
+    { content: 'قلتوا السعر 100 والآن صار 200' },
+  ]);
+  const result = detectMandatoryHumanHandoff({
+    customerText,
+    parsed: { decision: 'repair', confidence: 0.95, needsHuman: false },
+    unsupportedIssues: [],
+  });
+  assert.deepEqual(result, { required: true, reason: 'data_contradiction' });
+});
+
+test('quality reviewer receives only actual customer messages from a batched turn', () => {
+  const customerText = buildCombinedInboundText([
+    { content: 'السلام عليكم' },
+    { content: 'أبي اشتراك أدوبي' },
+    { content: 'أبشتري الآن' },
+  ]);
+  const messages = buildQualityReviewMessages({
+    draft: 'وعليكم السلام، اشتراك أدوبي متوفر',
+    customerText,
+    history: [{ role: 'user', content: customerText }],
+    config: {},
+    matchedPolicies: [],
+    deterministicIssues: [],
+  });
+  const payload = messages.at(-1).content;
+  assert.doesNotMatch(payload, /دون أن تكرر أو تتناقض/);
+  assert.match(payload, /السلام عليكم/);
+  assert.match(payload, /أبي اشتراك أدوبي/);
+  assert.match(payload, /أبشتري الآن/);
+});
 
 test('parseQualityReview accepts fenced JSON and keeps only the public audit fields', () => {
   const parsed = parseQualityReview(`\`\`\`json
@@ -380,6 +430,41 @@ test('AIClient enforces the merchant line setting after the final pre-send revie
     history: [{ role: 'user', content: 'وضح لي' }],
   });
   assert.equal(result.reply, 'الجملة الأولى واضحة.\nالجملة الثانية واضحة.');
+});
+
+test('AIClient enforces forbidden content and short length after the final pre-send review', async () => {
+  const ai = new AIClient(
+    {
+      maxResponseLength: 200,
+      replyStyle: {
+        replyLength: 'short',
+        lineBreakMode: 'connected',
+        avoidWords: ['أنا هنا'],
+        avoidPhrases: ['إذا عندك أي استفسار ثاني أنا هنا'],
+      },
+    },
+    silentLogger,
+    { record() {} },
+  );
+  ai.buildClient = () => ({
+    model: 'test-model',
+    openai: { chat: { completions: { create: async () => ({
+      choices: [{ message: { content: JSON.stringify({
+        decision: 'pass', reason: 'clean', repeated_claims: [], violations: [],
+        final_reply: 'الاشتراك يشمل كل البرامج. يتفعل على إيميلك. التحديثات مشمولة. إذا عندك أي استفسار ثاني، أنا هنا',
+      }) } }],
+      usage: {},
+    }) } } },
+  });
+
+  const result = await ai.reviewBeforeSend({
+    draft: 'الاشتراك يشمل كل البرامج.',
+    customerText: 'وش يشمل الاشتراك؟',
+    history: [{ role: 'user', content: 'وش يشمل الاشتراك؟' }],
+  });
+  assert.doesNotMatch(result.reply, /أنا هنا|استفسار ثاني/);
+  assert.ok(result.reply.split(/(?<=[.!؟?])\s+|\n+/).filter(Boolean).length <= 2);
+  assert.match(result.reply, /الاشتراك/);
 });
 
 test('AIClient rechecks duplication after merchant post-processing removes the only new clause', async () => {

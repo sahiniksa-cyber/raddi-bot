@@ -59,9 +59,38 @@ test('stripAvoidedContent matches avoidPhrases with Arabic letter variations (ه
   assert.match(out, /^أبشر/);
 });
 
-test('stripAvoidedContent returns original when filter removes everything', () => {
+test('stripAvoidedContent never restores forbidden content when filter removes everything', () => {
   const config = { replyStyle: { avoidPhrases: ['السعر 99 ريال'] } };
-  assert.equal(stripAvoidedContent('السعر 99 ريال', config), 'السعر 99 ريال');
+  assert.equal(stripAvoidedContent('السعر 99 ريال', config), '');
+});
+
+test('stripAvoidedContent enforces configured avoidWords, not only avoidPhrases', () => {
+  const config = { replyStyle: { avoidWords: ['أنا هنا'] } };
+  const out = stripAvoidedContent('تم توضيح السعر، أنا هنا', config);
+  assert.equal(out.includes('أنا هنا'), false);
+  assert.match(out, /تم توضيح السعر/);
+});
+
+test('stripAvoidedContent matches a forbidden phrase across optional punctuation', () => {
+  const config = {
+    replyStyle: { avoidPhrases: ['إذا عندك أي استفسار ثاني أنا هنا'] },
+  };
+  const out = stripAvoidedContent(
+    'الاشتراك يتفعل على إيميلك إذا عندك أي استفسار ثاني، أنا هنا',
+    config,
+  );
+  assert.equal(out.includes('استفسار ثاني'), false);
+  assert.match(out, /^الاشتراك يتفعل/);
+});
+
+test('stripAvoidedContent can enforce punctuation entered in avoidWords', () => {
+  const config = { replyStyle: { avoidWords: ['.', '!'] } };
+  assert.equal(stripAvoidedContent('السعر 99 ريال. متوفر الآن!', config), 'السعر 99 ريال متوفر الآن');
+});
+
+test('a forbidden sentence period does not corrupt decimal values', () => {
+  const config = { replyStyle: { avoidWords: ['.'] } };
+  assert.equal(stripAvoidedContent('الإصدار 3.5 متوفر.', config), 'الإصدار 3.5 متوفر');
 });
 
 test('stripAvoidedContent is no-op when config has no avoidPhrases', () => {
