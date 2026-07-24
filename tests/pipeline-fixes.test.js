@@ -16,7 +16,13 @@ test('FIX 1: enqueueFollowupIfPending enqueues a debounced job when pending inbo
     isConfigured: () => true,
     // loadPendingInboundMessages runs a single SELECT; return one pending row.
     query: async () => ({
-      rows: [{ id: 'msg-1', content: 'سؤال جديد', provider_message_id: 'wa-1', raw_payload: {} }],
+      rows: [{
+        id: 'msg-1',
+        sender: 'customer-1@s.whatsapp.net',
+        content: 'سؤال جديد',
+        provider_message_id: 'wa-1',
+        raw_payload: {},
+      }],
     }),
   };
 
@@ -36,7 +42,11 @@ test('FIX 1: enqueueFollowupIfPending enqueues a debounced job when pending inbo
   assert.equal(enqueueCalls.length, 1);
   assert.deepEqual(enqueueCalls[0].payload, {
     userId: 'user-1',
+    tenantId: 'user-1',
+    channelId: 'whatsapp',
+    customerId: 'customer-1@s.whatsapp.net',
     conversationId: 'conv-1',
+    sender: 'customer-1@s.whatsapp.net',
     source: 'followup',
   });
   assert.equal(enqueueCalls[0].options.jobKey, 'conversation-conv-1');

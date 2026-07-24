@@ -114,6 +114,8 @@ test('upsertProfile issues a single INSERT … ON CONFLICT statement with allowe
   const call = fake.calls[0];
   assert.ok(call.sql.includes('INSERT INTO customer_profiles'));
   assert.ok(call.sql.includes('ON CONFLICT (conversation_id) DO UPDATE'));
+  assert.match(call.sql, /customer_profiles\.user_id = EXCLUDED\.user_id/);
+  assert.match(call.sql, /customer_profiles\.channel_id = EXCLUDED\.channel_id/);
   // First two params are always conversation_id, user_id.
   assert.equal(call.params[0], 'c1');
   assert.equal(call.params[1], 'u1');
@@ -145,7 +147,7 @@ test('upsertProfile no-ops when database is not configured', async () => {
 
 test('getProfile returns null when no row exists', async () => {
   const fake = makeFakeDb({ existing: null });
-  const out = await getProfile({ conversationId: 'c1', database: fake });
+  const out = await getProfile({ conversationId: 'c1', userId: 'u1', database: fake });
   assert.equal(out, null);
 });
 
@@ -153,7 +155,7 @@ test('getProfile returns the row when one exists', async () => {
   const fake = makeFakeDb({
     existing: { name: 'سلمى', email: 's@x.com', phone: null, last_order_ref: 'A1', preferences: {}, open_question: null, notes: null },
   });
-  const out = await getProfile({ conversationId: 'c1', database: fake });
+  const out = await getProfile({ conversationId: 'c1', userId: 'u1', database: fake });
   assert.ok(out);
   assert.equal(out.name, 'سلمى');
   assert.equal(out.email, 's@x.com');
@@ -161,7 +163,7 @@ test('getProfile returns the row when one exists', async () => {
 
 test('getProfile fails open (returns null) when the SELECT throws', async () => {
   const fake = makeFakeDb({ throwOnSelect: true });
-  const out = await getProfile({ conversationId: 'c1', database: fake });
+  const out = await getProfile({ conversationId: 'c1', userId: 'u1', database: fake });
   assert.equal(out, null);
 });
 
@@ -174,6 +176,6 @@ test('getProfile returns null without a conversationId', async () => {
 
 test('getProfile returns null when database is not configured', async () => {
   const fake = { isConfigured: () => false, query: async () => { throw new Error('should not call'); } };
-  const out = await getProfile({ conversationId: 'c1', database: fake });
+  const out = await getProfile({ conversationId: 'c1', userId: 'u1', database: fake });
   assert.equal(out, null);
 });

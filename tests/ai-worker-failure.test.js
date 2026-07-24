@@ -17,6 +17,8 @@ test('markInboundMessageFailed stores ai failure details on inbound message', as
 
   await markInboundMessageFailed({
     database,
+    userId: 'user-1',
+    conversationId: 'conv-1',
     messageId: 'msg-1',
     error: new Error('missing api key'),
   });

@@ -57,7 +57,10 @@ const dbMock = {
     }
 
     // resolveConversation — by id
-    if (s.includes('FROM conversations') && s.includes('WHERE id = $1 AND user_id = $2')) {
+    if (s.includes('FROM conversations')
+        && s.includes('WHERE id = $1')
+        && s.includes('user_id = $2')
+        && !s.includes('escalated_until')) {
       return { rows: [{ id: 'conv-1', sender: '966500000000@s.whatsapp.net', phone_number: '966500000000' }], rowCount: 1 };
     }
     // isConversationEscalationMuted — not muted
@@ -65,7 +68,7 @@ const dbMock = {
       return { rows: [], rowCount: 0 };
     }
     // loadInboundMessage (fallback text by id)
-    if (s.includes('FROM messages') && s.includes("direction = 'inbound'") && s.includes('WHERE id = $1 AND user_id = $2')) {
+    if (s.includes('FROM messages') && s.includes("direction = 'inbound'") && s.includes('WHERE id = $1') && s.includes('user_id = $2')) {
       return { rows: [{ content: 'هل التوصيل متوفر؟' }], rowCount: 1 };
     }
     // loadPendingInboundMessages — one pending customer question (fresh timestamp)

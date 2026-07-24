@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 const db = require('../../db/client');
 const { enqueueAiReply, enqueueOutgoingWhatsapp, resolveDebounceMs } = require('../../queues/message-queue');
 const escalationBridge = require('../escalation/escalation-bridge');
@@ -84,8 +86,8 @@ function toSafeRawPayload(msg, { includeMediaData = true } = {}) {
 
 async function upsertConversation(client, { userId, sender, phoneNumber }) {
   const result = await client.query(
-    `INSERT INTO conversations (user_id, sender, phone_number, last_message_at, metadata)
-     VALUES ($1, $2, $3, NOW(), '{}'::jsonb)
+    `INSERT INTO conversations (user_id, channel_id, sender, phone_number, last_message_at, metadata)
+     VALUES ($1, 'whatsapp', $2, $3, NOW(), '{}'::jsonb)
      ON CONFLICT (user_id, sender) DO UPDATE SET
        last_message_at = NOW(),
        phone_number = COALESCE(conversations.phone_number, EXCLUDED.phone_number)
@@ -97,13 +99,9 @@ async function upsertConversation(client, { userId, sender, phoneNumber }) {
 
 async function insertInboundMessage(client, { userId, conversationId, sender, text, providerMessageId, rawPayload }) {
   const result = await client.query(
-    `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-     VALUES ($1, $2, $3, 'inbound', 'user', $4, $5, 'queued_for_ai', $6::jsonb)
-     ON CONFLICT (user_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO UPDATE SET
-       status = CASE
-         WHEN messages.status IN ('stored', 'queued_for_ai') THEN messages.status
-         ELSE 'queued_for_ai'
-       END
+    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+     VALUES ($1, $2, 'whatsapp', $3, 'inbound', 'user', $4, $5, 'queued_for_ai', $6::jsonb)
+     ON CONFLICT (user_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
      RETURNING id`,
     [
       conversationId,
@@ -114,15 +112,32 @@ async function insertInboundMessage(client, { userId, conversationId, sender, te
       JSON.stringify(rawPayload),
     ],
   );
-  return result.rows[0].id;
+  if (result.rows[0]?.id) return { id: result.rows[0].id, inserted: true };
+
+  const existing = await client.query(
+    `SELECT id FROM messages
+      WHERE user_id = $1
+        AND provider_message_id = $2
+        AND conversation_id = $3
+        AND sender = $4
+        AND channel_id = 'whatsapp'
+      LIMIT 1`,
+    [userId, providerMessageId, conversationId, sender],
+  );
+  if (!existing.rows[0]?.id) {
+    const error = new Error('provider message id already exists outside the expected conversation scope');
+    error.code = 'PROVIDER_MESSAGE_SCOPE_MISMATCH';
+    throw error;
+  }
+  return { id: existing.rows[0].id, inserted: false };
 }
 
 async function insertOutboundHumanMessage(client, { userId, conversationId, sender, text, providerMessageId, rawPayload }) {
   // Records a reply that the human owner sent from their own phone (fromMe=true) so
   // it shows up in the conversation history and so the AI never tries to answer it.
   const result = await client.query(
-    `INSERT INTO messages (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-     VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'sent_by_human', $6::jsonb)
+    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+     VALUES ($1, $2, 'whatsapp', $3, 'outbound', 'assistant', $4, $5, 'sent_by_human', $6::jsonb)
      ON CONFLICT (user_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
      RETURNING id`,
     [
@@ -321,7 +336,8 @@ class MessageIngestService {
     const phoneNumber = phoneNumberFromWhatsappMessage(msg);
     const text = contentFromWhatsappMessage(msg);
     const media = mediaFromWhatsappMessage(msg);
-    const providerMessageId = messageIdFromWhatsappMessage(msg) || `${userId}:${sender}:${Date.now()}`;
+    const providerMessageId = messageIdFromWhatsappMessage(msg)
+      || `${userId}:${sender}:${Date.now()}:${crypto.randomUUID()}`;
     const rawPayload = { source, ...toSafeRawPayload(msg) };
 
     const saved = await this.db.transaction(async (client) => {
@@ -330,7 +346,7 @@ class MessageIngestService {
         sender,
         phoneNumber,
       });
-      const messageId = await insertInboundMessage(client, {
+      const storedMessage = await insertInboundMessage(client, {
         userId,
         conversationId,
         sender,
@@ -338,8 +354,31 @@ class MessageIngestService {
         providerMessageId,
         rawPayload,
       });
-      return { conversationId, messageId, phoneNumber: storedPhoneNumber };
+      return {
+        conversationId,
+        messageId: storedMessage.id,
+        inserted: storedMessage.inserted,
+        phoneNumber: storedPhoneNumber,
+      };
     });
+
+    if (!saved.inserted) {
+      this.logger.info?.('message', `duplicate inbound message ${providerMessageId} ignored`);
+      return {
+        accepted: true,
+        statusCode: 200,
+        userId,
+        tenantId: userId,
+        channelId: 'whatsapp',
+        customerId: sender,
+        sender,
+        providerMessageId,
+        conversationId: saved.conversationId,
+        messageId: saved.messageId,
+        reason: 'duplicate_provider_message',
+        duplicate: true,
+      };
+    }
 
     // Campaign classification is a side channel on its own queue. It must
     // never slow down or break the normal customer-reply path. The worker reads
@@ -379,8 +418,12 @@ class MessageIngestService {
       await this.db.query(
         `UPDATE messages SET status = 'auto_reply_disabled',
            raw_payload = COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}'
-         WHERE id = $1 AND user_id = $2`,
-        [saved.messageId, userId],
+         WHERE id = $1
+           AND user_id = $2
+           AND conversation_id = $3
+           AND sender = $4
+           AND channel_id = 'whatsapp'`,
+        [saved.messageId, userId, saved.conversationId, sender],
       );
       this.logger.info?.('message', `auto-reply disabled — inbound from ${sender} stored without AI enqueue`);
       return {
@@ -407,8 +450,12 @@ class MessageIngestService {
       await this.db.query(
         `UPDATE messages SET status = 'do_not_reply',
            raw_payload = COALESCE(raw_payload, '{}'::jsonb) #- '{media,data}' #- '{media,base64}'
-         WHERE id = $1 AND user_id = $2`,
-        [saved.messageId, userId],
+         WHERE id = $1
+           AND user_id = $2
+           AND conversation_id = $3
+           AND sender = $4
+           AND channel_id = 'whatsapp'`,
+        [saved.messageId, userId, saved.conversationId, sender],
       );
       this.logger.info?.('message', `inbound from ${sender} is on the do-not-reply list — stored, not answered`);
       return {
@@ -425,6 +472,9 @@ class MessageIngestService {
 
     await this.queue.enqueueAiReply({
       userId,
+      tenantId: userId,
+      channelId: 'whatsapp',
+      customerId: sender,
       conversationId: saved.conversationId,
       messageId: saved.messageId,
       sender,
@@ -519,8 +569,8 @@ class MessageIngestService {
     const expiry = ownerPauseExpiry(minutes, Date.now());
     if (!expiry) return false;
     const result = await this.db.query(
-      `INSERT INTO conversations (user_id, sender, last_message_at)
-       VALUES ($1, $2, NOW())
+      `INSERT INTO conversations (user_id, channel_id, sender, last_message_at)
+       VALUES ($1, 'whatsapp', $2, NOW())
        ON CONFLICT (user_id, sender) DO UPDATE SET last_message_at = NOW()
        RETURNING id`,
       [userId, recipient],
@@ -528,8 +578,10 @@ class MessageIngestService {
     const conversationId = result.rows[0]?.id;
     if (!conversationId) return false;
     await this.db.query(
-      `UPDATE conversations SET escalated_until = $2 WHERE id = $1`,
-      [conversationId, expiry],
+      `UPDATE conversations
+          SET escalated_until = $2
+        WHERE id = $1 AND user_id = $3 AND sender = $4`,
+      [conversationId, expiry, userId, recipient],
     );
     this.logger.info?.('owner-pause', `paused bot on ${recipient} until ${expiry.toISOString()} (media-only owner reply)`);
     return true;
@@ -591,7 +643,8 @@ class MessageIngestService {
       return { accepted: false, statusCode: 200, reason: 'from_me_empty', paused };
     }
     const phoneNumber = phoneNumberFromWhatsappMessage(msg);
-    const providerMessageId = whatsappId || `${userId}:${recipient}:fromme:${Date.now()}`;
+    const providerMessageId = whatsappId
+      || `${userId}:${recipient}:fromme:${Date.now()}:${crypto.randomUUID()}`;
     const rawPayload = {
       source,
       fromMe: true,
@@ -629,8 +682,10 @@ class MessageIngestService {
       const expiry = ownerPauseExpiry(minutes, Date.now());
       if (expiry && saved?.conversationId) {
         await this.db.query(
-          `UPDATE conversations SET escalated_until = $2 WHERE id = $1`,
-          [saved.conversationId, expiry],
+          `UPDATE conversations
+              SET escalated_until = $2
+            WHERE id = $1 AND user_id = $3 AND sender = $4`,
+          [saved.conversationId, expiry, userId, recipient],
         );
         this.logger.info?.('owner-pause', `paused bot on ${recipient} until ${expiry.toISOString()}`);
       }
@@ -654,6 +709,7 @@ class MessageIngestService {
 module.exports = {
   MessageIngestService,
   compactMediaForStorage,
+  insertInboundMessage,
   ownerPauseExpiry,
   messageIdFromWhatsappMessage,
   mediaFromWhatsappMessage,

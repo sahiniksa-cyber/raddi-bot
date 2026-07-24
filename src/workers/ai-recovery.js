@@ -96,9 +96,10 @@ async function recoverQueuedAiReplyJobs({
             m.provider_message_id
      FROM messages m
      WHERE m.direction = 'inbound'
+       AND m.channel_id = 'whatsapp'
        AND m.status = 'queued_for_ai'
        AND m.created_at >= NOW() - ($2 * interval '1 millisecond')
-     ORDER BY m.conversation_id, m.created_at DESC
+     ORDER BY m.conversation_id, m.created_at DESC, m.id DESC
      LIMIT $1`,
     [Math.max(1, limit), safeMaxAgeMs],
   );
@@ -114,6 +115,9 @@ async function recoverQueuedAiReplyJobs({
 
       await enqueue({
         userId: row.user_id,
+        tenantId: row.user_id,
+        channelId: 'whatsapp',
+        customerId: row.sender,
         conversationId: row.conversation_id,
         messageId: row.message_id,
         sender: row.sender,

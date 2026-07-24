@@ -49,6 +49,7 @@ test('findDuplicateRecentReply returns a match when an earlier reply is near-ide
   ]);
   const result = await findDuplicateRecentReply({
     db,
+    userId: 'u1',
     conversationId: 'c-1',
     candidate: 'مرحباً بك، كيف يمكنني مساعدتك اليوم؟',
     lookback: 3,
@@ -65,6 +66,7 @@ test('findDuplicateRecentReply returns null when nothing exceeds threshold', asy
   ]);
   const result = await findDuplicateRecentReply({
     db,
+    userId: 'u1',
     conversationId: 'c-2',
     candidate: 'مرحباً، كيف أقدر أخدمك؟',
     lookback: 3,
@@ -77,6 +79,7 @@ test('findDuplicateRecentReply is safe when DB throws', async () => {
   const db = { query: async () => { throw new Error('boom'); } };
   const result = await findDuplicateRecentReply({
     db,
+    userId: 'u1',
     conversationId: 'c-3',
     candidate: 'anything',
   });

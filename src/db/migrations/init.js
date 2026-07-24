@@ -215,6 +215,49 @@ const statements = [
     ON messages(user_id, provider_message_id)
     WHERE provider_message_id IS NOT NULL`,
 
+  `ALTER TABLE conversations
+     ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT 'whatsapp'`,
+
+  `ALTER TABLE messages
+     ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT 'whatsapp'`,
+
+  `ALTER TABLE messages
+     ALTER COLUMN conversation_id SET NOT NULL`,
+
+  // `user_id` is the tenant, `channel_id` is the transport, and `sender` is
+  // the customer. The child
+  // constraint is added NOT VALID first so PostgreSQL rejects every new
+  // cross-scope message immediately, then validated after the historical scan.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conname = 'conversations_scope_unique'
+     ) THEN
+       ALTER TABLE conversations
+         ADD CONSTRAINT conversations_scope_unique
+         UNIQUE (id, user_id, channel_id, sender);
+     END IF;
+   END $$`,
+
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conname = 'messages_conversation_scope_fk'
+     ) THEN
+       ALTER TABLE messages
+         ADD CONSTRAINT messages_conversation_scope_fk
+         FOREIGN KEY (conversation_id, user_id, channel_id, sender)
+         REFERENCES conversations (id, user_id, channel_id, sender)
+         ON DELETE CASCADE
+         NOT VALID;
+     END IF;
+   END $$`,
+
+  `ALTER TABLE messages
+     VALIDATE CONSTRAINT messages_conversation_scope_fk`,
+
   `CREATE INDEX IF NOT EXISTS idx_jobs_queue_status_available
     ON jobs(queue_name, status, available_at)`,
 
@@ -438,6 +481,39 @@ const statements = [
     message_count_at_last_extract INTEGER DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
+
+  `ALTER TABLE customer_profiles
+     ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT 'whatsapp'`,
+
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conname = 'conversations_profile_scope_unique'
+     ) THEN
+       ALTER TABLE conversations
+         ADD CONSTRAINT conversations_profile_scope_unique
+         UNIQUE (id, user_id, channel_id);
+     END IF;
+   END $$`,
+
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conname = 'customer_profiles_conversation_scope_fk'
+     ) THEN
+       ALTER TABLE customer_profiles
+         ADD CONSTRAINT customer_profiles_conversation_scope_fk
+         FOREIGN KEY (conversation_id, user_id, channel_id)
+         REFERENCES conversations (id, user_id, channel_id)
+         ON DELETE CASCADE
+         NOT VALID;
+     END IF;
+   END $$`,
+
+  `ALTER TABLE customer_profiles
+     VALIDATE CONSTRAINT customer_profiles_conversation_scope_fk`,
 
   `CREATE INDEX IF NOT EXISTS idx_customer_profiles_user
     ON customer_profiles(user_id)`,

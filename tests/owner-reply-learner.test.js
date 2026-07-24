@@ -117,12 +117,19 @@ test('extractLearnablePairs pairs owner replies with the latest unanswered inbou
 // ── loadActiveLearnedReplies
 
 test('loadActiveLearnedReplies shapes entries for knowledge injection', async () => {
+  const previous = process.env.LEARNED_REPLIES_INJECTION_ENABLED;
+  process.env.LEARNED_REPLIES_INJECTION_ENABLED = 'true';
+  try {
   const database = fakeDbCapture([[{ question: 'كم يستغرق الشحن؟', answer: 'يومين عمل' }]]);
   const entries = await loadActiveLearnedReplies({ database, userId: 'u1' });
   assert.equal(entries.length, 1);
   assert.equal(entries[0].keyword, 'كم يستغرق الشحن؟');
   assert.match(entries[0].reply, /كم يستغرق الشحن؟/);
   assert.match(entries[0].reply, /يومين عمل/);
+  } finally {
+    if (previous === undefined) delete process.env.LEARNED_REPLIES_INJECTION_ENABLED;
+    else process.env.LEARNED_REPLIES_INJECTION_ENABLED = previous;
+  }
 });
 
 test('loadActiveLearnedReplies returns [] when the feature flag is off', async () => {
@@ -134,6 +141,21 @@ test('loadActiveLearnedReplies returns [] when the feature flag is off', async (
   } finally {
     if (prev === undefined) delete process.env.LEARNED_REPLIES_ENABLED;
     else process.env.LEARNED_REPLIES_ENABLED = prev;
+  }
+});
+
+test('learned replies are not injected across customers unless reuse is explicitly enabled', async () => {
+  const previous = process.env.LEARNED_REPLIES_INJECTION_ENABLED;
+  delete process.env.LEARNED_REPLIES_INJECTION_ENABLED;
+  try {
+    const database = fakeDbCapture([[
+      { question: 'وش رمز الطلب؟', answer: 'الرمز الخاص بالعميل SECRET-OTHER-CUSTOMER' },
+    ]]);
+    assert.deepEqual(await loadActiveLearnedReplies({ database, userId: 'u1' }), []);
+    assert.equal(database.calls.length, 0);
+  } finally {
+    if (previous === undefined) delete process.env.LEARNED_REPLIES_INJECTION_ENABLED;
+    else process.env.LEARNED_REPLIES_INJECTION_ENABLED = previous;
   }
 });
 

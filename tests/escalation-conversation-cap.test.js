@@ -19,6 +19,7 @@ function makeDb({ count, lastSentAt }) {
 test('getConversationEscalationStats reports zero when there are no recent escalations', async () => {
   const stats = await getConversationEscalationStats({
     database: makeDb({ count: 0, lastSentAt: null }),
+    userId: 'u-1',
     conversationId: 'c-1',
   });
   assert.equal(stats.count24h, 0);
@@ -29,6 +30,7 @@ test('getConversationEscalationStats reports the count and most-recent timestamp
   const ts = new Date('2026-05-28T10:00:00Z');
   const stats = await getConversationEscalationStats({
     database: makeDb({ count: 3, lastSentAt: ts }),
+    userId: 'u-1',
     conversationId: 'c-2',
   });
   assert.equal(stats.count24h, 3);

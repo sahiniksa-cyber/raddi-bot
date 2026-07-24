@@ -200,6 +200,94 @@ test('findUnsupportedFacts rejects invented prices, durations, and links but acc
   assert.deepEqual(findUnsupportedFacts('شكراً ويوم سعيد', { config }), [], 'التحية ليست مدة تجارية');
 });
 
+test('findUnsupportedFacts rejects a future promotion promise supported only for the present', () => {
+  const currentOnly = { botInstructions: 'الاشتراك عليه تخفيض حالياً.' };
+  const issues = findUnsupportedFacts('إيه، الخصم بيكون موجود بكرة إن شاء الله.', { config: currentOnly });
+  assert.ok(issues.some(issue => issue.type === 'unsupported_future_availability'));
+
+  const explicitlySupported = { botInstructions: 'الخصم مستمر وموجود إلى بكرة.' };
+  assert.equal(
+    findUnsupportedFacts('إيه، الخصم بيكون موجود بكرة إن شاء الله.', { config: explicitlySupported })
+      .some(issue => issue.type === 'unsupported_future_availability'),
+    false,
+  );
+});
+
+test('final reviewer strips an old discount topic even when the model incorrectly passes it', async () => {
+  const hallucinated = 'لا تشيل هم، تقدر تشترك بكرة براحتك بالنسبة للخصم، الاشتراك عليه تخفيض حالياً فما فيه خصم إضافي.';
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'pass',
+      reason: 'looks fine',
+      repeated_claims: [],
+      violations: [],
+      final_reply: hallucinated,
+    }) } }],
+    usage: {},
+  }) } } };
+
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: hallucinated,
+    customerText: 'الين بكرة اقدر حاليا اليوم م اقدر اشترك',
+    history: [
+      {
+        role: 'assistant',
+        speaker: 'owner',
+        content: 'السلام عليكم اكدي لنا اذا حابه التفعيل اليوم عشان قبل ما نقفل النظام',
+      },
+      {
+        role: 'user',
+        speaker: 'customer',
+        content: 'الين بكرة اقدر حاليا اليوم م اقدر اشترك',
+      },
+    ],
+    config: { botInstructions: 'إذا طلب العميل خصماً وضح أن الاشتراك عليه تخفيض حالياً.' },
+    logger: silentLogger,
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.doesNotMatch(result.reply, /خصم|تخفيض/);
+  assert.match(result.reply, /تقدر تشترك بكرة/);
+  assert.ok(result.audit.violations.includes('off_topic_after_review'));
+});
+
+test('final reviewer returns a safe clarification when the entire reply is an old topic', async () => {
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'pass',
+      reason: 'looks fine',
+      repeated_claims: [],
+      violations: [],
+      final_reply: 'الاشتراك عليه تخفيض حالياً فما فيه خصم إضافي.',
+    }) } }],
+    usage: {},
+  }) } } };
+
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: 'الاشتراك عليه تخفيض حالياً فما فيه خصم إضافي.',
+    customerText: 'الين بكرة اقدر حاليا اليوم م اقدر اشترك',
+    history: [
+      {
+        role: 'assistant',
+        speaker: 'owner',
+        content: 'اكدي لنا اذا حابه التفعيل اليوم عشان قبل ما نقفل النظام',
+      },
+      { role: 'user', speaker: 'customer', content: 'الين بكرة اقدر حاليا اليوم م اقدر اشترك' },
+    ],
+    config: { botInstructions: 'إذا طلب العميل خصماً وضح أن الاشتراك عليه تخفيض حالياً.' },
+    logger: silentLogger,
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.match(result.reply, /توضحي لي المطلوب/);
+  assert.doesNotMatch(result.reply, /خصم|تخفيض/);
+  assert.ok(result.audit.violations.includes('off_topic_after_review'));
+});
+
 test('applyGroundingFallback replaces a still-invented hard fact with an honest escalation', () => {
   const result = applyGroundingFallback({
     reply: 'أكيد، سعره 777 ريال وضمانه سنتين.',
