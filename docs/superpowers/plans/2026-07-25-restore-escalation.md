@@ -13,6 +13,10 @@
 - Preserve all `user_id`, `channel_id`, `customer_id`, and `conversation_id` scoping.
 - Preserve product grounding, pre-send review, duplicate suppression, and idempotent send reservations.
 - Normal configured product questions, including duration and warranty, must be answered from full product data.
+- General conversation and low-risk natural consequences of a known
+  product/service may be answered without an exact merchant-source sentence.
+- Never infer material commercial facts such as price, warranty, availability,
+  duration, delivery, compatibility, refunds, or contractual coverage.
 - Reviewer confidence, `needs_human`, or `decision=escalate` alone must not create a transfer.
 - Explicit customer human requests and genuine high-risk cases must still transfer.
 - A configured escalation pause must not cancel the acknowledgement belonging to the same escalation.
@@ -64,6 +68,26 @@ test('reviewer uncertainty cannot escalate a grounded Adobe variants answer', as
 Add separate cases for low confidence and `decision=escalate`. Keep a positive
 case proving `أبي أكلم موظف` still returns a transfer marker.
 
+Add a low-risk-inference replay:
+
+```js
+test('ordinary car washing includes exterior mirrors without escalation', async () => {
+  const result = await reviewFinalReplyBeforeSend({
+    draft: 'نعم، المرايا الخارجية تنغسل مع غسيل السيارة',
+    customerText: 'المرايا تنغسل؟',
+    config: {
+      products: [{ name: 'غسيل سيارة', description: 'غسيل خارجي للسيارة' }],
+    },
+    // reviewer classifies the answer as natural_low_risk_inference
+  });
+  assert.equal(result.requiresHuman, false);
+  assert.match(result.reply, /نعم|تنغسل/);
+});
+```
+
+Add the boundary case proving an unlisted material promise (for example a
+special coating warranty) is not accepted as natural inference.
+
 - [ ] **Step 2: Run the focused tests and verify RED**
 
 Run:
@@ -94,7 +118,39 @@ Update both reviewer prompts with:
 
 Do not remove fact grounding or `applyGroundingFallback`.
 
-- [ ] **Step 4: Make normal unsupported information honest without automatic routing**
+- [ ] **Step 4: Add explicit evidence-basis classification**
+
+Parse and audit one of:
+
+```text
+general_conversation
+natural_low_risk_inference
+merchant_source
+missing_product_fact
+ambiguous
+```
+
+The first two may pass without an exact merchant quote. `merchant_source` uses
+the full authorized product and merchant evidence. `ambiguous` produces one
+clarifying question. `missing_product_fact` may route only for a material
+product/store fact after the full evidence was checked and either the normal
+reply draft already carried an explicit transfer marker or a deterministic
+unsupported-fact guard found a hard unsupported claim. Strip any transfer marker
+invented by a reviewer when the original draft did not authorize it.
+
+The reviewer prompt must state that absence of an exact prompt sentence does not
+make an inherent, low-risk product consequence unsupported. It must also list the
+material commercial facts that cannot be inferred: price, discount,
+availability, duration, warranty, delivery, compatibility, refund terms,
+financial status, and contractual coverage.
+
+Extend deterministic grounding for sensitive nonnumeric promises, including
+compatibility subject matching, warranty, free delivery, refund terms, premium
+add-ons, broad coverage, and availability. Category-only matches are not enough:
+evidence for Samsung cannot ground iPhone, nano cannot ground ceramic, and
+ordinary delivery cannot ground free delivery.
+
+- [ ] **Step 5: Make normal unsupported information honest without automatic routing**
 
 When no high-risk customer pattern exists, return a marker-free safe response:
 
@@ -108,7 +164,7 @@ The normal reply generator may still intentionally emit `[تحويل:...]` when 
 merchant's explicit escalation rule applies. The quality reviewer must not add
 one itself.
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [ ] **Step 6: Run focused tests and verify GREEN**
 
 Run:
 
@@ -118,7 +174,7 @@ node --test tests/pre-send-human-handoff.test.js tests/reply-quality-gate.test.j
 
 Expected: all tests pass, including explicit-human-request routing.
 
-- [ ] **Step 6: Commit Task 1**
+- [ ] **Step 7: Commit Task 1**
 
 ```powershell
 git add -- src/services/ai/reply-quality-gate.js tests/pre-send-human-handoff.test.js tests/reply-quality-gate.test.js tests/escalation-routing.test.js
@@ -182,6 +238,9 @@ handoffAcknowledgement: Boolean(escalation.ownerMessage),
 ```
 
 Do not add it to the internal team-facing escalation job.
+
+Preserve the contact and summary from the original authorized transfer marker;
+do not rebuild a missing-product handoff using `escalationContacts[0]`.
 
 - [ ] **Step 4: Separate pause checks from real owner-interrupt checks**
 
@@ -326,4 +385,3 @@ Send:
 
 Expected: one grounded reply containing configured durations and warranty, no
 generic handoff, no employee name, and no canceled outgoing row.
-

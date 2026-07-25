@@ -56,6 +56,7 @@ test('buildPlatformPromptBlock omits the escalation line when no conditions set'
 
 // ---- ai-worker: escalation pause is optional + cap is configurable (source-level) ----
 const aiWorkerSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'workers', 'ai-worker.js'), 'utf8');
+const outgoingWorkerSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'workers', 'outgoing-whatsapp-worker.js'), 'utf8');
 
 test('escalation pause is applied ONLY when config.escalationPausesBot is true', () => {
   assert.match(aiWorkerSrc, /if \(config\.escalationPausesBot === true\)/);
@@ -66,4 +67,15 @@ test('escalation pause is applied ONLY when config.escalationPausesBot is true',
 test('re-escalation cap uses config.maxEscalationsPerConversation (not a hardcoded 3)', () => {
   assert.match(aiWorkerSrc, /config\.maxEscalationsPerConversation/);
   assert.match(aiWorkerSrc, /effectiveMaxEsc > 0 && escStats\.count24h >= effectiveMaxEsc/);
+});
+
+test('customer handoff acknowledgement is identified in the outgoing payload', () => {
+  assert.match(aiWorkerSrc, /handoffAcknowledgement:\s*Boolean\(escalation\.ownerMessage\)/);
+});
+
+test('normal and lid sends ignore only the acknowledgement own escalation pause', () => {
+  const wiring = outgoingWorkerSrc.match(
+    /ignoreEscalationPause:\s*payload\.handoffAcknowledgement\s*===\s*true/g,
+  ) || [];
+  assert.equal(wiring.length, 2);
 });

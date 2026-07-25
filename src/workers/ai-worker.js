@@ -1161,6 +1161,7 @@ async function processAiReply(job) {
       replyDelayPreset: config.replyDelayPreset,
       source: 'ai_reply',
       preSendReviewRequired: true,
+      handoffAcknowledgement: Boolean(escalation.ownerMessage),
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,

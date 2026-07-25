@@ -379,6 +379,7 @@ async function processOutgoingWhatsapp(job, {
     conversationId: payload.conversationId,
     sender,
     replyMessageId,
+    ignoreEscalationPause: payload.handoffAcknowledgement === true,
   })) {
     const message = 'outgoing reply canceled because owner replied (escalated_until active)';
     await markReplyMessage(replyMessageId, 'canceled', {
@@ -604,6 +605,7 @@ async function handleLidOutgoing({
       conversationId: payload.conversationId,
       sender,
       replyMessageId,
+      ignoreEscalationPause: payload.handoffAcknowledgement === true,
     })) {
       const message = 'outgoing reply canceled because owner replied (escalated_until active)';
       await markReplyMessage(replyMessageId, 'canceled', {
@@ -845,6 +847,7 @@ async function isConversationOwnerPaused({
   conversationId,
   sender,
   replyMessageId = null,
+  ignoreEscalationPause = false,
   database = db,
 }) {
   if (!userId || !sender || !database?.isConfigured?.()) return false;
@@ -859,7 +862,11 @@ async function isConversationOwnerPaused({
       [userId, sender, conversationId || null],
     );
     const until = result.rows[0]?.escalated_until;
-    if (until && new Date(until).getTime() > Date.now()) return true;
+    if (
+      ignoreEscalationPause !== true
+      && until
+      && new Date(until).getTime() > Date.now()
+    ) return true;
 
     // Fact-based signal (not just the time window): if an actual OWNER/human
     // reply landed AT OR AFTER this AI reply was generated, the owner has stepped

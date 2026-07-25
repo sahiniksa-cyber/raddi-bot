@@ -40,16 +40,48 @@ Quality reviewers may pass, repair, clarify, or suppress a duplicate. They may
 record confidence and diagnostic metadata, but they must not create an escalation
 marker or replace a useful reply with a generic handoff.
 
-Before declaring information unsupported, the reviewer must use the matched
-product's complete configured data: name, aliases, variants, prices,
-description, long description, links, and matched merchant policies. A normal
-question about a configured product's duration, warranty, reliability, delivery,
-or features must be answered from those sources.
+Every customer question is classified into exactly one evidence basis:
 
-If a fact is genuinely unsupported, the grounding fallback must remove the
-unsupported claim and return an honest answer or one clarifying question. A
-normal unknown question must not be transferred merely because the reviewer is
-uncertain.
+1. `general_conversation`: greetings, explanations of ordinary words, and other
+   general conversation that needs no merchant fact. Answer naturally.
+2. `natural_low_risk_inference`: an ordinary consequence inherent in the
+   product or service category whose answer does not create a material
+   commercial promise. For example, ordinary exterior car washing includes
+   washing the exterior mirrors. Answer naturally even when the merchant prompt
+   does not enumerate that component.
+3. `merchant_source`: a store-specific or product-specific fact supported by the
+   matched product's complete configured data: name, aliases, variants, prices,
+   description, long description, links, or matched merchant policies.
+4. `missing_product_fact`: a material product/store fact that is genuinely absent
+   from all authorized sources and cannot be safely inferred. This is the only
+   missing-information class that may route to a human.
+
+`missing_product_fact` is not sufficient by itself to change routing. A transfer
+also requires either an explicit transfer marker already produced by the normal
+reply path or a deterministic unsupported-fact finding. This two-signal rule
+prevents one reviewer misclassification from hijacking a grounded answer. A
+reviewer-added marker that was not present in the draft is removed.
+
+Material commercial facts must never use natural inference. These include price,
+discount, availability, subscription duration, warranty, refund terms, delivery
+time, contractual coverage, compatibility, financial status, and any promise
+that could change the customer's purchase decision.
+
+The deterministic grounding layer covers both hard numeric facts and sensitive
+nonnumeric promises. Compatibility subjects, warranty, free delivery, refunds,
+premium add-ons, broad coverage, and availability must match authorized product
+or merchant evidence. Matching only the broad category is insufficient: support
+for one device, add-on, or delivery mode does not authorize another.
+
+If the product or intent is ambiguous, ask one concise clarifying question
+without escalation. If the answer is a harmless natural consequence of the
+known product category, answer it directly. The absence of an exact sentence in
+the merchant prompt is not evidence that the answer is unsupported.
+
+Before declaring a material fact unsupported, the reviewer must inspect all
+authorized data for the matched product and merchant. The grounding fallback
+must remove unsupported claims. Reviewer uncertainty alone must not transfer a
+conversation.
 
 ### Escalation
 
@@ -70,6 +102,14 @@ return low confidence or misunderstand a grounded product question.
 When a real escalation occurs, the customer acknowledgement must be delivered
 before an optional escalation pause can block later automated replies. A pause
 created by that escalation must never cancel its own acknowledgement.
+
+If the normal reply path selected a specific escalation contact, the final
+review preserves that contact and summary instead of replacing them with the
+first configured contact.
+
+A semantic-review outage returns a marker-free retry response unless the
+deterministic grounding layer found an unsupported material claim. Reviewer
+availability alone never creates a handoff.
 
 The merchant's configured pause remains supported, but the current merchant
 configuration should return to the normal continue-replying behavior
@@ -103,5 +143,10 @@ Add failing regression tests before production changes:
    the same escalation.
 7. A genuine later owner reply still cancels an in-flight AI reply.
 8. The production Adobe variants question returns the configured durations.
+9. A car-wash question about washing exterior mirrors is answered normally as a
+   low-risk natural inference even when mirrors are not listed in the prompt.
+10. A car-wash question about an unlisted warranty, price, or special coating is
+    not inferred; it is clarified or transferred according to missing-product
+    routing.
 
 Run targeted tests, then the complete test suite before commit and deployment.

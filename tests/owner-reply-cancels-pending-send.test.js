@@ -17,6 +17,40 @@ test('cancels when escalated_until is active (existing behavior preserved)', asy
   assert.equal(await isConversationOwnerPaused({ userId: 'u1', sender: 's@c.us', replyMessageId: 'r1', database: d }), true);
 });
 
+test('handoff acknowledgement ignores its own escalation pause when no human replied', async () => {
+  const future = new Date(Date.now() + 60000).toISOString();
+  const d = db((sql) => {
+    if (/escalated_until FROM conversations/.test(sql)) return { rows: [{ escalated_until: future }] };
+    if (/JOIN messages hum/.test(sql)) return { rows: [] };
+    return { rows: [] };
+  });
+  assert.equal(await isConversationOwnerPaused({
+    userId: 'u1',
+    conversationId: '00000000-0000-0000-0000-000000000001',
+    sender: 's@c.us',
+    replyMessageId: 'r1',
+    ignoreEscalationPause: true,
+    database: d,
+  }), false);
+});
+
+test('handoff acknowledgement is still canceled by a real later human reply', async () => {
+  const future = new Date(Date.now() + 60000).toISOString();
+  const d = db((sql) => {
+    if (/escalated_until FROM conversations/.test(sql)) return { rows: [{ escalated_until: future }] };
+    if (/JOIN messages hum/.test(sql)) return { rows: [{ x: 1 }] };
+    return { rows: [] };
+  });
+  assert.equal(await isConversationOwnerPaused({
+    userId: 'u1',
+    conversationId: '00000000-0000-0000-0000-000000000001',
+    sender: 's@c.us',
+    replyMessageId: 'r1',
+    ignoreEscalationPause: true,
+    database: d,
+  }), true);
+});
+
 test('cancels when a HUMAN reply landed AFTER the AI reply, even with NO escalated_until', async () => {
   const d = db((sql) => {
     if (/escalated_until FROM conversations/.test(sql)) return { rows: [{ escalated_until: null }] };

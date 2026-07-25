@@ -35,30 +35,37 @@ function reviewerResponse(body) {
   };
 }
 
-test('low-confidence final review requires a human and creates a transfer marker', async () => {
+test('reviewer uncertainty cannot escalate a harmless inherent product answer', async () => {
+  const answer = 'نعم، المرايا الخارجية تنغسل مع غسيل السيارة';
+  const reviewerReply = `${answer} [تحويل:الموظف|المرايا غير مذكورة حرفياً]`;
   const result = await reviewFinalReplyBeforeSend({
     openai: reviewerResponse({
-      decision: 'pass',
-      reason: 'uncertain',
+      decision: 'repair',
+      reason: 'المرايا غير مذكورة حرفياً',
       confidence: 0.2,
       needs_human: true,
-      human_reason: 'missing policy',
-      handoff_summary: 'customer needs policy confirmation',
+      human_reason: 'unsupported_information',
+      handoff_summary: 'هل يشمل الغسيل المرايا',
+      evidence_basis: 'natural_low_risk_inference',
       repeated_claims: [],
       violations: [],
-      final_reply: 'أكيد يتم التعويض خلال يومين.',
+      final_reply: reviewerReply,
     }),
     model: 'test',
-    draft: 'أكيد يتم التعويض خلال يومين.',
-    customerText: 'أبغى تعويض عن المبلغ المخصوم',
-    history: [{ role: 'user', speaker: 'customer', content: 'أبغى تعويض عن المبلغ المخصوم' }],
-    config,
+    draft: answer,
+    customerText: 'المرايا تنغسل؟',
+    history: [{ role: 'user', speaker: 'customer', content: 'المرايا تنغسل؟' }],
+    config: {
+      ...config,
+      products: [{ name: 'غسيل سيارة', description: 'غسيل خارجي للسيارة' }],
+    },
   });
 
-  assert.equal(result.audit.requiresHuman, true);
+  assert.equal(result.audit.requiresHuman, false);
+  assert.equal(result.audit.evidenceBasis, 'natural_low_risk_inference');
   assert.ok(result.audit.confidence < 0.65);
-  assert.match(result.reply, /\[تحويل:/);
-  assert.doesNotMatch(result.reply, /يومين/);
+  assert.equal(result.reply, answer);
+  assert.doesNotMatch(result.reply, /\[تحويل:/);
 });
 
 test('final transfer marker is stripped from customer text and enqueued once for the employee', async () => {
@@ -202,7 +209,7 @@ test('a price objection with an explicit staff request is never treated as routi
   assert.equal(isRoutinePriceObjection('غالي وخلاص، ممكن أكلم الموظف؟'), false);
 });
 
-test('reviewer contradiction and low-confidence decisions still escalate a closed price objection', async () => {
+test('reviewer metadata alone cannot escalate a closed price objection', async () => {
   for (const reviewer of [
     {
       decision: 'repair',
@@ -210,6 +217,7 @@ test('reviewer contradiction and low-confidence decisions still escalate a close
       confidence: 0.9,
       needs_human: true,
       human_reason: 'data_contradiction',
+      evidence_basis: 'general_conversation',
     },
     {
       decision: 'repair',
@@ -217,6 +225,7 @@ test('reviewer contradiction and low-confidence decisions still escalate a close
       confidence: 0.2,
       needs_human: false,
       human_reason: '',
+      evidence_basis: 'general_conversation',
     },
   ]) {
     const result = await reviewFinalReplyBeforeSend({
@@ -233,9 +242,107 @@ test('reviewer contradiction and low-confidence decisions still escalate a close
       history: [{ role: 'user', content: 'غالي وأبيه أقل من ٢٠٠، خلاص' }],
       config,
     });
-    assert.equal(result.audit.requiresHuman, true);
-    assert.match(result.reply, /\[تحويل:/);
+    assert.equal(result.audit.requiresHuman, false);
+    assert.doesNotMatch(result.reply, /\[تحويل:/);
   }
+});
+
+test('a reviewer-confirmed missing material product fact still escalates', async () => {
+  const result = await reviewFinalReplyBeforeSend({
+    openai: reviewerResponse({
+      decision: 'clarify',
+      reason: 'ضمان طبقة النانو غير موجود في أي مصدر',
+      confidence: 0.95,
+      needs_human: true,
+      human_reason: 'missing_product_fact',
+      handoff_summary: 'العميل يسأل عن ضمان طبقة النانو',
+      evidence_basis: 'missing_product_fact',
+      repeated_claims: [],
+      violations: [],
+      final_reply: 'ضمان طبقة النانو غير مذكور عندي بشكل مؤكد',
+    }),
+    model: 'test',
+    draft: 'ضمان طبقة النانو غير مذكور عندي بشكل مؤكد [تحويل:الموظف|التحقق من ضمان طبقة النانو]',
+    customerText: 'كم ضمان طبقة النانو؟',
+    history: [{ role: 'user', content: 'كم ضمان طبقة النانو؟' }],
+    config: {
+      ...config,
+      products: [{ name: 'غسيل سيارة', description: 'غسيل خارجي للسيارة' }],
+    },
+  });
+
+  assert.equal(result.audit.requiresHuman, true);
+  assert.equal(result.audit.evidenceBasis, 'missing_product_fact');
+  assert.match(result.reply, /\[تحويل:/);
+  assert.doesNotMatch(result.reply, /محمد|ذكاء اصطناعي|بوت/);
+});
+
+test('authorized missing-product transfer preserves the selected contact in a multi-contact store', async () => {
+  const result = await reviewFinalReplyBeforeSend({
+    openai: reviewerResponse({
+      decision: 'repair',
+      reason: 'تفصيل فني غير موجود',
+      confidence: 0.95,
+      needs_human: true,
+      human_reason: 'missing_product_fact',
+      handoff_summary: 'التحقق من طبقة النانو',
+      evidence_basis: 'missing_product_fact',
+      repeated_claims: [],
+      violations: [],
+      final_reply: 'بخلي الفريق يتأكد لك',
+    }),
+    model: 'test',
+    draft: 'بخلي الفريق يتأكد لك [تحويل:الدعم الفني|التحقق من طبقة النانو]',
+    customerText: 'هل الغسيل يشمل طبقة نانو؟',
+    history: [{ role: 'user', content: 'هل الغسيل يشمل طبقة نانو؟' }],
+    config: {
+      ...config,
+      escalationContacts: [
+        { name: 'المالك', phone: '966500000001' },
+        { name: 'فريق الدعم الفني', phone: '966500000002' },
+      ],
+      products: [{ name: 'غسيل سيارة', description: 'غسيل خارجي للسيارة' }],
+    },
+  });
+
+  assert.match(result.reply, /\[تحويل:الدعم الفني\|التحقق من طبقة النانو\]/);
+  assert.doesNotMatch(result.reply, /\[تحويل:المالك\|/);
+});
+
+test('missing_product_fact metadata cannot hijack a grounded draft without an authorized transfer marker', async () => {
+  const answer = 'المتاح 4 أشهر بـ189 ريال أو 8 أشهر بـ289 ريال';
+  const result = await reviewFinalReplyBeforeSend({
+    openai: reviewerResponse({
+      decision: 'repair',
+      reason: 'اعتبر المدد مفقودة بالخطأ',
+      confidence: 0.95,
+      needs_human: true,
+      human_reason: 'missing_product_fact',
+      handoff_summary: 'التحقق من المدد',
+      evidence_basis: 'missing_product_fact',
+      repeated_claims: [],
+      violations: [],
+      final_reply: answer,
+    }),
+    model: 'test',
+    draft: answer,
+    customerText: 'وش المدد المتاحة؟',
+    history: [{ role: 'user', content: 'وش المدد المتاحة؟' }],
+    config: {
+      ...config,
+      products: [{
+        name: 'اشتراك أدوبي',
+        variants: [
+          { label: '4 أشهر', price: '189 ريال' },
+          { label: '8 أشهر', price: '289 ريال' },
+        ],
+      }],
+    },
+  });
+
+  assert.equal(result.audit.requiresHuman, false);
+  assert.equal(result.reply, answer);
+  assert.doesNotMatch(result.reply, /\[تحويل:/);
 });
 
 test('real human handoff keeps the internal contact name out of the customer-visible acknowledgement', async () => {
