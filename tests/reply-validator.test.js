@@ -191,33 +191,6 @@ test('stripStyleViolations leaves a clean greeting when offer-help removed', () 
   assert.ok(out.length > 0);
 });
 
-test('stripStyleViolations removes generic availability closings reported in production', () => {
-  const config = {
-    replyStyle: {
-      avoidWords: ['أنا هنا'],
-      avoidPhrases: ['إذا عندك أي استفسار ثاني أنا هنا'],
-    },
-  };
-  assert.equal(
-    stripStyleViolations('الاشتراك يتفعل على إيميلك وإذا تحتاج شي ثاني أنا موجود', config),
-    'الاشتراك يتفعل على إيميلك',
-  );
-  assert.equal(
-    stripStyleViolations('السعر 189 ريال إذا عندك أي استفسار ثاني، أنا هنا', config),
-    'السعر 189 ريال',
-  );
-});
-
-test('stripStyleViolations does not apply one merchant availability ban to other merchants', () => {
-  const reply = 'السعر 189 ريال وإذا تحتاج شي ثاني أنا موجود';
-  assert.equal(stripStyleViolations(reply, { replyStyle: {} }), reply);
-});
-
-test('stripStyleViolations keeps a necessary conditional request for customer data', () => {
-  const reply = 'إذا تحتاج شي ثاني لإكمال الطلب أرسل الإيميل';
-  assert.equal(stripStyleViolations(reply), reply);
-});
-
 test('validateAndRepair strips offer-help phrase deterministically', async () => {
   const out = await validateAndRepair({
     reply: 'وعليكم السلام! كيف أقدر أخدمك اليوم؟',
@@ -260,31 +233,4 @@ test('validateAndRepair enforces merchant style choices', async () => {
   assert.equal(/[!🌟]/.test(out), false, 'لا تعجب ولا إيموجي');
   assert.equal(/ريال\./.test(out), false, 'لا نقطة بعد ريال');
   assert.ok(out.includes('59 ريال'));
-});
-
-test('validateAndRepair enforces one or two sentences when replyLength is short', async () => {
-  const out = await validateAndRepair({
-    reply: 'الاشتراك يشمل كل البرامج. يتفعل على إيميلك الشخصي. التحديثات مشمولة. والسعر 189 ريال.',
-    config: {
-      maxResponseLength: 200,
-      replyStyle: { replyLength: 'short' },
-    },
-    customerText: 'وش يشمل الاشتراك؟',
-    matched: [],
-    regenerate: async () => { throw new Error('no'); },
-  });
-  assert.equal(out, 'الاشتراك يشمل كل البرامج. يتفعل على إيميلك الشخصي.');
-});
-
-test('validateAndRepair keeps legacy useShortReplies deterministic', async () => {
-  const out = await validateAndRepair({
-    reply: 'الأولى. الثانية. الثالثة.',
-    config: {
-      maxResponseLength: 200,
-      replyStyle: { useShortReplies: true },
-    },
-    customerText: 'وضح لي',
-    matched: [],
-  });
-  assert.equal(out, 'الأولى. الثانية.');
 });

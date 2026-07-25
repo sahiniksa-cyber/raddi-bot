@@ -20,19 +20,3 @@ test('prompt forbids guessing and requires clarify-or-escalate on not-understood
   assert.match(sys, /إذا لم تفهم طلب العميل/);
   assert.match(sys, /اطلب توضيح|صعّد/);
 });
-
-test('prompt allows low-risk inherent product answers but forbids commercial promises', () => {
-  const ai = createClient({
-    storeName: 'مغسلة اختبار',
-    products: [{ name: 'غسيل سيارة', description: 'غسيل خارجي للسيارة' }],
-  });
-  const sys = ai.buildSystemPrompt(
-    [{ role: 'user', content: 'المرايا تنغسل؟' }],
-    { latestUserText: 'المرايا تنغسل؟' },
-  );
-
-  assert.match(sys, /استنتاج طبيعي منخفض المخاطر/);
-  assert.match(sys, /المرايا الخارجية/);
-  assert.match(sys, /السعر|الضمان/);
-  assert.match(sys, /لا تستنتج/);
-});

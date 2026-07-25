@@ -13,13 +13,6 @@ const KNOWN_ALIASES = [
   ['microsoft', 'مايكروسوفت'],
 ];
 
-const GENERIC_PRODUCT_QUERY_TOKENS = new Set([
-  'اشتراك', 'الاشتراك', 'اشتراكات',
-  'تطبيق', 'تطبيقات', 'برنامج', 'برامج',
-  'مده', 'سنه', 'سنوات', 'سنوي', 'سنويه',
-  'شهر', 'اشهر', 'شهري', 'شهريه',
-]);
-
 function normalizeProductText(value) {
   let text = String(value || '').toLowerCase();
   for (const [from, to] of KNOWN_ALIASES) {
@@ -144,27 +137,14 @@ function buildProductCatalog(config = {}) {
   ]);
 }
 
-function productSearchText(product) {
-  return normalizeProductText(
-    `${product.name} ${product.description} ${product.longDescription || ''} ${product.price}`,
-  );
-}
-
-function queryProductTokens(customerText) {
-  return normalizeProductText(customerText)
-    .split(' ')
-    .filter(token => token.length >= 3 || /^\p{N}+$/u.test(token))
-    .map(token => (token.startsWith('ال') && token.length > 4 ? token.slice(2) : token));
-}
-
-function scoreProduct(product, customerText, selectedTokens = null) {
+function scoreProduct(product, customerText) {
   const query = normalizeProductText(customerText);
   const name = normalizeProductText(product.name);
-  const details = productSearchText(product);
+  const details = normalizeProductText(`${product.name} ${product.description} ${product.longDescription || ''} ${product.price}`);
   if (!query || !name) return 0;
   if (query.includes(name) || name.includes(query)) return 100;
 
-  const tokens = selectedTokens || queryProductTokens(customerText);
+  const tokens = query.split(' ').filter(token => token.length >= 3);
   let score = 0;
   for (const token of tokens) {
     if (name.includes(token)) score += 20;
@@ -174,16 +154,8 @@ function scoreProduct(product, customerText, selectedTokens = null) {
 }
 
 function findRelevantProducts(config = {}, customerText = '', limit = 4) {
-  const catalog = buildProductCatalog(config);
-  const queryTokens = queryProductTokens(customerText);
-  const specificTokens = queryTokens.filter(token => !GENERIC_PRODUCT_QUERY_TOKENS.has(token));
-  const hasCatalogSpecificMatch = specificTokens.some(token => (
-    catalog.some(product => productSearchText(product).includes(token))
-  ));
-  const selectedTokens = hasCatalogSpecificMatch ? specificTokens : queryTokens;
-
-  const scored = catalog
-    .map(product => ({ product, score: scoreProduct(product, customerText, selectedTokens) }))
+  const scored = buildProductCatalog(config)
+    .map(product => ({ product, score: scoreProduct(product, customerText) }))
     .filter(item => item.score > 0)
     .sort((a, b) => b.score - a.score);
   const strong = scored.filter(item => item.score >= 20);

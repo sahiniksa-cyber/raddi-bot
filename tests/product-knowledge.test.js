@@ -6,7 +6,6 @@ const assert = require('node:assert/strict');
 const {
   buildProductCatalog,
   buildRelevantProductContext,
-  findRelevantProducts,
   normalizeProductText,
 } = require('../src/services/products/product-knowledge');
 
@@ -63,35 +62,4 @@ test('buildRelevantProductContext returns matching product details for customer 
 
 test('normalizeProductText handles Arabic and English variants', () => {
   assert.equal(normalizeProductText('Adobe كريتيف كلاود'), normalizeProductText('ادوبى كريتيف كلاود'));
-});
-
-test('generic subscription and duration words do not inject unrelated products', () => {
-  const config = {
-    products: [
-      { name: 'اشتراك أدوبي كريتيف كلاود', variants: [{ label: 'سنة', price: '379 ريال' }] },
-      { name: 'اشتراك لينكدإن بريميوم سنة', price: '199 ريال' },
-      { name: 'اشتراك كانفا برو 3 سنوات', price: '99 ريال' },
-      { name: 'اشتراك جيمناي برو', price: '59 ريال' },
-    ],
-  };
-
-  const found = findRelevantProducts(
-    config,
-    'الله يعافيك أبي اشتراك تطبيقات أدوبي لمدة سنة عندكم؟',
-  );
-
-  assert.deepEqual(found.map(product => product.name), ['اشتراك أدوبي كريتيف كلاود']);
-});
-
-test('a polite generic pricing question still matches generic catalog terms', () => {
-  const config = {
-    products: [
-      { name: 'اشتراك سنوي', price: '120 ريال' },
-      { name: 'صيانة جهاز', price: '80 ريال' },
-    ],
-  };
-
-  const found = findRelevantProducts(config, 'كم سعر الاشتراك السنوي؟');
-
-  assert.deepEqual(found.map(product => product.name), ['اشتراك سنوي']);
 });
