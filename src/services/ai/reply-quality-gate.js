@@ -402,10 +402,9 @@ function isRoutinePriceObjection(customerText = '') {
     && !detectCustomerHandoffPattern(actual).required;
 }
 
-function reviewerAllowsRoutinePriceAcknowledgement(parsed = {}) {
+function reviewerMisclassifiedRoutinePriceObjection(parsed = {}) {
   if (normalizeConfidence(parsed.confidence) < preSendConfidenceThreshold()) return false;
   const reason = String(parsed.humanReason || '').trim().toLowerCase();
-  if (!parsed.needsHuman && !reason) return true;
   return parsed.needsHuman === true && ROUTINE_PRICE_REVIEW_REASONS.has(reason);
 }
 
@@ -505,7 +504,7 @@ function historyForReview(history = []) {
 const CONVERSATION_TOPICS = [
   { key: 'discount', re: /خصم|تخفيض|عرض|كود/ },
   { key: 'installment', re: /تمارا|تقسيط|اقساط/ },
-  { key: 'price', re: /سعر|بكم|قيمه|تكلف/ },
+  { key: 'price', re: /سعر|بكم|قيمه|تكلف|غالي|اقل\s+من|ميزاني/ },
   { key: 'payment', re: /دفع|تحويل|فاتوره/ },
   { key: 'shipping', re: /شحن|توصيل|يوصل/ },
   { key: 'refund', re: /استرجاع|استرداد|الغاء/ },
@@ -701,6 +700,7 @@ function buildFinalPreSendReviewMessages({
 9. موضوع الرد تحدده أحدث رسالة للعميل والرسالة التي قبلها مباشرة في الجلسة الحالية. لا تُدخل موضوعاً قديماً من السجل أو من تعليمات شرطية لم يسأل عنه العميل الآن.
 10. ميّز بين "مالك المتجر" و"البوت": كلام المالك يحدد سياق الحديث، أما رد سابق للبوت فلا يثبت صحة معلومة.
 11. كلمة "حالياً" لا تسمح بوعد عن بكرة. لا تؤكد استمرار خصم أو عرض أو توفر أو تفعيل مستقبلاً إلا إذا ذكرت مصادر المتجر ذلك صراحة.
+12. فرّق بين السؤال المفتوح وبين اعتراض العميل أو إنهائه للحديث. ذكر العميل لميزانيته أو مدة يتمناها لا يعني أنه يسأل عنها. إذا اعترض على السعر ثم شكر بدون سؤال أو طلب مفتوح، لا تعتبرها معلومة ناقصة ولا سبباً للتصعيد؛ حافظ على الرد الطبيعي المتعاطف والمختصر ما دام بلا ادعاء.
 
 أعد JSON فقط:
 {"decision":"pass|repair|suppress","reason":"سبب قصير","confidence":0.0,"needs_human":false,"human_reason":"","handoff_summary":"","repeated_claims":[],"violations":[],"final_reply":"النص النهائي أو فارغ عند suppress"}`;
@@ -780,7 +780,7 @@ async function reviewFinalReplyBeforeSend({
   // Keep true refund/payment/anger/human-request patterns authoritative.
   if (
     isRoutinePriceObjection(actualCustomerText)
-    && reviewerAllowsRoutinePriceAcknowledgement(parsed)
+    && reviewerMisclassifiedRoutinePriceObjection(parsed)
   ) {
     const audit = {
       status: 'reviewed',
@@ -985,6 +985,7 @@ function buildQualityReviewMessages({
 3. التعليمات: التزم بتعليمات المالك وإعدادات الأسلوب.
 4. الأسطر: اجعلها طبيعية ومناسبة، ولا تقطع سعراً أو رابطاً أو اسم منتج.
 5. الإيموجي: استخدمه فقط حسب الإعداد وفي مكان مناسب، ولا تستخدم إيموجي احتفالياً في شكوى أو مشكلة.
+6. فرّق بين السؤال المفتوح وبين اعتراض العميل أو إنهائه للحديث. ذكر العميل لميزانيته أو مدة يتمناها لا يعني أنه يسأل عنها. إذا اعترض على السعر ثم شكر بدون سؤال أو طلب مفتوح، لا تعتبرها معلومة ناقصة ولا سبباً للتصعيد؛ حافظ على الرد الطبيعي المتعاطف والمختصر ما دام بلا ادعاء.
 
 إذا كان القصد غامضاً فعلاً، اطرح سؤالاً توضيحياً واحداً. إذا كانت المعلومة غير موجودة، لا تخمّن؛ اذكر أنها غير مذكورة أو صعّد حسب الجهات المضبوطة.
 

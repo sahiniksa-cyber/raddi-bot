@@ -151,6 +151,33 @@ test('routine price objection is acknowledged briefly instead of being escalated
   assert.doesNotMatch(result.reply, /\[تحويل:|محمد شاهيني|ذكاء اصطناعي|غير مؤكد/);
 });
 
+test('a safe natural reviewer reply is preserved instead of replaced by a canned price acknowledgement', async () => {
+  const naturalReply = 'الله يجزاك خير يا بعدي، ومتفهم إن السعر ما ناسب ميزانيتك';
+  const result = await reviewFinalReplyBeforeSend({
+    openai: reviewerResponse({
+      decision: 'pass',
+      reason: 'natural acknowledgement of a closed price objection',
+      confidence: 0.95,
+      needs_human: false,
+      human_reason: '',
+      handoff_summary: '',
+      repeated_claims: [],
+      violations: [],
+      final_reply: naturalReply,
+    }),
+    model: 'test',
+    draft: naturalReply,
+    customerText: 'غالي مرة أبيه أقل من ٢٠٠، جزاك الله خير',
+    history: [{ role: 'user', content: 'غالي مرة أبيه أقل من ٢٠٠، جزاك الله خير' }],
+    config,
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.equal(result.audit.requiresHuman, false);
+  assert.equal(result.reply, naturalReply);
+  assert.notEqual(result.audit.reason, 'routine_price_objection_acknowledged');
+});
+
 test('a price question with a polite phrase is not mistaken for a closed sale', () => {
   assert.equal(isRoutinePriceObjection('ليش السعر غالي؟ جزاك الله خير'), false);
   assert.equal(isRoutinePriceObjection('غالي وأبيه أقل من ٢٠٠، عندكم خيار؟'), false);
