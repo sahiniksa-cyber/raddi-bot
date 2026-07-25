@@ -103,9 +103,58 @@ test('stripAvoidedContent handles null/empty inputs gracefully', () => {
   assert.equal(stripAvoidedContent(undefined), '');
 });
 
+test('stripAvoidedContent always removes direct AI identity disclosure even with unrelated merchant avoid lists', () => {
+  const config = {
+    replyStyle: {
+      avoidWords: ['النقاط .'],
+      avoidPhrases: ['إذا عندك استفسار أنا موجود'],
+    },
+  };
+  const out = stripAvoidedContent('أنا ذكاء اصطناعي، لكن أقدر أوضح لك السعر', config);
+  assert.doesNotMatch(out, /أنا ذكاء اصطناعي|بوت|ChatGPT|نموذج لغة/i);
+  assert.match(out, /أوضح لك السعر/);
+  assert.equal(out, 'أقدر أوضح لك السعر');
+  for (const disclosure of [
+    'أنا مساعد ذكاء اصطناعي، لكن أقدر أوضح لك السعر',
+    'أنا نظام ذكاء اصطناعي، لكن أقدر أوضح لك السعر',
+    'بصفتي ذكاء اصطناعي، أقدر أوضح لك السعر',
+    'أنا chatbot، لكن أقدر أوضح لك السعر',
+    'أنا مساعد آلي، لكن أقدر أوضح لك السعر',
+    'أنا نظام آلي، لكن أقدر أوضح لك السعر',
+    'أنا برنامج آلي، لكن أقدر أوضح لك السعر',
+    'أنا مجرد برنامج آلي، لكن أقدر أوضح لك السعر',
+    'I’m an AI assistant, but I can explain the price',
+  ]) {
+    const cleaned = stripAvoidedContent(disclosure, config);
+    assert.doesNotMatch(cleaned, /ذكاء اصطناعي|مساعد آلي|نظام آلي|برنامج آلي|AI assistant|chatbot|بوت|روبوت|نموذج لغة/i);
+  }
+  assert.equal(stripAvoidedContent('أنا برنامج آلي، لكن أقدر أوضح لك السعر', config), 'أقدر أوضح لك السعر');
+  assert.equal(stripAvoidedContent('أنا مجرد برنامج آلي، لكن أقدر أوضح لك السعر', config), 'أقدر أوضح لك السعر');
+  assert.equal(stripAvoidedContent('I’m an AI assistant, but I can explain the price', config), 'but I can explain the price');
+});
+
 test('stripAvoidedContent preserves WhatsApp marker like [تحويل:...]', () => {
   const reply = 'خلني أحوّلك للمختص [تحويل:محمد|مشكلة دفع]';
   assert.equal(stripAvoidedContent(reply), reply);
+});
+
+test('stripAvoidedContent keeps escalation contact names private outside the internal marker', () => {
+  const config = {
+    escalationContacts: [{ name: 'محمد شاهيني' }],
+  };
+  const reply = 'بخلي محمد شاهيني يتابعها معك [تحويل:محمد شاهيني|طلب متابعة]';
+  assert.equal(
+    stripAvoidedContent(reply, config),
+    'بخلي الفريق يتابعها معك [تحويل:محمد شاهيني|طلب متابعة]',
+  );
+  assert.equal(
+    stripAvoidedContent('بخلي محمد يتابعها معك [تحويل:محمد شاهيني|طلب متابعة]', config),
+    'بخلي الفريق يتابعها معك [تحويل:محمد شاهيني|طلب متابعة]',
+  );
+  assert.equal(
+    stripAvoidedContent('أهلاً علي', { escalationContacts: [{ name: 'علي' }] }),
+    'أهلاً علي',
+  );
 });
 
 test('stripAvoidedContent does not strip apostrophes between digits (e.g. measurements)', () => {

@@ -10,6 +10,7 @@ const {
   normalizeEscalationTarget,
   prepareEscalation,
 } = require('../src/workers/escalation-routing');
+const { stripAvoidedContent } = require('../lib/post-process-reply');
 
 test('bare 16+ digit targets are treated as group IDs, shorter stay phones', () => {
   assert.equal(normalizeEscalationTarget('120363419087654321'), '120363419087654321@g.us');
@@ -96,6 +97,55 @@ test('prepareEscalation does NOT escalate on a contact rule match alone — only
 
   assert.equal(result.customerReply, 'كم المدة اللي تحتاجها؟');
   assert.equal(result.ownerMessage, null, 'rule-only match must not trigger an owner notification');
+});
+
+test('normal replies without a transfer marker do not attempt contact resolution or emit escalation warnings', () => {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = prepareEscalation({
+      reply: 'الله يجزاك خير، ومتفهم إن السعر ما ناسبك',
+      config: {
+        escalationContacts: [{
+          name: 'محمد شاهيني',
+          phone: 'متجر برو خدمة عملاء',
+          when: 'مشكلة او استفسار ما عرفت له',
+        }],
+      },
+      customerSender: 'customer@s.whatsapp.net',
+      inboundText: 'غالي وأبيه أقل من ٢٠٠، جزاك الله خير',
+    });
+    assert.equal(result.ownerMessage, null);
+    assert.equal(result.customerReply, 'الله يجزاك خير، ومتفهم إن السعر ما ناسبك');
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.deepEqual(warnings, []);
+});
+
+test('internal contact name is never present in the routed customer reply', () => {
+  const config = {
+    escalationContacts: [{
+      name: 'محمد شاهيني',
+      phone: '120363123456789012@g.us',
+      when: 'طلب متابعة',
+    }],
+  };
+  const sanitized = stripAvoidedContent(
+    'بخلي محمد شاهيني يتابعها معك [تحويل:محمد شاهيني|طلب متابعة]',
+    config,
+  );
+  const result = prepareEscalation({
+    reply: sanitized,
+    config,
+    customerSender: '966500000000@s.whatsapp.net',
+    inboundText: 'أحتاج متابعة',
+  });
+
+  assert.equal(result.customerReply, 'بخلي الفريق يتابعها معك');
+  assert.doesNotMatch(result.customerReply, /محمد شاهيني/);
+  assert.ok(result.ownerMessage);
 });
 
 test('prepareEscalation can send owner notifications to a WhatsApp group JID', () => {

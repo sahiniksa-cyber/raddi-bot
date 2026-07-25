@@ -155,16 +155,24 @@ function buildEscalationNotification({ contact, customerSender, customerPhoneNum
 
 function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNumber, inboundText }) {
   const explicit = extractEscalationRequest(reply);
+  // Normal customer replies have no internal transfer marker. Return before
+  // resolving contacts so routine messages cannot trigger misleading
+  // "no contact matched" warnings or any rule-based side effects.
+  if (!explicit) {
+    return {
+      customerReply: stripEscalationMarkers(reply),
+      ownerMessage: null,
+    };
+  }
   const contact = resolveEscalationContact(config, explicit?.contactName, inboundText);
   // Only escalate on the AI's explicit [تحويل:...] tag. A customer keyword match
   // alone is NOT enough — it caused the owner to be spammed for routine questions.
-  const shouldSend = Boolean(explicit);
   // Always scrub: catches a malformed marker in the fallback path AND any second
   // (malformed) marker left behind in explicit.customerReply (CX-1).
   const customerReply = stripEscalationMarkers(explicit?.customerReply || reply);
 
   const contactTarget = contact?.target || contact?.jid || contact?.groupJid || contact?.phone;
-  if (!shouldSend || !contactTarget) {
+  if (!contactTarget) {
     return { customerReply, ownerMessage: null };
   }
 

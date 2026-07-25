@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeArabic } = require('../../../lib/post-process-reply');
+const { detectEscalationIntent } = require('./reply-validator');
 
 const DECISIONS = new Set(['pass', 'repair', 'clarify', 'escalate']);
 const FINAL_DECISIONS = new Set(['pass', 'repair', 'suppress']);
@@ -302,34 +303,38 @@ function isAttributedCustomerClaim(reply, customerText, claimRaw) {
 }
 
 function findUnsupportedFacts(reply, { config = {}, matchedPolicies = [], customerText = '' } = {}) {
+  // Internal routing metadata is not customer-visible factual content. Its
+  // summary often quotes the customer's own numbers and must not trigger a
+  // second unsupported-claim fallback.
+  const publicReply = String(reply || '').replace(/\[تحويل:[^\]]*\]/g, '').trim();
   const evidence = buildAuthoritativeEvidence(config, matchedPolicies);
   const evidenceClaims = new Set(extractNumericClaims(evidence).map(c => c.key));
   const evidenceWordDurations = new Set(extractWordDurationClaims(evidence));
   const priceValues = configuredPriceValues(config);
   const issues = [];
 
-  for (const claim of extractNumericClaims(reply)) {
+  for (const claim of extractNumericClaims(publicReply)) {
     const supported = evidenceClaims.has(claim.key)
       || (claim.group === 'currency' && claim.values.every(v => priceValues.has(v)))
-      || isAttributedCustomerClaim(reply, customerText, claim.raw);
+      || isAttributedCustomerClaim(publicReply, customerText, claim.raw);
     if (!supported) issues.push({ type: 'unsupported_numeric', value: claim.raw });
   }
 
-  for (const duration of extractWordDurationClaims(reply)) {
-    const attributed = isAttributedCustomerClaim(reply, customerText, duration);
+  for (const duration of extractWordDurationClaims(publicReply)) {
+    const attributed = isAttributedCustomerClaim(publicReply, customerText, duration);
     if (!evidenceWordDurations.has(duration) && !attributed) {
       issues.push({ type: 'unsupported_duration', value: duration });
     }
   }
 
   const allowedUrls = new Set(extractUrls(evidence));
-  for (const url of extractUrls(reply)) {
+  for (const url of extractUrls(publicReply)) {
     const attributed = extractUrls(customerText).includes(url)
-      && /الرابط الذي ارسلته|الرابط اللي ارسلته|حسب الرابط|بحسب الرابط/.test(normalizeForFacts(reply));
+      && /الرابط الذي ارسلته|الرابط اللي ارسلته|حسب الرابط|بحسب الرابط/.test(normalizeForFacts(publicReply));
     if (!allowedUrls.has(url) && !attributed) issues.push({ type: 'unsupported_url', value: url });
   }
 
-  issues.push(...extractUnsupportedFutureClaims(reply, evidence));
+  issues.push(...extractUnsupportedFutureClaims(publicReply, evidence));
 
   const unique = new Map(issues.map(issue => [`${issue.type}:${issue.value}`, issue]));
   return Array.from(unique.values());
@@ -341,7 +346,7 @@ function buildSafeUnknownReply(config = {}, customerText = '') {
   const name = String(contact.name || 'المالك').replace(/[|\]]/g, ' ').trim() || 'المالك';
   const summary = String(customerText || 'سؤال يحتاج معلومة غير موجودة')
     .replace(/[|\]\n]/g, ' ').trim().slice(0, 80) || 'سؤال يحتاج تأكيد';
-  return `المعلومة غير مذكورة عندي بشكل مؤكد، لذلك بحوّل سؤالك لـ${name} للتأكد. [تحويل:${name}|${summary}]`;
+  return `المعلومة غير موجودة عندي بشكل مؤكد، بخلي الفريق يتأكد لك. [تحويل:${name}|${summary}]`;
 }
 
 function buildReviewUnavailableReply() {
@@ -368,6 +373,49 @@ const HUMAN_HANDOFF_PATTERNS = [
   },
 ];
 
+const PRICE_OBJECTION_RE = /غالي|غاليه|مرتفع|السعر.{0,18}(?:ما\s*ناسب|ما\s*يناسب|كثير)|(?:ابي|أبي|ابغى|أبغى|ابيه|أبيه).{0,18}(?:اقل|أقل)\s+من|ميزاني/;
+const PRICE_CLOSURE_RE = /(?:خلاص|ما\s*يناسبني|ما\s*باخذ|بشوف\s+غير|جزاك\s*الله\s*خير|شكرا|شكرًا|يعطيك\s*العافيه|ما\s*قصرت)\s*[،,.!؟?]*\s*$/;
+const OPEN_PRICE_REQUEST_RE = /[؟?]|(^|[^ء-ي])(?:عندكم|متوفر|موجود)(?=$|[^ء-ي])|(?:لو\s+)?تقدر(?:ون)?|(?:لو|اذا)\s*(?:عندك(?:م)?|فيه|موجود|متوفر)|(?:هل|وش|ايش|اذا|إذا|ممكن).{0,28}(?:يوجد|فيه|المتوفر|خيار|بديل|عرض|خصم|ارخص|أرخص)|(?:خيار|بديل|عرض|خصم|ارخص|أرخص).{0,28}(?:عندكم|فيه|متوفر|موجود)/;
+const ROUTINE_PRICE_REVIEW_REASONS = new Set([
+  'unsupported_information',
+  'unsupported information',
+  'missing_information',
+  'missing information',
+]);
+
+function detectCustomerHandoffPattern(customerText = '') {
+  const actual = extractActualCustomerText(customerText);
+  if (detectEscalationIntent(actual)) {
+    return { required: true, reason: 'explicit_human_request' };
+  }
+  const normalized = normalizeForFacts(actual);
+  const matched = HUMAN_HANDOFF_PATTERNS.find(pattern => pattern.re.test(normalized));
+  return matched ? { required: true, reason: matched.reason } : { required: false, reason: '' };
+}
+
+function isRoutinePriceObjection(customerText = '') {
+  const actual = extractActualCustomerText(customerText);
+  const normalized = normalizeForFacts(actual);
+  return PRICE_OBJECTION_RE.test(normalized)
+    && PRICE_CLOSURE_RE.test(normalized)
+    && !OPEN_PRICE_REQUEST_RE.test(normalized)
+    && !detectCustomerHandoffPattern(actual).required;
+}
+
+function reviewerAllowsRoutinePriceAcknowledgement(parsed = {}) {
+  if (normalizeConfidence(parsed.confidence) < preSendConfidenceThreshold()) return false;
+  const reason = String(parsed.humanReason || '').trim().toLowerCase();
+  if (!parsed.needsHuman && !reason) return true;
+  return parsed.needsHuman === true && ROUTINE_PRICE_REVIEW_REASONS.has(reason);
+}
+
+function buildRoutinePriceObjectionReply(customerText = '') {
+  const normalized = normalizeForFacts(customerText);
+  return /جزاك\s*الله\s*خير/.test(normalized)
+    ? 'الله يجزاك خير، ومتفهم إن السعر ما ناسبك'
+    : 'متفهم إن السعر ما ناسبك';
+}
+
 function preSendConfidenceThreshold(value = process.env.PRE_SEND_MIN_CONFIDENCE) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(0.95, Math.max(0.1, parsed)) : 0.65;
@@ -390,22 +438,20 @@ function detectMandatoryHumanHandoff({
   if (Array.isArray(unsupportedIssues) && unsupportedIssues.length) {
     return { required: true, reason: 'unsupported_information' };
   }
-  const normalized = normalizeForFacts(extractActualCustomerText(customerText));
-  const matched = HUMAN_HANDOFF_PATTERNS.find(pattern => pattern.re.test(normalized));
-  return matched ? { required: true, reason: matched.reason } : { required: false, reason: '' };
+  return detectCustomerHandoffPattern(customerText);
 }
 
 function buildHumanHandoffReply(config = {}, customerText = '', summary = '') {
   const contact = Array.isArray(config.escalationContacts) ? config.escalationContacts[0] : null;
   if (!contact) {
-    return 'أفهم طلبك، وهذه الحالة تحتاج متابعة موظف. ما راح أعطيك جواباً تخمينياً.';
+    return 'وصلتني رسالتك، وهذه الحالة تحتاج متابعة الفريق';
   }
   const name = String(contact.name || 'الموظف').replace(/[|\]]/g, ' ').trim() || 'الموظف';
   const safeSummary = String(summary || customerText || 'حالة تحتاج متابعة موظف')
     .replace(/[|\]\n]/g, ' ')
     .trim()
     .slice(0, 120) || 'حالة تحتاج متابعة موظف';
-  return `أفهم طلبك، بخلي ${name} يتابع الحالة معك بدون ما أعطيك جواباً غير مؤكد. [تحويل:${name}|${safeSummary}]`;
+  return `وصلتني رسالتك، بخلي الفريق يتابعها معك. [تحويل:${name}|${safeSummary}]`;
 }
 
 function applyGroundingFallback({ reply, config = {}, matchedPolicies = [], customerText = '' } = {}) {
@@ -728,6 +774,36 @@ async function reviewFinalReplyBeforeSend({
     await onUsage(response.usage.prompt_tokens || 0, response.usage.completion_tokens || 0);
   }
   const parsed = parseFinalPreSendReview(response.choices?.[0]?.message?.content || '');
+  // A normal price objection followed by a polite close is not a missing-data
+  // incident and must never be converted into a staff handoff. The customer is
+  // expressing a preference, not asking us to invent a new price or policy.
+  // Keep true refund/payment/anger/human-request patterns authoritative.
+  if (
+    isRoutinePriceObjection(actualCustomerText)
+    && reviewerAllowsRoutinePriceAcknowledgement(parsed)
+  ) {
+    const audit = {
+      status: 'reviewed',
+      decision: 'repair',
+      reason: 'routine_price_objection_acknowledged',
+      confidence: parsed.confidence,
+      requiresHuman: false,
+      humanReason: '',
+      handoffSummary: '',
+      repeatedClaims: parsed.repeatedClaims,
+      violations: parsed.violations,
+      unsupportedClaims: [],
+      hardFallback: false,
+      latencyMs: Date.now() - startedAt,
+    };
+    logger?.info?.('pre-send-review', 'routine price objection acknowledged without handoff');
+    return {
+      reply: buildRoutinePriceObjectionReply(actualCustomerText),
+      suppressed: false,
+      requiresHuman: false,
+      audit,
+    };
+  }
   // Human-safety decisions outrank duplicate suppression. A reviewer must not
   // be able to silence a refund/financial/angry customer (or its own
   // needs_human decision) merely by returning decision=suppress.
@@ -1058,6 +1134,7 @@ module.exports = {
   extractWordDurationClaims,
   findUnsupportedFacts,
   detectMandatoryHumanHandoff,
+  isRoutinePriceObjection,
   normalizeEmojiSuitability,
   parseFinalPreSendReview,
   parseQualityReview,
