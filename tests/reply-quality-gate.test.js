@@ -338,6 +338,103 @@ test('final reviewer returns a safe clarification when the entire reply is an ol
   assert.ok(result.audit.violations.includes('off_topic_after_review'));
 });
 
+test('final reviewer keeps a grounded Adobe answer when the customer corrects the product name', async () => {
+  const answer = 'اشتراك أدوبي كرييتف كلاود يشمل برامج أدوبي، ويعمل على جهازين وهو مضمون لكامل المدة.';
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'pass',
+      reason: 'يشرح المقصود بكلاود ويجيب عن الضمان',
+      repeated_claims: [],
+      violations: [],
+      final_reply: answer,
+    }) } }],
+    usage: {},
+  }) } } };
+
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: answer,
+    customerText: 'وشهو كلاود اقولك ادوبي',
+    history: [
+      { role: 'assistant', speaker: 'bot', content: 'وعليكم السلام، كلاود وهو مضمون' },
+      { role: 'user', speaker: 'customer', content: 'وشهو كلاود اقولك ادوبي' },
+    ],
+    config: {
+      products: [{
+        name: 'اشتراك أدوبي كرييتف كلاود',
+        longDescription: 'يشمل برامج أدوبي ويعمل على جهازين ومضمون لكامل المدة',
+      }],
+    },
+    logger: silentLogger,
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.match(result.reply, /اشتراك أدوبي/);
+  assert.match(result.reply, /مضمون/);
+  assert.doesNotMatch(result.reply, /توضحي لي المطلوب/);
+  assert.equal(result.audit.violations.includes('off_topic_after_review'), false);
+});
+
+test('final reviewer understands مضمون as the current warranty topic', async () => {
+  const answer = 'نعم، ضمانه مستمر لكامل المدة.';
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'pass',
+      reason: 'يجيب عن سؤال الضمان',
+      repeated_claims: [],
+      violations: [],
+      final_reply: answer,
+    }) } }],
+    usage: {},
+  }) } } };
+
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: answer,
+    customerText: 'وهل هو مضمون؟',
+    history: [{ role: 'user', speaker: 'customer', content: 'وهل هو مضمون؟' }],
+    config: { botInstructions: 'الضمان مستمر لكامل المدة.' },
+    logger: silentLogger,
+  });
+
+  assert.equal(result.reply, answer);
+  assert.equal(result.audit.violations.includes('off_topic_after_review'), false);
+});
+
+test('final reviewer maps a configured product feature name to its official product', async () => {
+  const answer = 'اشتراك أدوبي كرييتف كلاود مضمون لكامل المدة.';
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'pass',
+      reason: 'فوتوشوب ضمن اشتراك أدوبي',
+      repeated_claims: [],
+      violations: [],
+      final_reply: answer,
+    }) } }],
+    usage: {},
+  }) } } };
+
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: answer,
+    customerText: 'هل فوتوشوب مضمون؟',
+    history: [{ role: 'user', speaker: 'customer', content: 'هل فوتوشوب مضمون؟' }],
+    config: {
+      products: [{
+        name: 'اشتراك أدوبي كرييتف كلاود',
+        longDescription: 'يشمل فوتوشوب وهو مضمون لكامل المدة',
+      }],
+    },
+    logger: silentLogger,
+  });
+
+  assert.equal(result.reply, answer);
+  assert.equal(result.audit.violations.includes('off_topic_after_review'), false);
+});
+
 test('applyGroundingFallback replaces a still-invented hard fact with an honest escalation', () => {
   const result = applyGroundingFallback({
     reply: 'أكيد، سعره 777 ريال وضمانه سنتين.',

@@ -72,6 +72,112 @@ test('reviews the persisted final draft with the already-sent assistant reply', 
   assert.match(database.updates[0].params[4], /preSendReview/);
 });
 
+test('final review receives every trailing customer fragment as one ordered turn', async () => {
+  let received;
+  const database = {
+    isConfigured: () => true,
+    query: async (sql) => {
+      if (/SELECT id, content, raw_payload/.test(sql)) {
+        return {
+          rows: [{
+            id: 'reply-batched',
+            content: 'وعليكم السلام، اشتراك أدوبي متوفر ومضمون.',
+            raw_payload: {},
+          }],
+        };
+      }
+      if (/SELECT role, direction, content/.test(sql)) {
+        return {
+          rows: [
+            { role: 'user', direction: 'inbound', content: 'وهل هو مضمون؟', status: 'answered_by_ai', created_at: '2026-07-25T13:33:45.000Z' },
+            { role: 'user', direction: 'inbound', content: 'ادوبي', status: 'answered_by_ai', created_at: '2026-07-25T13:33:43.000Z' },
+            { role: 'user', direction: 'inbound', content: 'في اشتراك', status: 'answered_by_ai', created_at: '2026-07-25T13:33:41.000Z' },
+            { role: 'user', direction: 'inbound', content: 'كيفك؟', status: 'answered_by_ai', created_at: '2026-07-25T13:33:39.000Z' },
+            { role: 'user', direction: 'inbound', content: 'السلام عليكم', status: 'answered_by_ai', created_at: '2026-07-25T13:33:36.000Z' },
+            { role: 'assistant', direction: 'outbound', content: 'رد سابق انتهى هنا', status: 'sent', created_at: '2026-07-24T13:00:00.000Z' },
+            { role: 'user', direction: 'inbound', content: 'موضوع قديم لا يدخل في الدفعة', status: 'answered_by_ai', created_at: '2026-07-24T12:59:00.000Z' },
+          ],
+        };
+      }
+      if (/UPDATE messages/.test(sql)) return { rowCount: 1, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  };
+  const bot = {
+    reviewReplyBeforeSend: async (input) => {
+      received = input;
+      return { reply: input.draft, suppressed: false, audit: { decision: 'pass' } };
+    },
+  };
+
+  await reviewOutgoingReplyBeforeSend({
+    database,
+    bot,
+    payload: {
+      source: 'ai_reply',
+      preSendReviewRequired: true,
+      sender: 'customer-1@s.whatsapp.net',
+      customerId: 'customer-1@s.whatsapp.net',
+    },
+    userId: 'user-1',
+    conversationId: 'conversation-1',
+    replyMessageId: 'reply-batched',
+    draft: 'stale',
+  });
+
+  assert.equal(
+    received.customerText,
+    'السلام عليكم\nكيفك؟\nفي اشتراك\nادوبي\nوهل هو مضمون؟',
+  );
+  assert.doesNotMatch(received.customerText, /موضوع قديم/);
+});
+
+test('final review never joins adjacent customer messages across the session gap', async () => {
+  let received;
+  const database = {
+    isConfigured: () => true,
+    query: async (sql) => {
+      if (/SELECT id, content, raw_payload/.test(sql)) {
+        return { rows: [{ id: 'reply-new-session', content: 'الجواب الحالي', raw_payload: {} }] };
+      }
+      if (/SELECT role, direction, content/.test(sql)) {
+        return {
+          rows: [
+            { role: 'user', direction: 'inbound', content: 'السؤال الحالي', status: 'answered_by_ai', created_at: '2026-07-25T13:00:00.000Z' },
+            { role: 'user', direction: 'inbound', content: 'سر من جلسة الأمس', status: 'answered_by_ai', created_at: '2026-07-24T13:00:00.000Z' },
+          ],
+        };
+      }
+      if (/UPDATE messages/.test(sql)) return { rowCount: 1, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  };
+  const bot = {
+    reviewReplyBeforeSend: async (input) => {
+      received = input;
+      return { reply: input.draft, suppressed: false, audit: { decision: 'pass' } };
+    },
+  };
+
+  await reviewOutgoingReplyBeforeSend({
+    database,
+    bot,
+    payload: {
+      source: 'ai_reply',
+      preSendReviewRequired: true,
+      sender: 'customer-1@s.whatsapp.net',
+      customerId: 'customer-1@s.whatsapp.net',
+    },
+    userId: 'user-1',
+    conversationId: 'conversation-1',
+    replyMessageId: 'reply-new-session',
+    draft: 'stale',
+  });
+
+  assert.equal(received.customerText, 'السؤال الحالي');
+  assert.doesNotMatch(received.customerText, /جلسة الأمس/);
+});
+
 test('persists suppress and returns no sendable text when the reply adds nothing', async () => {
   const database = makeDatabase();
   const bot = {

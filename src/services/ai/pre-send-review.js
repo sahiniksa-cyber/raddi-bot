@@ -37,6 +37,27 @@ function normalizeHistory(rows = []) {
     .filter(message => message.content);
 }
 
+function latestCustomerTurnText(history = []) {
+  let lastCustomerIndex = -1;
+  for (let index = history.length - 1; index >= 0; index--) {
+    if (history[index]?.role === 'user') {
+      lastCustomerIndex = index;
+      break;
+    }
+  }
+  if (lastCustomerIndex < 0) return '';
+
+  let firstCustomerIndex = lastCustomerIndex;
+  while (firstCustomerIndex > 0 && history[firstCustomerIndex - 1]?.role === 'user') {
+    firstCustomerIndex--;
+  }
+  return history
+    .slice(firstCustomerIndex, lastCustomerIndex + 1)
+    .map(message => String(message.content || '').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
 async function loadReviewContext({
   database,
   userId,
@@ -95,7 +116,10 @@ async function loadReviewContext({
     [userId, conversationId, replyMessageId, channelId, customerId],
   );
   const history = normalizeHistory(recent.rows);
-  const customerText = [...history].reverse().find(message => message.role === 'user')?.content || '';
+  // The AI worker batches rapid inbound fragments into one turn. Rebuild that
+  // same trailing customer turn here so the final relevance guard does not see
+  // only the last fragment and delete valid answers to the preceding ones.
+  const customerText = latestCustomerTurnText(history);
   return {
     reused: false,
     suppressed: false,
@@ -223,6 +247,7 @@ async function reviewOutgoingReplyBeforeSend({
 
 module.exports = {
   compactAudit,
+  latestCustomerTurnText,
   loadReviewContext,
   normalizeHistory,
   persistReview,

@@ -2,6 +2,10 @@
 
 const { normalizeArabic } = require('../../../lib/post-process-reply');
 const { detectEscalationIntent } = require('./reply-validator');
+const {
+  findRelevantProducts,
+  normalizeProductText,
+} = require('../products/product-knowledge');
 
 const DECISIONS = new Set(['pass', 'repair', 'clarify', 'escalate']);
 const FINAL_DECISIONS = new Set(['pass', 'repair', 'suppress']);
@@ -508,7 +512,7 @@ const CONVERSATION_TOPICS = [
   { key: 'payment', re: /دفع|تحويل|فاتوره/ },
   { key: 'shipping', re: /شحن|توصيل|يوصل/ },
   { key: 'refund', re: /استرجاع|استرداد|الغاء/ },
-  { key: 'warranty', re: /ضمان/ },
+  { key: 'warranty', re: /ضمان|مضمون/ },
   { key: 'activation', re: /تفعيل|يتفعل|تفعيله/ },
   { key: 'subscription', re: /اشتراك|اشترك/ },
 ];
@@ -532,11 +536,33 @@ function currentConversationFocus(history = [], customerText = '') {
   return normalizeForFacts(focus.join('\n'));
 }
 
-function findOffTopicIssues(reply, { history = [], customerText = '' } = {}) {
+function productAnchors(config = {}, text = '') {
+  if (!normalizeProductText(text)) return new Set();
+  return new Set(
+    findRelevantProducts(config, text)
+      .map(product => normalizeProductText(product.name)),
+  );
+}
+
+function hasSharedProductAnchor(config, reply, focus) {
+  const replyAnchors = productAnchors(config, reply);
+  if (!replyAnchors.size) return false;
+  const focusAnchors = productAnchors(config, focus);
+  return [...replyAnchors].some(anchor => focusAnchors.has(anchor));
+}
+
+function findOffTopicIssues(reply, { history = [], customerText = '', config = {} } = {}) {
   const normalizedReply = normalizeForFacts(reply);
   const focus = currentConversationFocus(history, customerText);
+  const sharedProductAnchor = hasSharedProductAnchor(config, reply, focus);
   return CONVERSATION_TOPICS
-    .filter(topic => topic.re.test(normalizedReply) && !topic.re.test(focus))
+    .filter((topic) => {
+      if (!topic.re.test(normalizedReply) || topic.re.test(focus)) return false;
+      // "اشتراك" is often just the category in a product's configured name.
+      // Keep it when both sides name the same catalog product, while retaining
+      // all other stale-topic protections (discount, payment, refund, etc.).
+      return !(topic.key === 'subscription' && sharedProductAnchor);
+    })
     .map(topic => ({ type: 'off_topic', value: topic.key }));
 }
 
@@ -562,8 +588,8 @@ function stripTopicFromReply(reply, topic) {
   return kept.join('').trim();
 }
 
-function enforceCurrentTurnRelevance(reply, { history = [], customerText = '' } = {}) {
-  const issues = findOffTopicIssues(reply, { history, customerText });
+function enforceCurrentTurnRelevance(reply, { history = [], customerText = '', config = {} } = {}) {
+  const issues = findOffTopicIssues(reply, { history, customerText, config });
   let cleaned = String(reply || '').trim();
   for (const issue of issues) {
     const topic = CONVERSATION_TOPICS.find(candidate => candidate.key === issue.value);
@@ -874,7 +900,7 @@ async function reviewFinalReplyBeforeSend({
 
   const relevant = enforceCurrentTurnRelevance(
     cleanupFinalReplyDeterministically(parsed.finalReply),
-    { history, customerText: actualCustomerText },
+    { history, customerText: actualCustomerText, config },
   );
   const grounded = applyGroundingFallback({
     reply: relevant.reply,
