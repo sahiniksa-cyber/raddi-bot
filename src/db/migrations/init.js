@@ -3,9 +3,11 @@
 require('dotenv').config({ quiet: true });
 
 const db = require('../client');
+const replyAuditMigration = require('./20260726-reply-audit');
 
 const statements = [
   'CREATE EXTENSION IF NOT EXISTS pgcrypto',
+  ...replyAuditMigration.upStatements,
 
   `CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
