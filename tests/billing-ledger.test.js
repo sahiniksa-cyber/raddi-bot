@@ -5,9 +5,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const ExcelJS = require('exceljs');
 
 const { appendLedgerRow, buildLedgerRow } = require('../src/services/billing/excel-ledger');
+const {
+  workbookFromRows,
+  workbookSemanticsFromFile,
+} = require('./helpers/spreadsheet-workbook-utils');
 
 test('buildLedgerRow formats a payment record for the Excel ledger', () => {
   const row = buildLedgerRow({
@@ -41,11 +44,20 @@ function payment(index) {
   };
 }
 
+function semanticCellValue(cell) {
+  return cell.value?.type === 'date' ? new Date(cell.value.value) : cell.value;
+}
+
+async function readWorkbookRows(file) {
+  const workbook = await workbookSemanticsFromFile(file);
+  return Object.fromEntries(workbook.sheets.map(sheet => [
+    sheet.name,
+    sheet.rows.map(row => row.cells.map(semanticCellValue)),
+  ]));
+}
+
 async function readPaymentRows(file) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(file);
-  const sheet = workbook.getWorksheet('Payments');
-  return sheet.getRows(1, sheet.rowCount).map(row => row.values.slice(1));
+  return (await readWorkbookRows(file)).Payments;
 }
 
 test('first billing append writes the frozen header and exact payment row', async t => {
@@ -101,36 +113,27 @@ test('billing append preserves every existing sheet, row, value, and workbook or
   const billingDirectory = path.join(dataDir, 'billing');
   const file = path.join(billingDirectory, 'payments-ledger.xlsx');
   await fs.mkdir(billingDirectory, { recursive: true });
-  const original = new ExcelJS.Workbook();
-  const notes = original.addWorksheet('Notes');
-  notes.addRows([['Kind', 'Value'], ['Unicode', 'فاتورة ✨'], ['Decimal', 19.99]]);
-  const payments = original.addWorksheet('Payments');
-  payments.columns = [
-    { header: 'Date', key: 'date', width: 22 },
-    { header: 'Name', key: 'name', width: 24 },
-    { header: 'Email', key: 'email', width: 30 },
-    { header: 'Amount', key: 'amount', width: 12 },
-    { header: 'Currency', key: 'currency', width: 10 },
-    { header: 'Method', key: 'method', width: 16 },
-    { header: 'Provider Payment ID', key: 'providerPaymentId', width: 28 },
-    { header: 'Status', key: 'status', width: 16 },
-    { header: 'Activation Type', key: 'activationType', width: 18 },
-    { header: 'Note', key: 'note', width: 34 },
-  ];
-  payments.addRow(buildLedgerRow(payment(1)));
-  await original.xlsx.writeFile(file);
+  await fs.writeFile(file, await workbookFromRows([
+    { name: 'Notes', rows: [['Kind', 'Value'], ['Unicode', 'فاتورة ✨'], ['Decimal', 19.99]] },
+    {
+      name: 'Payments',
+      rows: [
+        ['Date', 'Name', 'Email', 'Amount', 'Currency', 'Method', 'Provider Payment ID', 'Status', 'Activation Type', 'Note'],
+        Object.values(buildLedgerRow(payment(1))),
+      ],
+    },
+  ]));
 
   await appendLedgerRow(payment(2), { dataDir });
 
-  const reopened = new ExcelJS.Workbook();
-  await reopened.xlsx.readFile(file);
-  assert.deepEqual(reopened.worksheets.map(sheet => sheet.name), ['Notes', 'Payments']);
-  assert.deepEqual(reopened.getWorksheet('Notes').getRows(1, 3).map(row => row.values.slice(1)), [
+  const rows = await readWorkbookRows(file);
+  assert.deepEqual(Object.keys(rows), ['Notes', 'Payments']);
+  assert.deepEqual(rows.Notes, [
     ['Kind', 'Value'],
     ['Unicode', 'فاتورة ✨'],
     ['Decimal', 19.99],
   ]);
-  assert.deepEqual(reopened.getWorksheet('Payments').getRows(2, 2).map(row => row.values.slice(1)), [
+  assert.deepEqual(rows.Payments.slice(1), [
     [payment(1).date, 'Customer 1', 'user1@example.com', 10.01, 'SAR', 'card', 'pay-1', 'paid', 'paid', 'append 1'],
     [payment(2).date, 'Customer 2', 'user2@example.com', 10.02, 'USD', 'card', 'pay-2', 'paid', 'paid', 'append 2'],
   ]);
@@ -142,16 +145,13 @@ test('billing append accepts an existing valid workbook with no used cells', asy
   const billingDirectory = path.join(dataDir, 'billing');
   const file = path.join(billingDirectory, 'payments-ledger.xlsx');
   await fs.mkdir(billingDirectory, { recursive: true });
-  const blank = new ExcelJS.Workbook();
-  blank.addWorksheet('Blank source');
-  await blank.xlsx.writeFile(file);
+  await fs.writeFile(file, await workbookFromRows([{ name: 'Blank source', rows: [] }]));
 
   await appendLedgerRow(payment(1), { dataDir });
 
-  const reopened = new ExcelJS.Workbook();
-  await reopened.xlsx.readFile(file);
-  assert.deepEqual(reopened.worksheets.map(sheet => sheet.name), ['Blank source', 'Payments']);
-  assert.deepEqual(reopened.getWorksheet('Payments').getRow(2).values.slice(1), [
+  const rows = await readWorkbookRows(file);
+  assert.deepEqual(Object.keys(rows), ['Blank source', 'Payments']);
+  assert.deepEqual(rows.Payments[1], [
     payment(1).date, 'Customer 1', 'user1@example.com', 10.01, 'SAR', 'card', 'pay-1', 'paid', 'paid', 'append 1',
   ]);
 });
@@ -190,25 +190,15 @@ test('existing Payments headers and cells stay positional while canonical labels
     'settled',
     'migration',
   ];
-  const original = new ExcelJS.Workbook();
-  const payments = original.addWorksheet('Payments');
-  payments.addRow(headers);
-  payments.addRow(legacyRow);
-  await original.xlsx.writeFile(file);
+  await fs.writeFile(file, await workbookFromRows([{ name: 'Payments', rows: [headers, legacyRow] }]));
   const record = payment(2);
 
   await appendLedgerRow(record, { dataDir });
 
-  const reopened = new ExcelJS.Workbook();
-  await reopened.xlsx.readFile(file);
-  const sheet = reopened.getWorksheet('Payments');
-  const positionalValues = rowNumber => Array.from(
-    { length: headers.length },
-    (_, index) => sheet.getRow(rowNumber).getCell(index + 1).value,
-  );
-  assert.deepEqual(positionalValues(1), headers);
-  assert.deepEqual(positionalValues(2), legacyRow);
-  assert.deepEqual(positionalValues(3), [
+  const rows = (await readWorkbookRows(file)).Payments;
+  assert.deepEqual(rows[0], headers);
+  assert.deepEqual(rows[1], legacyRow);
+  assert.deepEqual(rows[2], [
     null,
     'USD',
     'Customer 2',

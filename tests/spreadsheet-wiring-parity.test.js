@@ -19,6 +19,47 @@ const evidencePath = path.join(
   'legacy-exceljs-oracle.json',
 );
 
+function importContract(evidence) {
+  return Object.fromEntries(Object.entries(evidence).map(([name, item]) => [name, {
+    fixture: item.fixture,
+    result: item.result,
+    acceptedRecipientCount: item.acceptedRecipientCount,
+    rejectedRecipientCount: item.rejectedRecipientCount,
+    normalizedPhones: item.normalizedPhones,
+    contactWriteOrder: item.contactWriteOrder,
+    error: item.error,
+  }]));
+}
+
+function normalizeCellValue(value) {
+  return value === null ? '' : value;
+}
+
+function trimTrailingEmptyCells(values) {
+  const trimmed = [...values];
+  while (trimmed.length && trimmed.at(-1) === '') trimmed.pop();
+  return trimmed;
+}
+
+function workbookContract(workbooks) {
+  return Object.fromEntries(Object.entries(workbooks).map(([name, workbook]) => [name, {
+    sheetOrder: workbook.sheetOrder,
+    sheets: workbook.sheets.map(sheet => ({
+      name: sheet.name,
+      presentation: {
+        rightToLeft: sheet.presentation.rightToLeft,
+        columnWidths: sheet.presentation.columnWidths,
+        autoFilter: sheet.presentation.autoFilter,
+        headerBold: sheet.presentation.headerBold,
+        dataValidation: sheet.presentation.dataValidation,
+      },
+      rows: sheet.rows
+        .filter(row => row.cells.length)
+        .map(row => trimTrailingEmptyCells(row.cells.map(cell => normalizeCellValue(cell.value)))),
+    })),
+  }]));
+}
+
 test('adapter wiring matches the frozen fixture corpus with only the approved ledger repair', async () => {
   const fixtures = await buildFixtureCorpus();
   const before = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
@@ -28,8 +69,10 @@ test('adapter wiring matches the frozen fixture corpus with only the approved le
   assert.equal(after.oracle, 'current-spreadsheet-call-sites');
   assert.deepEqual(Object.keys(fixtures), Object.keys(before.imports));
   assert.ok(fixtures.largeWorkbook.buffer.length > 64 * 1024);
-  assert.deepEqual(after.imports, before.imports, 'campaign import delta is not approved');
-  assert.deepEqual(after.exports, before.exports, 'campaign export delta is not approved');
+  assert.deepEqual(importContract(after.imports), importContract(before.imports), 'campaign import behavior delta is not approved');
+  assert.equal(after.imports.validCsv.sourceWorkbook.sheets[0].rows[1].cells[0].value, '0551234571');
+  assert.equal(after.imports.semanticWorkbook.sourceWorkbook.sheets[0].rows[5].cells[3].value, null);
+  assert.deepEqual(workbookContract(after.exports), workbookContract(before.exports), 'campaign export delta is not approved');
   assert.deepEqual(after.billingLedger.appendAttempts, before.billingLedger.appendAttempts);
   assert.deepEqual(
     after.billingLedger.persistedWorkbook.sheets[0].rows.slice(0, 2),

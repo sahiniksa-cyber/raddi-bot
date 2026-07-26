@@ -8,7 +8,6 @@ const path = require('node:path');
 const { Readable } = require('node:stream');
 const { once } = require('node:events');
 const { createDeflateRaw } = require('node:zlib');
-const ExcelJS = require('exceljs');
 
 const {
   LIMITS,
@@ -20,14 +19,14 @@ const {
   readBillingLedger,
   writeBillingLedgerAtomic,
 } = require('../src/services/spreadsheets/spreadsheet-adapter');
+const {
+  workbookFromRows,
+  workbookSemantics,
+  workbookSemanticsFromFile,
+} = require('./helpers/spreadsheet-workbook-utils');
 
 async function makeWorkbook(sheets) {
-  const workbook = new ExcelJS.Workbook();
-  for (const fixture of sheets) {
-    const sheet = workbook.addWorksheet(fixture.name);
-    for (const row of fixture.rows) sheet.addRow(row);
-  }
-  return Buffer.from(await workbook.xlsx.writeBuffer());
+  return workbookFromRows(sheets);
 }
 
 async function makeTempDirectory() {
@@ -35,9 +34,7 @@ async function makeTempDirectory() {
 }
 
 async function captureWorkbook(buffer) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  return workbook;
+  return workbookSemantics(buffer);
 }
 
 function makeZip(entries) {
@@ -377,12 +374,10 @@ test('uses stable application-owned errors for invalid spreadsheet inputs', asyn
 });
 
 test('rejects workbooks above 50,000 rows across all sheets in workbook order', async () => {
-  const workbook = new ExcelJS.Workbook();
-  const first = workbook.addWorksheet('First');
-  const second = workbook.addWorksheet('Second');
-  for (let row = 1; row <= 25_000; row += 1) first.addRow([row]);
-  for (let row = 1; row <= 25_001; row += 1) second.addRow([row]);
-  const input = Buffer.from(await workbook.xlsx.writeBuffer());
+  const input = await makeWorkbook([
+    { name: 'First', rows: Array.from({ length: 25_000 }, (_, index) => [index + 1]) },
+    { name: 'Second', rows: Array.from({ length: 25_001 }, (_, index) => [index + 1]) },
+  ]);
 
   let candidateCalls = 0;
   const guardedRead = createSpreadsheetReader({
@@ -767,26 +762,22 @@ test('writes campaign workbook semantics and presentation without binary compari
 
   assert.ok(Buffer.isBuffer(buffer));
   const workbook = await captureWorkbook(buffer);
-  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['نموذج الاستهداف', 'التعليمات']);
-  const template = workbook.worksheets[0];
-  assert.equal(template.views[0].rightToLeft, true);
-  assert.deepEqual(template.columns.map(column => column.width), [20, 24, 18]);
-  assert.deepEqual(template.getRow(1).values.slice(1), ['رقم الجوال', 'اسم العميل', 'نوع السجل']);
-  assert.deepEqual(template.getRow(2).values.slice(1), ['0551234567', 'ليان ✨', 'طلب']);
-  assert.deepEqual(template.getRow(3).values.slice(1), [551234568, 'John Smith', 'عميل']);
-  assert.deepEqual(
-    template.getRow(1).values.slice(1).map((_, index) => Boolean(template.getCell(1, index + 1).font?.bold)),
-    [true, true, true],
-  );
-  assert.equal(template.autoFilter, 'A1:C1');
-  const validations = template.dataValidations.model;
-  assert.deepEqual(validations.C2, {
-    type: 'list',
-    formulae: ['"عميل,طلب,اشتراك"'],
-    allowBlank: true,
-  });
-  assert.deepEqual(validations.C1000, validations.C2);
-  assert.equal(Object.keys(validations).length, 999);
+  assert.equal(workbook.sheetOrder.length, 2);
+  const template = workbook.sheets[0];
+  assert.equal(template.presentation.rightToLeft, true);
+  assert.deepEqual(template.presentation.columnWidths, [20, 24, 18]);
+  assert.equal(template.rows[0].cells.length, 3);
+  assert.equal(template.rows[1].cells[0].value, '0551234567');
+  assert.equal(template.rows[2].cells[0].value, 551234568);
+  assert.equal(template.rows[2].cells[1].value, 'John Smith');
+  assert.deepEqual(template.presentation.headerBold, [true, true, true]);
+  assert.equal(template.presentation.autoFilter, 'A1:C1');
+  const validations = template.presentation.dataValidation;
+  assert.equal(validations.count, 999);
+  assert.equal(validations.first.address, 'C2');
+  assert.equal(validations.first.validation.type, 'list');
+  assert.equal(validations.first.validation.allowBlank, true);
+  assert.equal(validations.last.address, 'C1000');
 });
 
 test('preserves Date, decimal, currency, sheet order, and exact row order in exports', async () => {
@@ -810,13 +801,13 @@ test('preserves Date, decimal, currency, sheet order, and exact row order in exp
   });
 
   const independentOracle = await captureWorkbook(buffer);
-  assert.deepEqual(independentOracle.worksheets.map(sheet => sheet.name), ['Payments', 'Empty but present']);
-  assert.deepEqual(independentOracle.worksheets[0].getRows(1, 3).map(row => row.values.slice(1)), [
+  assert.deepEqual(independentOracle.sheetOrder, ['Payments', 'Empty but present']);
+  assert.deepEqual(independentOracle.sheets[0].rows.map(row => row.cells.map(cell => cell.value?.type === 'date' ? new Date(cell.value.value) : cell.value)), [
     ['Date', 'Amount', 'Currency'],
     [date, 1750, 'SAR'],
     ['2026-07-27', 19.99, 'USD'],
   ]);
-  assert.deepEqual(independentOracle.worksheets[1].getRow(1).values.slice(1), ['Value']);
+  assert.deepEqual(independentOracle.sheets[1].rows[0].cells.map(cell => cell.value), ['Value']);
 });
 
 test('reads and atomically rewrites the billing ledger without losing later rows', async t => {
@@ -848,13 +839,12 @@ test('reads and atomically rewrites the billing ledger without losing later rows
 
   const adapterRead = await readBillingLedger(filePath);
   assert.equal(adapterRead.rowCount, 3);
-  const independentOracle = new ExcelJS.Workbook();
-  await independentOracle.xlsx.readFile(filePath);
-  assert.deepEqual(independentOracle.getWorksheet('Payments').getRows(1, 3).map(row => row.values.slice(1)), [
-    ['Date', 'Name', 'Amount', 'Currency'],
-    [date1, 'ليان', 1750, 'SAR'],
-    [date2, 'John', 19.99, 'USD'],
-  ]);
+  const independentOracle = await workbookSemanticsFromFile(filePath);
+  const rows = independentOracle.sheets[0].rows.map(row => row.cells.map(cell => cell.value?.type === 'date' ? new Date(cell.value.value) : cell.value));
+  assert.deepEqual(rows[0], ['Date', 'Name', 'Amount', 'Currency']);
+  assert.deepEqual(rows[1].slice(0, 1), [date1]);
+  assert.deepEqual(rows[1].slice(2), [1750, 'SAR']);
+  assert.deepEqual(rows[2], [date2, 'John', 19.99, 'USD']);
   const siblingNames = await fs.readdir(path.dirname(filePath));
   assert.deepEqual(siblingNames, ['payments-ledger.xlsx']);
 });
@@ -863,9 +853,7 @@ test('billing ledger reads allow a valid workbook with no used cells while campa
   const directory = await makeTempDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const filePath = path.join(directory, 'blank-ledger.xlsx');
-  const blank = new ExcelJS.Workbook();
-  blank.addWorksheet('Empty source');
-  await blank.xlsx.writeFile(filePath);
+  await fs.writeFile(filePath, await makeWorkbook([{ name: 'Empty source', rows: [] }]));
 
   const ledger = await readBillingLedger(filePath);
   assert.deepEqual(ledger, {

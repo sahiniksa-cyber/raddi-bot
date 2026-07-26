@@ -27,7 +27,6 @@
     "cheerio": "^1.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
-    "exceljs": "^4.4.0",
     "express": "^4.18.2",
     "express-rate-limit": "^8.4.1",
     "express-session": "^1.19.0",
@@ -46,10 +45,5 @@
     "session-file-store": "^1.5.0",
     "unzipper-esm": "0.13.2",
     "write-excel-file": "4.1.1"
-  },
-  "overrides": {
-    "exceljs": {
-      "uuid": "11.1.1"
-    }
   }
 }

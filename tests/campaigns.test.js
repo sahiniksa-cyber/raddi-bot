@@ -37,9 +37,12 @@ const {
   saveCampaignMedia,
 } = require('../src/services/campaigns/media-store');
 const AIClient = require('../lib/ai-client');
-const ExcelJS = require('exceljs');
 const { MessageIngestService } = require('../src/services/whatsapp/message-ingest.service');
 const { canonicalConfig, product } = require('./helpers/canonical-config');
+const {
+  workbookFromRows,
+  workbookSemantics,
+} = require('./helpers/spreadsheet-workbook-utils');
 
 function campaignProductConfig() {
   return canonicalConfig({
@@ -834,10 +837,9 @@ test('Excel export is generated live with a separate sheet for every customer st
   ];
   const service = createCampaignService({ database: { query: async () => ({ rows }) }, getUserBot: async () => ({}) });
   const buffer = await service.exportSignals('user-1');
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['مهتمون بلا طلب مؤكد', 'الطلبات المؤكدة', 'يحتاجون تحقق']);
-  assert.equal(workbook.getWorksheet('الطلبات المؤكدة').getCell('E2').value, 'AB-12');
+  const workbook = await workbookSemantics(buffer);
+  assert.deepEqual(workbook.sheetOrder, ['مهتمون بلا طلب مؤكد', 'الطلبات المؤكدة', 'يحتاجون تحقق']);
+  assert.equal(workbook.sheets[1].rows[1].cells[4].value, 'AB-12');
 });
 
 test('merchant can manually move a customer into the confirmed-orders database with an audit event', async () => {
@@ -858,11 +860,7 @@ test('merchant can manually move a customer into the confirmed-orders database w
 });
 
 test('an edited exported Excel sheet can be re-imported to update the customer classification', async () => {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('الطلبات المؤكدة');
-  sheet.addRow(['رقم العميل', 'اسم العميل', 'المنتج', 'التصنيف', 'رقم الطلب']);
-  sheet.addRow(['966551234567', 'عميل', 'منتج تجريبي', 'ordered_confirmed', 'AB-88']);
-  const buffer = await workbook.xlsx.writeBuffer();
+  const buffer = await workbookFromRows([{ name: 'الطلبات المؤكدة', rows: [['رقم العميل', 'اسم العميل', 'المنتج', 'التصنيف', 'رقم الطلب'], ['966551234567', 'عميل', 'منتج تجريبي', 'ordered_confirmed', 'AB-88']] }]);
   const calls = [];
   const database = {
     query: async (sql, params) => {
@@ -901,12 +899,7 @@ test('campaign audience never sends twice when a phone exists in conversations a
 });
 
 test('Excel audience import stores orders and subscription dates while merging duplicate phones', async () => {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('العملاء');
-  sheet.addRow(['رقم الجوال', 'اسم العميل', 'نوع السجل', 'المنتج أو الاشتراك', 'رقم الطلب', 'تاريخ الطلب', 'بداية الاشتراك', 'نهاية الاشتراك']);
-  sheet.addRow(['0551234567', 'عميل واحد', 'طلب', 'منتج أ', 'ORD-7', '2026-07-16', '', '']);
-  sheet.addRow(['+966551234567', 'عميل واحد', 'اشتراك', 'اشتراك سنوي', '', '', '2026-07-01', '2027-06-30']);
-  const buffer = await workbook.xlsx.writeBuffer();
+  const buffer = await workbookFromRows([{ name: 'العملاء', rows: [['رقم الجوال', 'اسم العميل', 'نوع السجل', 'المنتج أو الاشتراك', 'رقم الطلب', 'تاريخ الطلب', 'بداية الاشتراك', 'نهاية الاشتراك'], ['0551234567', 'عميل واحد', 'طلب', 'منتج أ', 'ORD-7', '2026-07-16', '', ''], ['+966551234567', 'عميل واحد', 'اشتراك', 'اشتراك سنوي', '', '', '2026-07-01', '2027-06-30']] }]);
   const calls = [];
   const database = {
     query: async (sql, params) => {
@@ -932,11 +925,7 @@ test('Excel audience import stores orders and subscription dates while merging d
 });
 
 test('Excel audience import rejects unclear or reversed subscription dates', async () => {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('العملاء');
-  sheet.addRow(['رقم الجوال', 'نوع السجل', 'بداية الاشتراك', 'نهاية الاشتراك']);
-  sheet.addRow(['0551234567', 'اشتراك', '2027-01-01', '2026-01-01']);
-  const buffer = await workbook.xlsx.writeBuffer();
+  const buffer = await workbookFromRows([{ name: 'العملاء', rows: [['رقم الجوال', 'نوع السجل', 'بداية الاشتراك', 'نهاية الاشتراك'], ['0551234567', 'اشتراك', '2027-01-01', '2026-01-01']] }]);
   const calls = [];
   const service = createCampaignService({ database: { query: async (...args) => { calls.push(args); return { rows: [] }; } }, getUserBot: async () => ({}) });
   const result = await service.importContacts('user-1', buffer, 'bad-dates.xlsx');
@@ -953,17 +942,15 @@ test('campaign contact template and database export expose order and subscriptio
     source: 'import', updated_at: '2026-07-16T00:00:00Z',
   }] }) };
   const service = createCampaignService({ database, getUserBot: async () => ({}) });
-  const template = new ExcelJS.Workbook();
-  await template.xlsx.load(await service.exportContactTemplate());
-  assert.deepEqual(template.getWorksheet('نموذج الاستهداف').getRow(1).values.slice(1), [
+  const template = await workbookSemantics(await service.exportContactTemplate());
+  assert.deepEqual(template.sheets[0].rows[0].cells.map(cell => cell.value), [
     'رقم الجوال', 'اسم العميل', 'نوع السجل', 'المنتج أو الاشتراك', 'رقم الطلب', 'تاريخ الطلب', 'بداية الاشتراك', 'نهاية الاشتراك',
   ]);
-  const exported = new ExcelJS.Workbook();
-  await exported.xlsx.load(await service.exportContacts('user-1'));
-  const row = exported.getWorksheet('قاعدة العملاء').getRow(2).values;
-  assert.equal(row[3], 'اشتراك');
-  assert.equal(row[7], '2026-07-01');
-  assert.equal(row[8], '2027-06-30');
+  const exported = await workbookSemantics(await service.exportContacts('user-1'));
+  const row = exported.sheets[0].rows[1].cells.map(cell => cell.value);
+  assert.equal(row[2], 'اشتراك');
+  assert.equal(row[6], '2026-07-01');
+  assert.equal(row[7], '2027-06-30');
 });
 
 test('campaign media validation checks file contents, not only the browser MIME type', () => {
