@@ -6,7 +6,7 @@ const { Worker } = require('bullmq');
 const db = require('../db/client');
 const { createRedisConnection } = require('../queues/redis');
 const { CAMPAIGN_QUEUE_NAME, enqueueCampaignRecipient } = require('../queues/campaign-queue');
-const { checkMessageQuota, decrementMessageQuota } = require('../services/billing/message-quota');
+const { checkMessageQuota } = require('../services/billing/message-quota');
 const { buildProductCatalog } = require('../services/products/product-knowledge');
 const { compileMerchantPolicy } = require('../policy/merchant-policy-compiler');
 const { createReplyAuditStore } = require('../services/audit/reply-audit-store');
@@ -35,6 +35,107 @@ function randomDelayMs(campaign) {
   const min = Math.max(30, Number(campaign.interval_min_seconds) || 30);
   const max = Math.max(min, Number(campaign.interval_max_seconds) || min);
   return (min + Math.floor(Math.random() * (max - min + 1))) * 1000;
+}
+
+async function decrementCampaignRecipientQuota({
+  database = db,
+  userId,
+  recipientId,
+} = {}) {
+  return database.transaction(async client => {
+    const recipientResult = await client.query(
+      `SELECT r.quota_decremented, b.messages_remaining
+       FROM campaign_recipients r
+       LEFT JOIN billing_accounts b ON b.user_id = r.user_id
+       WHERE r.id = $1 AND r.user_id = $2
+       FOR UPDATE OF r`,
+      [recipientId, userId],
+    );
+    const recipient = recipientResult.rows[0];
+    if (!recipient) return { success: false, reason: 'recipient_missing' };
+    if (recipient.quota_decremented) {
+      return {
+        success: true,
+        remaining: Number(recipient.messages_remaining) || 0,
+        alreadyDebited: true,
+      };
+    }
+
+    const debited = await client.query(
+      `UPDATE billing_accounts
+       SET messages_remaining = messages_remaining - 1,
+           messages_used = messages_used + 1,
+           updated_at = NOW()
+       WHERE user_id = $1
+         AND messages_remaining > 0
+         AND (
+           NOT expire_resets_quota
+           OR quota_expires_at IS NULL
+           OR quota_expires_at > NOW()
+         )
+       RETURNING messages_remaining`,
+      [userId],
+    );
+    if (!debited.rows[0]) return { success: false, reason: 'quota_unavailable' };
+
+    await client.query(
+      `UPDATE campaign_recipients SET quota_decremented = TRUE, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id`,
+      [recipientId],
+    );
+    return {
+      success: true,
+      remaining: Number(debited.rows[0].messages_remaining) || 0,
+      alreadyDebited: false,
+    };
+  });
+}
+
+async function fenceCampaignRecipientTransport({
+  database = db,
+  campaignId,
+  recipientId,
+} = {}) {
+  return database.transaction(async client => {
+    const result = await client.query(
+      `SELECT c.status AS campaign_status, c.approved_at, r.status AS recipient_status
+       FROM campaigns c
+       JOIN campaign_recipients r ON r.campaign_id = c.id
+       WHERE c.id = $1 AND r.id = $2
+       FOR UPDATE OF c, r`,
+      [campaignId, recipientId],
+    );
+    const current = result.rows[0];
+    if (!current) return { allowed: false, reason: 'missing' };
+    if (current.campaign_status === 'paused') {
+      await client.query(
+        `UPDATE campaign_recipients SET status = 'pending', updated_at = NOW()
+         WHERE id = $1 AND status = 'sending'
+         RETURNING id`,
+        [recipientId],
+      );
+      return { allowed: false, reason: 'paused' };
+    }
+    if (current.campaign_status === 'canceled') {
+      await client.query(
+        `UPDATE campaign_recipients SET status = 'canceled', updated_at = NOW()
+         WHERE id = $1 AND status IN ('pending','queued','sending')
+         RETURNING id`,
+        [recipientId],
+      );
+      return { allowed: false, reason: 'canceled' };
+    }
+    if (!current.approved_at
+        || !['approved', 'scheduled', 'sending'].includes(current.campaign_status)
+        || current.recipient_status !== 'sending') {
+      return {
+        allowed: false,
+        reason: String(current.recipient_status || current.campaign_status || 'not_sendable'),
+      };
+    }
+    return { allowed: true };
+  });
 }
 
 async function scheduleNextRecipient(campaignId, { database = db, delay = 0, campaignQueue } = {}) {
@@ -83,7 +184,12 @@ async function scheduleNextRecipient(campaignId, { database = db, delay = 0, cam
   }
 }
 
-async function recoverCampaignDeliveries({ database = db, campaignQueue, staleMs = CAMPAIGN_RECOVERY_STALE_MS } = {}) {
+async function recoverCampaignDeliveries({
+  database = db,
+  campaignQueue,
+  staleMs = CAMPAIGN_RECOVERY_STALE_MS,
+  now = Date.now,
+} = {}) {
   const queue = campaignQueue || require('../queues/campaign-queue').getCampaignQueue();
   const staleAfterMs = Math.max(120000, Number(staleMs) || CAMPAIGN_RECOVERY_STALE_MS);
   const summary = { staleSending: 0, missingJobs: 0, scheduled: 0 };
@@ -126,7 +232,7 @@ async function recoverCampaignDeliveries({ database = db, campaignQueue, staleMs
   );
   for (const campaign of activeCampaigns.rows) {
     const delay = campaign.status === 'scheduled' && campaign.scheduled_at
-      ? Math.max(0, new Date(campaign.scheduled_at).getTime() - Date.now())
+      ? Math.max(0, new Date(campaign.scheduled_at).getTime() - now())
       : 0;
     const selected = await scheduleNextRecipient(campaign.id, { database, delay, campaignQueue: queue });
     if (selected) summary.scheduled += 1;
@@ -482,6 +588,8 @@ async function processCampaignRecipient(job, {
     let cursor = Number(recipient.media_cursor) || 0;
     for (; cursor < mediaResult.rows.length; cursor += 1) {
       const prepared = await prepareCampaignMedia(bot, recipient.sender, mediaResult.rows[cursor]);
+      const fence = await fenceCampaignRecipientTransport({ database, campaignId, recipientId });
+      if (!fence.allowed) return { stopped: true, reason: fence.reason };
       const idempotencyKey = `campaign:${campaign.id}:${recipient.id}:media:${cursor}`;
       const request = campaignGatewayRequest({
         campaign,
@@ -506,6 +614,8 @@ async function processCampaignRecipient(job, {
     }
     if (!recipient.text_sent) {
       if (String(campaign.message_text || '').trim()) {
+        const fence = await fenceCampaignRecipientTransport({ database, campaignId, recipientId });
+        if (!fence.allowed) return { stopped: true, reason: fence.reason };
         const idempotencyKey = `campaign:${campaign.id}:${recipient.id}:text`;
         const request = campaignGatewayRequest({
           campaign,
@@ -531,12 +641,12 @@ async function processCampaignRecipient(job, {
     }
 
     if (!recipient.quota_decremented) {
-      const decremented = await decrementMessageQuota(campaign.user_id, { database });
+      const decremented = await decrementCampaignRecipientQuota({
+        database,
+        userId: campaign.user_id,
+        recipientId,
+      });
       if (!decremented.success) throw new Error('Quota changed before campaign completion');
-      await database.query(
-        `UPDATE campaign_recipients SET quota_decremented = TRUE, updated_at = NOW() WHERE id = $1`,
-        [recipientId],
-      );
     }
     await recordOutbound(database, campaign, recipient, ids);
     await database.transaction(async client => {
@@ -596,4 +706,6 @@ module.exports = {
   sendMedia,
   sendCampaignText,
   scheduleNextRecipient,
+  decrementCampaignRecipientQuota,
+  fenceCampaignRecipientTransport,
 };
