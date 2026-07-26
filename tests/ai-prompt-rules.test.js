@@ -57,6 +57,7 @@ test('long custom instructions still include dashboard reply controls', () => {
     maxResponseLength: 120,
     replyStyle: {
       employeeName: 'سارة',
+      employeeNameEnabled: true,
       tone: 'رسمي ومحترف',
       languageStyle: 'standard',
       useDialect: false,

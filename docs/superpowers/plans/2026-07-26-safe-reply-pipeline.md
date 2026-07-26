@@ -94,12 +94,12 @@
 - Produces `effectiveAvoidList(config)`.
 - Produces `scanForbiddenContent(reply, config)`.
 
-- [ ] Restore failing tests for `avoidWords`, `avoidPhrases`, punctuation variants, Arabic/English identity disclosure, and empty-after-filter behavior.
-- [ ] Add failing tests proving merchant lists merge with defaults and employee names are absent unless `employeeNameEnabled`.
-- [ ] Verify RED.
-- [ ] Implement merged normalized filtering and optional employee identity.
-- [ ] Re-run prompt, post-process, style, and escalation privacy tests.
-- [ ] Commit the isolated task.
+- [x] Restore failing tests for `avoidWords`, `avoidPhrases`, punctuation variants, Arabic/English identity disclosure, and empty-after-filter behavior.
+- [x] Add failing tests proving merchant lists merge with defaults and employee names are absent unless `employeeNameEnabled`.
+- [x] Verify RED.
+- [x] Implement merged normalized filtering and optional employee identity.
+- [x] Re-run prompt, post-process, style, and escalation privacy tests.
+- [x] Commit the isolated task.
 
 ### Task 5: Enforced reply length and non-silent duplicate handling
 
