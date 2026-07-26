@@ -1070,6 +1070,38 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_search_user_phone
     ON whatsapp_history_search_index (user_id, normalized_phone)`,
+
+  // Product truth is versioned independently from the mutable bot config so
+  // every generated reply can be tied to the exact catalog it used.
+  `CREATE TABLE IF NOT EXISTS product_catalog_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    version BIGINT NOT NULL CHECK (version > 0),
+    products JSONB NOT NULL DEFAULT '[]'::jsonb,
+    previous_products JSONB NOT NULL DEFAULT '[]'::jsonb,
+    changed_by TEXT NOT NULL,
+    change_reason TEXT,
+    source TEXT NOT NULL DEFAULT 'unknown',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, version)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_product_catalog_versions_user_created
+    ON product_catalog_versions (user_id, created_at DESC)`,
+
+  `CREATE OR REPLACE FUNCTION prevent_product_catalog_version_mutation()
+   RETURNS trigger AS $$
+   BEGIN
+     RAISE EXCEPTION 'product catalog versions are immutable';
+   END;
+   $$ LANGUAGE plpgsql`,
+
+  `DROP TRIGGER IF EXISTS product_catalog_versions_immutable
+    ON product_catalog_versions`,
+
+  `CREATE TRIGGER product_catalog_versions_immutable
+    BEFORE UPDATE OR DELETE ON product_catalog_versions
+    FOR EACH ROW EXECUTE FUNCTION prevent_product_catalog_version_mutation()`,
 ];
 
 async function migrate() {

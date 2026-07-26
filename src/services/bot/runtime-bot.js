@@ -25,6 +25,7 @@ const {
   buildPersistSessionStateQuery,
   buildRuntimeAuthMetadata,
 } = require('./session-state-persistence');
+const { saveCatalogVersion } = require('../products/catalog-version-repository');
 
 function isDirectoryUsable(dir) {
   try {
@@ -334,6 +335,8 @@ class RuntimeBot {
     });
     this._loadAdminKeys = deps.loadAdminKeys || getAllAdminApiKeys;
     this._saveBotConfig = deps.saveBotConfig || null;
+    this._saveCatalogVersion = deps.saveCatalogVersion
+      || (this._saveBotConfig ? null : saveCatalogVersion);
     const doLoadSessionState = deps.loadSessionState || (() => this.loadSessionState());
 
     const customer = await loadBotConfig(this.userId);
@@ -555,11 +558,26 @@ class RuntimeBot {
     if (typeof this._autoRecoverTimer.unref === 'function') this._autoRecoverTimer.unref();
   }
 
-  async saveConfig() {
+  async saveConfig({
+    actor = `merchant:${this.userId}`,
+    reason = 'bot configuration update',
+    source = 'dashboard',
+  } = {}) {
+    if (this._saveCatalogVersion) {
+      const catalogVersion = await this._saveCatalogVersion({
+        database: this.db,
+        scope: { tenantId: this.userId },
+        products: Array.isArray(this.config.products) ? this.config.products : [],
+        actor,
+        reason,
+        source,
+      });
+      this.config.productCatalogVersion = catalogVersion.version;
+    }
     if (this._saveBotConfig) {
       await this._saveBotConfig(this.userId, this.config);
     } else {
-      await db.query(
+      await this.db.query(
         `INSERT INTO bot_configs (user_id, config, source)
          VALUES ($1, $2::jsonb, 'src-server')
          ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, source = EXCLUDED.source`,

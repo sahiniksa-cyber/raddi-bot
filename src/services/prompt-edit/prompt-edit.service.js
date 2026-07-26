@@ -1,5 +1,7 @@
 'use strict';
 
+const { saveCatalogVersion } = require('../products/catalog-version-repository');
+
 const { detectEditCommand, isYes, isNo, normalizeArabic } = require('../../../lib/prompt-edit-keywords');
 const { normalizeEscalationTarget } = require('../../workers/escalation-routing');
 const { applyProductOp, applyInstantReplyOp, applyDoNotReplyOp } = require('../../../lib/config-edit-appliers');
@@ -119,14 +121,40 @@ async function applyInstructions(database, userId, newInstructions) {
 
 // Writes a single config section (botInstructions / products / autoReplyKeywords
 // / doNotReplyList) via jsonb_set. `field` comes from a fixed whitelist.
-async function applySectionValue(database, userId, field, value) {
-  await database.query(
-    `UPDATE bot_configs
-        SET config = jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
-            updated_at = NOW()
-      WHERE user_id = $1`,
-    [userId, `{${field}}`, JSON.stringify(value)],
-  );
+async function applySectionValue(database, userId, field, value, metadata = {}) {
+  let catalogVersion = null;
+  if (field === 'products' && typeof database.transaction === 'function') {
+    catalogVersion = await saveCatalogVersion({
+      database,
+      scope: { tenantId: userId },
+      products: Array.isArray(value) ? value : [],
+      actor: metadata.actor || `merchant:${userId}`,
+      reason: metadata.reason || 'products updated from prompt edit',
+      source: metadata.source || 'prompt-edit',
+    });
+  }
+  if (catalogVersion) {
+    await database.query(
+      `UPDATE bot_configs
+          SET config = jsonb_set(
+                jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
+                '{productCatalogVersion}',
+                $4::jsonb,
+                true
+              ),
+              updated_at = NOW()
+        WHERE user_id = $1`,
+      [userId, `{${field}}`, JSON.stringify(value), JSON.stringify(catalogVersion.version)],
+    );
+  } else {
+    await database.query(
+      `UPDATE bot_configs
+          SET config = jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
+              updated_at = NOW()
+        WHERE user_id = $1`,
+      [userId, `{${field}}`, JSON.stringify(value)],
+    );
+  }
 }
 
 async function send(enqueue, userId, groupJid, reply) {
@@ -160,7 +188,17 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     if (target === 'prompt') {
       await applyInstructions(database, userId, pending.proposed_instructions);
     } else {
-      await applySectionValue(database, userId, TARGET_FIELD[target], pending.proposed_value);
+      await applySectionValue(
+        database,
+        userId,
+        TARGET_FIELD[target],
+        pending.proposed_value,
+        {
+          actor: `merchant-group:${groupJid}`,
+          reason: `confirmed ${target} edit ${pending.id}`,
+          source: 'prompt-edit',
+        },
+      );
     }
     await markStatus(database, pending.id, 'applied');
     await send(enqueue, userId, groupJid, APPLIED_MSG[target] || '✅ تم الحفظ.');

@@ -90,7 +90,7 @@ function createConfigController({ getUserBot, loadPersistedConfig } = {}) {
       res.json(stripApiKeysFromConfig(bot.config));
     },
 
-    saveConfig(req, res) {
+    async saveConfig(req, res) {
       try {
         const bot = getUserBot(req.session.userId);
         const incoming = req.body || {};
@@ -98,7 +98,11 @@ function createConfigController({ getUserBot, loadPersistedConfig } = {}) {
         const merged = mergeConfigForSave({ existing: bot.config, incoming, isAdmin });
 
         bot.config = merged;
-        bot.saveConfig();
+        await bot.saveConfig({
+          actor: `merchant:${req.session.userId}`,
+          reason: 'dashboard configuration update',
+          source: 'dashboard',
+        });
         res.json({ success: true });
       } catch (err) {
         res.status(500).json({ success: false, message: `save failed: ${err.message}` });
