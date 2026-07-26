@@ -1,34 +1,5 @@
-[phases.setup]
-nixPkgs = [
-  "chromium",
-  "nss",
-  "freetype",
-  "harfbuzz",
-  "ca-certificates",
-  "glib",
-  "dbus",
-  "at-spi2-atk",
-  "cups",
-  "libdrm",
-  "libxkbcommon",
-  "pango",
-  "cairo",
-  "expat",
-  "fontconfig",
-  "alsa-lib",
-  "xorg.libX11",
-  "xorg.libXcomposite",
-  "xorg.libXdamage",
-  "xorg.libXext",
-  "xorg.libXfixes",
-  "xorg.libXrandr",
-  "mesa"
-]
-
 [phases.build]
 cmds = ["npm install --production"]
 
 [variables]
-PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
-PUPPETEER_EXECUTABLE_PATH = "/nix/var/nix/profiles/default/bin/chromium"
 NODE_ENV = "production"

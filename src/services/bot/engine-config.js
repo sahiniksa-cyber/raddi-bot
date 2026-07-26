@@ -1,6 +1,6 @@
 'use strict';
 
-const SUPPORTED_ENGINES = new Set(['baileys', 'whatsapp-web']);
+const SUPPORTED_ENGINES = new Set(['baileys']);
 
 function resolveWhatsappEngine(env = process.env) {
   const raw = String(env.WA_ENGINE || '').trim().toLowerCase().replace(/_/g, '-');

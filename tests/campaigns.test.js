@@ -474,6 +474,28 @@ test('Baileys sends campaign PDF as a named WhatsApp document', async () => {
   assert.equal('video' in sent[0].media, false);
 });
 
+test('campaign media keeps the Baileys buffer payload when a retired engine value remains', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jwab-campaign-baileys-only-'));
+  const storagePath = path.join(directory, 'offer.png');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+  fs.writeFileSync(storagePath, bytes);
+  try {
+    const prepared = await require('../src/workers/campaign-worker').prepareCampaignMedia({
+      whatsappEngine: 'whatsapp-web',
+      client: {},
+    }, '966551234567@s.whatsapp.net', {
+      kind: 'image',
+      original_name: 'offer.png',
+      mime_type: 'image/png',
+      storage_path: storagePath,
+    });
+    assert.equal(prepared.target, '966551234567@s.whatsapp.net');
+    assert.deepEqual(prepared.media, { image: bytes, mimetype: 'image/png' });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('campaign start refuses immediately when WhatsApp is not connected', async () => {
   const campaign = {
     id: 'campaign-1', user_id: 'user-1', status: 'approved',

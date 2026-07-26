@@ -341,7 +341,7 @@ class MessageIngestService {
     return !contentFromWhatsappMessage(msg);
   }
 
-  async ingestWhatsappMessage({ userId, msg, source = 'whatsapp-web.js' }) {
+  async ingestWhatsappMessage({ userId, msg, source = 'baileys' }) {
     if (!userId) throw new Error('userId is required');
     if (!msg || msg.from === 'status@broadcast') {
       return { accepted: false, statusCode: 200, reason: 'ignored' };
@@ -674,7 +674,7 @@ class MessageIngestService {
     }
   }
 
-  async ingestOutboundHumanMessage({ userId, msg, source = 'whatsapp-web.js' }) {
+  async ingestOutboundHumanMessage({ userId, msg, source = 'baileys' }) {
     if (!this.db.isConfigured()) {
       throw new Error('DATABASE_URL is required for message ingest');
     }

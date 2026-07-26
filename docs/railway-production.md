@@ -6,7 +6,7 @@
 - `REDIS_URL`
 - `SESSION_SECRET`
 - `NODE_ENV=production`
-- `WA_ENGINE=baileys`
+- `WA_ENGINE=baileys` (the only supported WhatsApp engine)
 
 ## Start Command
 

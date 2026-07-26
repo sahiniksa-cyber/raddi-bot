@@ -10,11 +10,11 @@ test('defaults to baileys when WA_ENGINE is empty', () => {
   assert.equal(resolveWhatsappEngine({ WA_ENGINE: '' }), 'baileys');
 });
 
-test('accepts explicit whatsapp-web as fallback engine', () => {
-  assert.equal(resolveWhatsappEngine({ WA_ENGINE: 'whatsapp-web' }), 'whatsapp-web');
+test('rejects the retired whatsapp-web engine setting', () => {
+  assert.equal(resolveWhatsappEngine({ WA_ENGINE: 'whatsapp-web' }), 'baileys');
 });
 
-test('normalizes aliases to stable engine names', () => {
+test('normalizes Baileys aliases but rejects retired engine aliases', () => {
   assert.equal(resolveWhatsappEngine({ WA_ENGINE: 'BAILEYS' }), 'baileys');
-  assert.equal(resolveWhatsappEngine({ WA_ENGINE: 'whatsapp_web' }), 'whatsapp-web');
+  assert.equal(resolveWhatsappEngine({ WA_ENGINE: 'whatsapp_web' }), 'baileys');
 });

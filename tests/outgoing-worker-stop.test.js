@@ -46,12 +46,12 @@ test('waitForConnectedBot sends as soon as a Baileys bot settles instead of wait
   }
 });
 
-test('resolveOutgoingSettleMs is short for Baileys and long for whatsapp-web by default', () => {
+test('resolveOutgoingSettleMs uses the Baileys default for every runtime bot', () => {
   const prev = process.env.OUTGOING_CONNECTED_SETTLE_MS;
   delete process.env.OUTGOING_CONNECTED_SETTLE_MS;
   try {
     assert.equal(resolveOutgoingSettleMs({ appState: { whatsappEngine: 'baileys' } }), 3000);
-    assert.equal(resolveOutgoingSettleMs({ appState: { whatsappEngine: 'whatsapp-web' } }), 20000);
+    assert.equal(resolveOutgoingSettleMs({ appState: { whatsappEngine: 'whatsapp-web' } }), 3000);
     process.env.OUTGOING_CONNECTED_SETTLE_MS = '1234';
     assert.equal(resolveOutgoingSettleMs({ appState: { whatsappEngine: 'baileys' } }), 1234);
   } finally {

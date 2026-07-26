@@ -140,31 +140,20 @@ async function prepareCampaignMedia(bot, sender, media) {
     media.original_name,
     media.kind === 'document' ? 'document.pdf' : 'media',
   );
-  const target = bot.whatsappEngine === 'whatsapp-web'
-    ? String(sender).replace(/@s\.whatsapp\.net$/i, '@c.us')
-    : sender;
-  if (bot.whatsappEngine === 'baileys') {
-    const content = media.kind === 'image'
-      ? { image: buffer, mimetype: media.mime_type }
-      : media.kind === 'video'
-        ? { video: buffer, mimetype: media.mime_type }
-        : {
-            document: buffer,
-            mimetype: media.mime_type,
-            fileName: originalName,
-          };
-    return { target, media: content };
-  }
-  const { MessageMedia } = require('whatsapp-web.js');
-  const encoded = buffer.toString('base64');
-  const payload = new MessageMedia(media.mime_type, encoded, originalName);
-  return { target, media: payload };
+  const content = media.kind === 'image'
+    ? { image: buffer, mimetype: media.mime_type }
+    : media.kind === 'video'
+      ? { video: buffer, mimetype: media.mime_type }
+      : {
+          document: buffer,
+          mimetype: media.mime_type,
+          fileName: originalName,
+        };
+  return { target: sender, media: content };
 }
 
-function campaignTarget(bot, sender) {
-  return bot.whatsappEngine === 'whatsapp-web'
-    ? String(sender).replace(/@s\.whatsapp\.net$/i, '@c.us')
-    : sender;
+function campaignTarget(_bot, sender) {
+  return sender;
 }
 
 async function sendMedia(gateway, request, media) {

@@ -37,7 +37,7 @@ test('cleanupRuntimeStorage removes legacy whatsapp-web session data when using 
   }
 });
 
-test('cleanupRuntimeStorage keeps whatsapp-web session data when that engine is active', () => {
+test('cleanupRuntimeStorage removes retired session data when an old engine value remains', () => {
   const previousEngine = process.env.WA_ENGINE;
   process.env.WA_ENGINE = 'whatsapp-web';
 
@@ -50,7 +50,7 @@ test('cleanupRuntimeStorage keeps whatsapp-web session data when that engine is 
   try {
     cleanupRuntimeStorage(root);
 
-    assert.equal(fs.existsSync(path.join(userDir, 'session')), true);
+    assert.equal(fs.existsSync(path.join(userDir, 'session')), false);
   } finally {
     if (previousEngine === undefined) delete process.env.WA_ENGINE;
     else process.env.WA_ENGINE = previousEngine;

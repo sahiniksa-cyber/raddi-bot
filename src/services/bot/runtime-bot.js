@@ -12,7 +12,6 @@ const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../../lib/constants');
 const { mergeApiKeys, resolveEffectiveApiKeys } = require('../config/api-keys-resolver');
 const { getAllAdminApiKeys } = require('../admin/admin-api-keys');
 const { getCustomerApiKeysFor } = require('../admin/customer-api-keys');
-const { EnterpriseWhatsAppConnectionManager } = require('../whatsapp/connection-manager');
 const { BaileysConnectionManager } = require('../whatsapp/baileys-connection-manager');
 const {
   WhatsAppHistoryImportService,
@@ -25,50 +24,6 @@ const {
   buildPersistSessionStateQuery,
   buildRuntimeAuthMetadata,
 } = require('./session-state-persistence');
-
-function isDirectoryUsable(dir) {
-  try {
-    return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
-  } catch (_) {
-    return false;
-  }
-}
-
-function copyDirectory(source, target) {
-  fs.rmSync(target, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.cpSync(source, target, { recursive: true, force: true });
-}
-
-function restoreWhatsappSession({ source, target, logger }) {
-  if (!isDirectoryUsable(source)) return false;
-  try {
-    copyDirectory(source, target);
-    logger?.info?.('boot', `restored WhatsApp session into runtime profile: ${target}`);
-    return true;
-  } catch (err) {
-    logger?.warn?.('boot', `failed to restore persisted WhatsApp session: ${err.message}`);
-    return false;
-  }
-}
-
-function backupWhatsappSession({ source, target, logger, rootDir, userId }) {
-  if (!isDirectoryUsable(source)) return false;
-  try {
-    copyDirectory(source, target);
-    logger?.info?.('auth', `persisted WhatsApp session backup: ${target}`);
-    return true;
-  } catch (err) {
-    if (err.code === 'ENOSPC') {
-      cleanupRuntimeStorage(rootDir, userId);
-      copyDirectory(source, target);
-      logger?.info?.('auth', `persisted WhatsApp session backup after storage cleanup: ${target}`);
-      return true;
-    }
-    logger?.warn?.('auth', `failed to persist WhatsApp session backup: ${err.message}`);
-    return false;
-  }
-}
 
 class RuntimeBot {
   constructor(userId, { dataDir = process.env.DATA_DIR || process.cwd(), logger = null, database = db } = {}) {
@@ -92,7 +47,6 @@ class RuntimeBot {
     this.sessionDesiredState = 'stopped';
     this._autoRecoverTimer = null;
     this._leaseRenewTimer = null;
-    this._sessionBackupTimer = null;
     this._historyImportIdleTimer = null;
     this._historyImportMaxTimer = null;
     this._historyImportFinishing = null;
@@ -120,16 +74,8 @@ class RuntimeBot {
     });
 
     const engine = resolveWhatsappEngine(process.env);
-    const ConnectionManager = engine === 'baileys'
-      ? BaileysConnectionManager
-      : EnterpriseWhatsAppConnectionManager;
     this.whatsappEngine = engine;
-    this.persistentSessionPath = engine === 'whatsapp-web'
-      ? path.join(this.dataDir, 'session')
-      : null;
-    const connectionDataDir = engine === 'whatsapp-web'
-      ? path.join(process.env.WA_RUNTIME_SESSION_DIR || path.join(os.tmpdir(), 'jwab-wa-sessions'), userId)
-      : this.dataDir;
+    const connectionDataDir = this.dataDir;
     try {
       fs.mkdirSync(connectionDataDir, { recursive: true });
     } catch (err) {
@@ -141,23 +87,14 @@ class RuntimeBot {
       }
     }
 
-    if (engine === 'whatsapp-web') {
-      this.runtimeSessionPath = path.join(connectionDataDir, 'session');
-      restoreWhatsappSession({
-        source: this.persistentSessionPath,
-        target: this.runtimeSessionPath,
-        logger: this.logger,
-      });
-    }
-
-    this.connection = new ConnectionManager({
+    this.connection = new BaileysConnectionManager({
       userId,
       dataDir: connectionDataDir,
       logger: this.logger,
       database: this.db,
       historyImportService: this.historyImport,
     });
-    this.sessionStoragePath = this.persistentSessionPath || this.connection.sessionPath;
+    this.sessionStoragePath = this.connection.sessionPath;
 
     this.connection.on('message_ingested', () => {
       this.totalChatsHandled++;
@@ -166,18 +103,6 @@ class RuntimeBot {
       this.persistSessionState({ state }).catch((err) => {
         this.logger.warn('connection', `failed to persist WhatsApp state: ${err.message}`);
       });
-    });
-    this.connection.on('ready', () => {
-      if (this.whatsappEngine === 'whatsapp-web') this.scheduleWhatsappSessionBackup('ready');
-    });
-    this.connection.on('auth_cleared', ({ reason } = {}) => {
-      if (this.whatsappEngine !== 'whatsapp-web') return;
-      try {
-        fs.rmSync(this.persistentSessionPath, { recursive: true, force: true });
-        this.logger.warn('auth', `removed persisted WhatsApp session backup: ${reason || 'auth cleared'}`);
-      } catch (err) {
-        this.logger.warn('auth', `failed to remove persisted WhatsApp backup: ${err.message}`);
-      }
     });
     this.connection.on('logged_out', () => {
       // Device was unlinked — fire the instant owner alert (best-effort,
@@ -274,8 +199,6 @@ class RuntimeBot {
   // Live view of the underlying Baileys socket so the outgoing worker's
   // isSocketOpen() guard can inspect ws.readyState. Reading at call time
   // (not capturing) means it never pins a dead socket across reconnects.
-  // whatsapp-web.js engine has no sock — getter returns undefined and the
-  // guard falls through to "open", same as before.
   get sock() {
     return this.connection?.sock;
   }
@@ -367,7 +290,7 @@ class RuntimeBot {
 
     const activeImport = activeHistoryImport.rows[0] || null;
     const activeImportId = activeImport?.id || null;
-    if (activeImportId && this.whatsappEngine === 'baileys') {
+    if (activeImportId) {
       this.createHistoryImportConnection(activeImportId);
       this.scheduleHistoryImportTimers(activeImportId, activeImport);
     }
@@ -597,7 +520,6 @@ class RuntimeBot {
     this.clearHistoryImportTimers();
     clearTimeout(this._autoRecoverTimer);
     this._autoRecoverTimer = null;
-    this.stopWhatsappSessionBackup();
     if (activeHistoryImportId) {
       await this._historyImportConnection.closeHistoryImportDevice(activeHistoryImportId);
       this._historyImportConnection = null;
@@ -612,7 +534,6 @@ class RuntimeBot {
 
   async restartBot() {
     this.sessionDesiredState = 'running';
-    this.stopWhatsappSessionBackup();
     await this.connection.stop();
     if (!(await this.acquireConnectionLease('restart', { force: true }))) return false;
     await this.persistSessionState({ desiredState: 'running', state: { ...this.connection.state(), status: 'restarting' } });
@@ -678,12 +599,6 @@ class RuntimeBot {
   }
 
   async startHistoryImport(importId) {
-    if (this.whatsappEngine !== 'baileys') {
-      const error = new Error('WhatsApp history import requires the Baileys connection');
-      error.statusCode = 400;
-      error.code = 'HISTORY_IMPORT_ENGINE_UNSUPPORTED';
-      throw error;
-    }
 
     const historyConnection = this.createHistoryImportConnection(importId);
     try {
@@ -728,7 +643,6 @@ class RuntimeBot {
     const activeHistoryImportId = this._historyImportConnection?._historyImport?.importId || null;
     this.sessionDesiredState = 'stopped';
     this.clearHistoryImportTimers();
-    this.stopWhatsappSessionBackup();
     if (activeHistoryImportId) {
       await this._historyImportConnection.closeHistoryImportDevice(activeHistoryImportId);
       this._historyImportConnection = null;
@@ -738,8 +652,6 @@ class RuntimeBot {
       await this.historyImport.failImport(activeHistoryImportId, 'WhatsApp session cleared during import').catch(() => {});
     }
     try { await this.connection.clearAuthCache?.('manual clear-session'); } catch (_) {}
-    try { fs.rmSync(this.persistentSessionPath, { recursive: true, force: true }); } catch (_) {}
-    try { fs.rmSync(this.runtimeSessionPath, { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, 'session'), { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, 'baileys-session'), { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(path.join(this.dataDir, '.waweb-cache'), { recursive: true, force: true }); } catch (_) {}
@@ -796,45 +708,17 @@ class RuntimeBot {
     }
   }
 
-  scheduleWhatsappSessionBackup(reason = 'connected') {
-    this.stopWhatsappSessionBackup();
-    const delay = parseInt(process.env.WA_SESSION_BACKUP_DELAY_MS || '30000', 10);
-    this._sessionBackupTimer = setTimeout(() => {
-      this._sessionBackupTimer = null;
-      if (this.connection.status !== 'connected' || !this.connection.ready) return;
-      backupWhatsappSession({
-        source: this.connection.sessionPath,
-        target: this.persistentSessionPath,
-        logger: this.logger,
-        rootDir: this.rootDir,
-        userId: this.userId,
-      });
-      const interval = parseInt(process.env.WA_SESSION_BACKUP_INTERVAL_MS || '120000', 10);
-      this._sessionBackupTimer = setTimeout(() => this.scheduleWhatsappSessionBackup('interval'), interval);
-      if (typeof this._sessionBackupTimer.unref === 'function') this._sessionBackupTimer.unref();
-    }, delay);
-    if (typeof this._sessionBackupTimer.unref === 'function') this._sessionBackupTimer.unref();
-    this.logger.info('auth', `scheduled WhatsApp session backup after ${Math.round(delay / 1000)}s (${reason})`);
-  }
-
-  stopWhatsappSessionBackup() {
-    clearTimeout(this._sessionBackupTimer);
-    this._sessionBackupTimer = null;
-  }
 }
 
 function cleanupRuntimeStorage(rootDir, currentUserId = '') {
   const usersRoot = path.join(rootDir, 'data');
   const removeTargets = [];
-  const engine = resolveWhatsappEngine(process.env);
-  const removeLegacyWhatsappWebData = engine !== 'whatsapp-web';
-
   const scanUserDir = (userDir) => {
     removeTargets.push(path.join(userDir, 'baileys-session'));
     removeTargets.push(path.join(userDir, '.waweb-cache'));
     removeTargets.push(path.join(userDir, '.wwebjs_cache'));
     removeTargets.push(path.join(userDir, '.wwebjs_auth'));
-    if (removeLegacyWhatsappWebData) removeTargets.push(path.join(userDir, 'session'));
+    removeTargets.push(path.join(userDir, 'session'));
   };
 
   try {

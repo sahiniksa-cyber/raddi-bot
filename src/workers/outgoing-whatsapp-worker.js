@@ -690,9 +690,8 @@ async function processOutgoingWhatsapp(job, {
 
 function isSocketOpen(bot) {
   // Baileys: bot.sock.ws is a WebSocket with readyState (1=OPEN).
-  // whatsapp-web.js: no .sock — accept as open since its own readiness check ran already.
   const sock = bot?.sock;
-  if (!sock) return true;
+  if (!sock) return false;
   const ws = sock.ws;
   if (!ws) return true;
   if (typeof ws.readyState !== 'number') return true;
@@ -1107,9 +1106,8 @@ function resolveOutgoingSettleMs(bot) {
   const explicit = process.env.OUTGOING_CONNECTED_SETTLE_MS;
   if (explicit != null && String(explicit).trim() !== '') return parseInt(explicit, 10);
   // Baileys is genuinely connected the moment the socket opens, so a short settle is
-  // enough to ride out the post-pairing restart. whatsapp-web.js fires "ready" before the
-  // page is fully usable, so it needs a longer settle window.
-  return bot?.appState?.whatsappEngine === 'baileys' ? 3000 : 20000;
+  // enough to ride out the post-pairing restart.
+  return 3000;
 }
 
 async function waitForConnectedBot(bot, { reason, timeoutMs }) {
