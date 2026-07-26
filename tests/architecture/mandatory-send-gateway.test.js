@@ -92,6 +92,17 @@ function readQuotedProperty(source, start) {
   return { value, end: source.length };
 }
 
+function readTemplateLiteral(source, start) {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1;
+    } else if (source[index] === '`') {
+      return index + 1;
+    }
+  }
+  return source.length;
+}
+
 function topLevelObjectProperties(object) {
   const properties = new Set();
   let depth = 0;
@@ -108,6 +119,16 @@ function topLevelObjectProperties(object) {
       index += 1;
       continue;
     }
+    if (character === '`') {
+      index = readTemplateLiteral(object, index) - 1;
+      continue;
+    }
+    if (character === '\'' || character === '"') {
+      const quoted = readQuotedProperty(object, index);
+      if (depth === 1 && /^\s*:/.test(object.slice(quoted.end))) properties.add(quoted.value);
+      index = quoted.end - 1;
+      continue;
+    }
     if (character === '{') {
       depth += 1;
       continue;
@@ -120,9 +141,7 @@ function topLevelObjectProperties(object) {
 
     let key = null;
     let keyEnd = index;
-    if (character === '\'' || character === '"') {
-      ({ value: key, end: keyEnd } = readQuotedProperty(object, index));
-    } else if (/[A-Za-z_$]/.test(character)) {
+    if (/[A-Za-z_$]/.test(character)) {
       const keyMatch = object.slice(index).match(/^[A-Za-z_$][\w$]*/);
       key = keyMatch[0];
       keyEnd = index + key.length;
@@ -163,9 +182,12 @@ function preSendReviewAuthorizationUses() {
 function isPreSendReviewAuthorizationUse(match) {
   const before = match.rawText.slice(0, match.column);
   const after = match.rawText.slice(match.column + 'preSendReviewRequired'.length);
+  const afterDecisionOperand = after
+    .replace(/^\s*(?:(?:={2,3}|!={1,2})\s*(?:true|false)?\s*)?/, '')
+    .replace(/^\)+\s*/, '');
   const inControlCondition = /\b(?:if|while|for)\s*\([^{};]*$/.test(before) && /^[^{};]*\)/.test(after);
-  const ternaryDecision = /^\s*(?:={2,3}|!={1,2})?\s*(?:true|false)?\s*\?/.test(after);
-  const logicalDecision = /^\s*(?:(?:={2,3}|!={1,2})\s*(?:true|false)\s*)?(?:&&|\|\|)/.test(after)
+  const ternaryDecision = /^\?/.test(afterDecisionOperand);
+  const logicalDecision = /^(?:&&|\|\|)/.test(afterDecisionOperand)
     || /(?:&&|\|\|)\s*$/.test(before);
   return inControlCondition || ternaryDecision || logicalDecision;
 }
@@ -209,6 +231,21 @@ test('gateway wiring binds the imported gateway and puts every required field in
       /* sendClass: policyVersion: idempotencyKey: tenantScope: */
     }`,
   ]), false);
+  assert.equal(hasCompleteGatewayRequest([
+    [
+      '{',
+      "  note: `sendClass: policyVersion: idempotencyKey: tenantScope: ${{ nested: { tenantScope: 'shadow' } }}`,",
+      '}',
+    ].join('\n'),
+  ]), false);
+  assert.equal(hasCompleteGatewayRequest([
+    [
+      '{',
+      "  note: `ignored ${{ nested: { sendClass: 'shadow' } }}`,",
+      "  sendClass: 'reply', policyVersion: 'v1', idempotencyKey: 'id-1', tenantScope: { userId },",
+      '}',
+    ].join('\n'),
+  ]), true);
 });
 
 test('authorization-switch scan catches decision uses while allowing inert compatibility reads', () => {
@@ -218,8 +255,11 @@ test('authorization-switch scan catches decision uses while allowing inert compa
     'if (Boolean(payload.preSendReviewRequired)) allow();',
     'if (!!payload.preSendReviewRequired) allow();',
     'const reply = payload.preSendReviewRequired ? approved : held;',
+    '(payload.preSendReviewRequired) ? approved : held;',
     'payload.preSendReviewRequired && dispatch();',
+    '((payload.preSendReviewRequired)) && dispatch();',
     'payload.preSendReviewRequired || hold();',
+    '(((payload.preSendReviewRequired))) || hold();',
     'if (payload.preSendReviewRequired === true) allow();',
   ];
   for (const decision of decisions) {
@@ -228,7 +268,9 @@ test('authorization-switch scan catches decision uses while allowing inert compa
   const inertCompatibility = `
     const { preSendReviewRequired } = payload;
     const legacyValue = payload.preSendReviewRequired;
+    const groupedLegacyValue = (payload.preSendReviewRequired);
     logger.info({ preSendReviewRequired: payload.preSendReviewRequired });
+    logger.info((payload.preSendReviewRequired));
   `;
   assert.equal(authorizationUsesInSource(inertCompatibility).length, 0);
 });
