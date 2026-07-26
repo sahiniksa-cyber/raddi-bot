@@ -39,9 +39,19 @@ function sourceFiles() {
 }
 
 function matchingLines(source, expression) {
-  return source.split(/\r?\n/).flatMap((line, index) => (
-    expression.test(line) ? [{ line: index + 1, text: line.trim() }] : []
-  ));
+  const flags = expression.flags.includes('g') ? expression.flags : `${expression.flags}g`;
+  const matcher = new RegExp(expression.source, flags);
+
+  return source.split(/\r?\n/).flatMap((line, index) => {
+    const matches = [];
+    let match;
+    matcher.lastIndex = 0;
+    while ((match = matcher.exec(line)) !== null) {
+      matches.push({ line: index + 1, column: match.index, rawText: line, text: line.trim() });
+      if (match[0] === '') matcher.lastIndex += 1;
+    }
+    return matches;
+  });
 }
 
 function findOccurrences(expression, { allow = () => false, allowOccurrence = () => false } = {}) {
@@ -68,6 +78,7 @@ function sourceExists(relativePath) {
 module.exports = {
   findOccurrences,
   formatOccurrences,
+  matchingLines,
   readSource,
   sourceExists,
 };

@@ -5,7 +5,12 @@ const assert = require('node:assert/strict');
 const {
   findOccurrences,
   formatOccurrences,
+  matchingLines,
 } = require('../helpers/source-architecture');
+
+test('source scanner counts every matching token on one line', () => {
+  assert.equal(matchingLines('botInstructions + botInstructions', /\bbotInstructions\b/).length, 2);
+});
 
 test('runtime code has no executable botInstructions policy source outside compatibility and migration boundaries', () => {
   const violations = findOccurrences(/\bbotInstructions\b/, {

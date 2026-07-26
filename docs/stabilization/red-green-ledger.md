@@ -19,3 +19,13 @@ Failing assertions and violation counts:
 - `mandatory-send-gateway.test.js` — `Every WhatsApp producer must use...`; **11** violations: missing `WhatsAppSendGateway` imports/invocations for the configured producers, the `preSendReviewRequired` authorization switch in `src/services/ai/pre-send-review.js:181`, and a missing gateway request constructor.
 
 The full baseline command output is preserved in the Task 1 report.
+
+## Task 1 review fix round 1/5
+
+Command result after strengthening the test harness: exit code `1`; 7 tests run, 4 focused checks passed, and the same 3 architecture boundaries remained RED.
+
+- Gateway boundary: **7** violations — each configured producer lacks a `WhatsAppSendGateway` import binding, the `preSendReviewRequired` authorization read remains, and the gateway implementation is absent.
+- Policy boundary: **14** token occurrences.
+- Transport boundary: **10** direct call occurrences.
+
+Focused passing checks cover import-binding-to-receiver linkage, one complete request object containing all required fields, truthy/negated/coerced `preSendReviewRequired` reads, every source-token match on a single line, and dotted/optional/spaced/bracket transport calls.

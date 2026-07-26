@@ -58,3 +58,24 @@ RED architecture-test commit: `d88b6edaf0ea0c662e8e17ff736c5c5e3dcc7a80` (`test:
 ## Concerns
 
 The policy boundary intentionally flags existing comments, default configuration, and evaluation fixtures because Task 1 requires the `botInstructions` token to be confined to explicit compatibility/migration allowances. These failures are expected RED work for subsequent stabilization tasks.
+
+## Review fix round 1/5
+
+The review identified load-bearing test-quality gaps. No runtime files changed. The architecture harness was strengthened as follows:
+
+- Producer wiring now extracts a concrete `WhatsAppSendGateway` import binding, follows a `new` instance binding, and requires that receiver's `.send({ ... })` invocation. An unrelated `.send()` no longer satisfies the producer rule.
+- Gateway request fields must coexist in one object literal passed by a producer to that bound gateway receiver; field names elsewhere, or split across request objects, do not satisfy the rule.
+- The authorization scan now treats every non-object-key `preSendReviewRequired` reference as a runtime authorization use, covering equality, truthy, negated, coerced, and other reads.
+- Direct-transport scanning now covers dotted, optional-chaining, whitespace-around-dot, and bracket-member call forms.
+- Source matching records every match on a line instead of stopping at the first; counts remain occurrence counts.
+
+Focused evidence was run by the required Task 1 command:
+
+```text
+tests 7
+pass 4
+fail 3
+exit code 1
+```
+
+The four focused checks passed. The intentionally RED architecture assertions remained and reported **7** gateway violations, **14** policy occurrences, and **10** direct transport occurrences. The gateway count changed from 11 to 7 because the stronger import-and-bound-invocation rule reports each missing producer wiring once instead of accepting unrelated `.send()` text and emitting a separate false-granularity omission. `git diff --check` also completed with exit code `0` before committing this review fix.
