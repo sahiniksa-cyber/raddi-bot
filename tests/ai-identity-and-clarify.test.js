@@ -5,10 +5,11 @@ const assert = require('node:assert/strict');
 
 const AIClient = require('../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../lib/constants');
+const { canonicalConfig } = require('./helpers/canonical-config');
 
 function createClient(config) {
   return new AIClient(
-    { ...DEFAULT_CONFIG, ...config },
+    { ...DEFAULT_CONFIG, ...canonicalConfig(), ...config },
     { info: () => {}, warn: () => {}, error: () => {} },
     { record: () => {} },
   );

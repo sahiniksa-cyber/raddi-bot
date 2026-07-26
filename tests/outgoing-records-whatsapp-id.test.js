@@ -38,8 +38,10 @@ test('worker records whatsapp_message_id after a successful send (with userId fo
 });
 
 test('LID path also records whatsapp_message_id when the best-effort send succeeds', () => {
-  assert.match(WORKER_SRC, /const\s+lidResult\s*=\s*await\s+bot\.client\.sendMessage/,
-    '@lid path must use bot.client.sendMessage');
+  assert.match(WORKER_SRC, /const\s+gatewayResult\s*=\s*await\s+gateway\.send/,
+    '@lid path must use the deterministic gateway');
+  assert.match(WORKER_SRC, /const\s+lidResult\s*=\s*gatewayResult\.provider\?\.raw/,
+    '@lid path must capture the gateway provider result');
   assert.match(WORKER_SRC, /recordWhatsappMessageId\(\{[\s\S]*whatsappMessageId:\s*lidResult\?\.key\?\.id/,
     '@lid path must record the full scope and key.id');
 });

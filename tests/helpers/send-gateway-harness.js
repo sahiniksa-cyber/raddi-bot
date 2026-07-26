@@ -65,6 +65,7 @@ function harness(overrides = {}) {
         return event;
       },
       reserveSend: async args => ({ reserved: true, reservation: args }),
+      markReservation: async args => args,
     },
     policyStore: {
       loadMerchantPolicy: async () => compiled.policy,

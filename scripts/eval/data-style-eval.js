@@ -30,7 +30,7 @@ const KEY = process.env.EVAL_API_KEY;
       replyLength: 'short', useShortReplies: true,
     },
     products: [],
-    botInstructions: 'انت موظف خدمة عملاء لطيف اسمك محمد، ودود ومختصر وما تستخدم نقاط.\n\n## المنتجات\nاشتراك 4 أشهر\n120 ريال\nاشتراك سنة\n350 ريال',
+    merchantPolicy: require('../../tests/helpers/canonical-config').makeCanonicalConfig().merchantPolicy,
   };
   const logger = { info(){}, warn(){}, error(){} };
 

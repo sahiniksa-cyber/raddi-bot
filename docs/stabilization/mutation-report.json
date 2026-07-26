@@ -1,0 +1,82 @@
+{
+  "generatedAt": "2026-07-26T17:00:16.869Z",
+  "total": 12,
+  "killed": 12,
+  "survivors": [],
+  "mutationScore": 1,
+  "status": "passed",
+  "results": [
+    {
+      "id": "policy-required",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "policy-version-required",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "tenant-scope",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "destination-scope",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "audit-before-network",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "idempotency-reservation",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "deterministic-validation",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "fail-closed-policy-dependency",
+      "file": "src/services/whatsapp/whatsapp-send-gateway.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "product-bound-numeric-lookup",
+      "file": "src/services/ai/deterministic-reply-validator.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "contact-authorization",
+      "file": "src/services/ai/deterministic-reply-validator.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "current-turn-relevance",
+      "file": "src/services/ai/deterministic-reply-validator.js",
+      "killed": true,
+      "error": null
+    },
+    {
+      "id": "forbidden-content-non-restoration",
+      "file": "lib/post-process-reply.js",
+      "killed": true,
+      "error": null
+    }
+  ]
+}

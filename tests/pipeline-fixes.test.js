@@ -99,6 +99,7 @@ test('FIX 2: sendInstantAutoReply marks inbound messages answered before returni
     conversation: { id: 'conv-1', sender: '9665xxxx' },
     userId: 'user-1',
     instantReply: 'أهلاً وسهلاً 🌷',
+    policyVersion: 'sha256:fixture-policy',
     enrichedMessages: [{ id: 'msg-1' }, { id: 'msg-2' }],
     store: async () => 'reply-msg-1',
     enqueueOutgoing: async (payload) => { enqueued.push(payload); },
@@ -109,7 +110,8 @@ test('FIX 2: sendInstantAutoReply marks inbound messages answered before returni
   assert.deepEqual(markedAnswered, ['msg-1', 'msg-2'], 'all batched inbound messages must be marked answered');
   assert.equal(enqueued.length, 1);
   assert.equal(enqueued[0].source, 'auto_reply_keyword');
-  assert.equal(enqueued[0].preSendReviewRequired, true, 'instant replies must pass the final send-boundary review');
+  assert.match(enqueued[0].policyVersion, /^sha256:/, 'instant replies must carry canonical policyVersion');
+  assert.equal('preSendReviewRequired' in enqueued[0], false);
   assert.equal(result.replyMessageId, 'reply-msg-1');
   assert.equal(result.source, 'auto_reply_keyword');
 });

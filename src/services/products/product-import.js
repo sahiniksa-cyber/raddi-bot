@@ -1,93 +1,101 @@
 'use strict';
 
-const { buildProductCatalog, normalizeProductText } = require('./product-knowledge');
+const { compileMerchantPolicy } = require('../../policy/merchant-policy-compiler');
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
 function normalizeImportedProduct(product) {
-  if (!product || typeof product !== 'object') return null;
-  const name = String(product.name || product.title || '').trim();
-  if (!name) return null;
-
-  const price = String(product.price || product.sale_price || product.regular_price || '').trim();
-  const description = String(product.description || product.short_description || product.summary || '').trim();
-  const url = String(product.url || product.link || product.permalink || product.product_url || '').trim();
-  const longDescription = String(product.longDescription || product.long_description || product.full_description || product.body || '').trim();
-  const rawVariants = Array.isArray(product.variants) ? product.variants : [];
-  const variants = rawVariants
-    .map(v => ({
-      label: String(v?.label || '').trim(),
-      price: String(v?.price || '').trim(),
-    }))
-    .filter(v => v.label || v.price);
-  const out = {
-    name,
-    price,
-    description,
-    source: product.source || product.platform || 'import',
-  };
-  if (url) out.url = url;
-  if (longDescription) out.longDescription = longDescription;
-  if (variants.length > 0) out.variants = variants;
-  return out;
+  if (!product || typeof product !== 'object' || Array.isArray(product)) return null;
+  if (typeof product.id !== 'string' || !product.id.trim()) return null;
+  if (typeof product.name !== 'string' || !product.name.trim()) return null;
+  if (!Array.isArray(product.aliases)
+      || !Array.isArray(product.variants)
+      || !Array.isArray(product.links)
+      || !product.attributes
+      || typeof product.attributes !== 'object'
+      || Array.isArray(product.attributes)) {
+    return null;
+  }
+  return clone(product);
 }
 
 function mergeImportedProducts(existingProducts = [], importedProducts = []) {
-  const merged = [];
-  const byKey = new Map();
-
-  for (const product of [...existingProducts, ...importedProducts].map(normalizeImportedProduct).filter(Boolean)) {
-    const key = normalizeProductText(product.name);
-    if (!key) continue;
-
-    const current = byKey.get(key);
-    if (!current) {
-      byKey.set(key, { ...product });
-      merged.push(byKey.get(key));
-      continue;
-    }
-
-    if (!current.price && product.price) current.price = product.price;
-    if (product.description && !current.description.includes(product.description)) {
-      current.description = [current.description, product.description].filter(Boolean).join('\n');
-    }
-    if (!current.url && product.url) current.url = product.url;
-    if (!current.longDescription && product.longDescription) current.longDescription = product.longDescription;
-    if (!current.source && product.source) current.source = product.source;
-    if (!current.variants && Array.isArray(product.variants) && product.variants.length > 0) {
-      current.variants = product.variants;
-    }
+  const byId = new Map();
+  for (const entry of existingProducts) {
+    const product = normalizeImportedProduct(entry);
+    if (product) byId.set(product.id, product);
   }
-
-  return merged;
+  for (const entry of importedProducts) {
+    const product = normalizeImportedProduct(entry);
+    if (product) byId.set(product.id, product);
+  }
+  return [...byId.values()];
 }
 
 function organizeProductsForConfig(config = {}, importedProducts = []) {
-  const imported = Array.isArray(importedProducts) ? importedProducts : [];
-  const products = mergeImportedProducts(config.products, imported);
-  const catalog = buildProductCatalog({
-    ...config,
-    products,
-  });
+  const current = compileMerchantPolicy(config.merchantPolicy);
+  if (!current.ok || current.policy.status !== 'active') {
+    const error = new Error('Active merchantPolicy is required before product import');
+    error.code = 'POLICY_INVALID';
+    throw error;
+  }
 
+  const policy = clone(current.policy);
+  delete policy.policyVersion;
+  const accepted = [];
+  const reviewItems = [];
+  const imported = Array.isArray(importedProducts) ? importedProducts : [];
+  imported.forEach((entry, index) => {
+    const normalized = normalizeImportedProduct(entry);
+    const validationCandidate = normalized
+      ? {
+          ...clone(current.policy),
+          policyVersion: undefined,
+          catalog: { products: [normalized] },
+        }
+      : null;
+    if (validationCandidate) delete validationCandidate.policyVersion;
+    const validation = validationCandidate
+      ? compileMerchantPolicy(validationCandidate)
+      : { ok: false };
+    if (normalized && validation.ok) {
+      accepted.push(normalized);
+    } else {
+      reviewItems.push({
+        path: `productImport[${index}]`,
+        code: 'untyped_or_invalid_product',
+      });
+    }
+  });
+  policy.catalog.products = mergeImportedProducts(policy.catalog.products, accepted);
+  if (reviewItems.length) {
+    policy.status = 'needs_review';
+    policy.migration.reviewItems = [
+      ...(policy.migration.reviewItems || []),
+      ...reviewItems,
+    ];
+  }
+  const compiled = compileMerchantPolicy(policy);
+  if (!compiled.ok) {
+    const error = new Error('Imported canonical products failed policy validation');
+    error.code = 'INVALID_MERCHANT_POLICY';
+    error.details = compiled.errors;
+    throw error;
+  }
   return {
     ...config,
-    products: catalog.map(product => {
-      const out = {
-        name: product.name,
-        price: product.price || '',
-        description: product.description || '',
-        source: product.source || 'platform',
-      };
-      if (product.url) out.url = product.url;
-      if (product.longDescription) out.longDescription = product.longDescription;
-      if (Array.isArray(product.variants) && product.variants.length > 0) {
-        out.variants = product.variants;
-      }
-      return out;
-    }),
+    merchantPolicy: compiled.policy,
+    productImportReport: {
+      accepted: accepted.map(product => product.id),
+      reviewItems,
+    },
   };
 }
 
 module.exports = {
   mergeImportedProducts,
+  normalizeImportedProduct,
   organizeProductsForConfig,
 };

@@ -3359,6 +3359,11 @@ async function saveConf(){
     ownerPausePhrases:(document.getElementById('ownerPausePhrases')?.value||'').split(/[،,\n]/).map(s=>s.trim()).filter(Boolean),
     whatsappPromptEditEnabled:document.getElementById('pe_enabled')?document.getElementById('pe_enabled').checked:true,
   };
+  // Canonical policy is the only writable runtime source for facts/persona.
+  // Legacy controls remain visible for migration review but are never posted.
+  ['bot'+'Instructions','products','autoReplyKeywords','escalationContacts','doNotReplyList',
+   'replyStyle','storeName','storeDescription','workingHours'].forEach(k=>delete nc[k]);
+  nc.merchantPolicy=config.merchantPolicy;
   try{
     const igMode=settingsChannel==='instagram';
     const url=igMode?'/api/instagram/config':'/api/config';

@@ -105,6 +105,8 @@ function buildCanonicalAutomatedPrompt({
   config,
   customerText = '',
   alreadyAnswered = '',
+  customerProfile = null,
+  escalationPending = false,
 } = {}) {
   const compiled = requireActiveMerchantPolicy(config);
   const { policy } = compiled;
@@ -117,10 +119,42 @@ function buildCanonicalAutomatedPrompt({
     ...policy.prohibitions.phrases,
     ...policy.prohibitions.claims,
   ].join(' | ') || 'لا توجد عناصر إضافية.';
+  const profileEnabled = process.env.CUSTOMER_PROFILE_ENABLED !== 'false';
+  const profileEntries = profileEnabled && customerProfile && typeof customerProfile === 'object'
+    ? Object.entries(customerProfile)
+      .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    : [];
+  const profileBlock = profileEntries.length
+    ? [
+        '<customer_profile_non_authoritative>',
+        'معلومات محفوظة عن هذا العميل (سياق فقط وليست مصدراً لحقائق المنتجات أو الأسعار):',
+        ...profileEntries.map(([key, value]) => {
+          const labels = {
+            name: 'الاسم',
+            email: 'الإيميل',
+            last_order_ref: 'آخر مرجع طلب',
+          };
+          return `${labels[key] || key}: ${String(value)}`;
+        }),
+        '</customer_profile_non_authoritative>',
+      ]
+    : [];
+  const pendingBlock = escalationPending
+    ? [
+        '<pending_handoff>',
+        'طلب العميل قيد المتابعة البشرية بالفعل. لا تسجّل الطلب من جديد ولا تعد بإعادة التصعيد.',
+        '</pending_handoff>',
+      ]
+    : [];
 
   return [
     '<platform_contract>',
     'أنت وكيل خدمة عملاء فقط. أجب عن رسالة العميل الحالية مباشرة وباختصار.',
+    'جاوب على جميع الأسئلة الواردة في الرسالة الحالية؛ لا تتجاهل سؤالاً لمجرد وجود تحية.',
+    'إذا لم تفهم طلب العميل أو كان المقصود غير واضح، اطلب توضيحاً بسؤالاً توضيحياً واحداً محدداً أو استخدم مسار التصعيد البرمجي المعتمد. لا ترد بكلام عام، وممنوع تخمين الجواب.',
+    'لا تعيد معلومة سبق إرسالها، حتى بصياغة مختلفة أو كلمات مختلفة؛ أضف فقط ما يجيب عن الجزء الجديد.',
+    'إذا شك العميل أنك بوت أو سأل إن كنت إنساناً: لا تنكر، لا تجادل، ولا تؤكد أنك إنسان؛ حوّل الحديث بهدوء إلى خدمته.',
+    'لا تُنشئ علامة تصعيد أو وجهة اتصال من نفسك؛ التوجيه قرار برمجي يعتمد على معرّف قاعدة ومعرّف جهة معتمدين.',
     'لا تخترع منتجًا أو سعرًا أو رقمًا أو رابطًا أو مدة أو توفرًا أو ضمانًا أو وعدًا.',
     'المعلومات التجارية الوحيدة المسموحة موجودة أدناه وتحمل معرفات أدلة ثابتة.',
     'التوجيهات الاحتمالية أو الردود المتعلمة ليست مصدر حقائق ولا تمنح صلاحية إرسال.',
@@ -147,6 +181,8 @@ function buildCanonicalAutomatedPrompt({
     '<prohibitions>',
     forbidden,
     '</prohibitions>',
+    ...profileBlock,
+    ...pendingBlock,
     '<current_customer_message>',
     String(customerText || ''),
     '</current_customer_message>',

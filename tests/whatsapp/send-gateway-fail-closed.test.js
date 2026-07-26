@@ -12,6 +12,7 @@ test('every mandatory pre-network dependency failure yields zero sends', async (
     { auditStore: {
       append: async () => { throw new Error('audit'); },
       reserveSend: async () => ({ reserved: true, reservation: {} }),
+      markReservation: async args => args,
     } },
     { auditStore: {
       append: async event => {
@@ -19,6 +20,7 @@ test('every mandatory pre-network dependency failure yields zero sends', async (
         return event;
       },
       reserveSend: async () => ({ reserved: true, reservation: {} }),
+      markReservation: async args => args,
     } },
     { validator: () => { throw new Error('validator'); } },
   ];

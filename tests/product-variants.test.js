@@ -2,87 +2,55 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
-const { mergeImportedProducts, organizeProductsForConfig } = require('../src/services/products/product-import');
 const AIClient = require('../lib/ai-client');
+const { organizeProductsForConfig } = require('../src/services/products/product-import');
+const { canonicalConfig, product } = require('./helpers/canonical-config');
 
-function makePromptClient(products) {
-  return new AIClient(
-    { products, model: 'google/gemini-2.0-flash', googleApiKey: 'AIzaSyDummyKeyForTesting1234' },
-    { info: () => {}, warn: () => {}, error: () => {} },
-    { record: () => {}, save: () => {} },
-  );
-}
-
-test('mergeImportedProducts preserves variants array on imported product', () => {
-  const result = mergeImportedProducts([], [
-    { name: 'أدوبي', variants: [{ label: 'شهر', price: '99 ريال' }] },
-  ]);
-  assert.equal(result.length, 1);
-  assert.deepEqual(result[0].variants, [{ label: 'شهر', price: '99 ريال' }]);
+test('canonical import preserves validated variants exactly', () => {
+  const imported = product({
+    id: 'subscription',
+    name: 'اشتراك',
+    variants: [{
+      id: 'subscription-year',
+      name: 'سنة',
+      price: { amountMinor: 35000, currency: 'SAR' },
+      duration: '12 months',
+    }],
+  });
+  const result = organizeProductsForConfig(canonicalConfig(), [imported]);
+  assert.deepEqual(result.merchantPolicy.catalog.products[0].variants, imported.variants);
 });
 
-test('mergeImportedProducts filters out empty variants {label:"",price:""}', () => {
-  const result = mergeImportedProducts([], [
-    { name: 'أدوبي', variants: [{ label: '', price: '' }, { label: 'شهر', price: '99' }] },
-  ]);
-  assert.deepEqual(result[0].variants, [{ label: 'شهر', price: '99' }]);
+test('canonical prompt renders product-bound variant evidence', () => {
+  const config = canonicalConfig({
+    products: [product({
+      id: 'subscription',
+      name: 'اشتراك',
+      variants: [{
+        id: 'subscription-year',
+        name: 'سنة',
+        price: { amountMinor: 35000, currency: 'SAR' },
+        duration: '12 months',
+      }],
+    })],
+  });
+  const ai = new AIClient(config, { info() {}, warn() {}, error() {} }, { record() {} });
+  const prompt = ai.buildSystemPrompt([{ role: 'user', content: 'كم سعر اشتراك سنة؟' }]);
+  assert.match(prompt, /\[subscription-year\]/);
+  assert.match(prompt, /350\.00 SAR/);
+  assert.match(prompt, /12 months/);
 });
 
-test('mergeImportedProducts does not set variants field when none provided', () => {
-  const result = mergeImportedProducts([], [{ name: 'تيشيرت', price: '50 ريال' }]);
-  assert.equal(result[0].variants, undefined);
-});
-
-test('mergeImportedProducts keeps variants from existing product when imported has none', () => {
-  const existing = [{ name: 'أدوبي', variants: [{ label: 'شهر', price: '99' }] }];
-  const imported = [{ name: 'أدوبي', description: 'وصف جديد' }];
-  const result = mergeImportedProducts(existing, imported);
-  assert.deepEqual(result[0].variants, [{ label: 'شهر', price: '99' }]);
-});
-
-test('organizeProductsForConfig keeps variants on products', () => {
-  const out = organizeProductsForConfig({}, [
-    { name: 'عطر', variants: [{ label: '30 مل', price: '200 ريال' }] },
-  ]);
-  assert.deepEqual(out.products[0].variants, [{ label: '30 مل', price: '200 ريال' }]);
-});
-
-test('organizeProductsForConfig omits variants on products without them', () => {
-  const out = organizeProductsForConfig({}, [{ name: 'كتاب', price: '40 ريال' }]);
-  assert.equal(out.products[0].variants, undefined);
-});
-
-test('AI productsBlock renders variants as sub-bullets', () => {
-  const ai = makePromptClient([
-    { name: 'أدوبي', description: 'كل التطبيقات', variants: [
-      { label: 'شهر', price: '99 ريال' },
-      { label: 'سنة', price: '999 ريال' },
-    ]},
-  ]);
-  const prompt = ai.buildSystemPrompt([]);
-  assert.match(prompt, /1\. أدوبي/);
-  assert.match(prompt, /• شهر: 99 ريال/);
-  assert.match(prompt, /• سنة: 999 ريال/);
-});
-
-test('AI productsBlock works unchanged when variants is absent', () => {
-  const ai = makePromptClient([{ name: 'كتاب', price: '40 ريال' }]);
-  const prompt = ai.buildSystemPrompt([]);
-  assert.match(prompt, /1\. كتاب — 40 ريال/);
-  // No variant sub-bullets (the line "   • " prefix is the variants marker)
-  assert.doesNotMatch(prompt, /\n   • /);
-});
-
-test('AI productsBlock skips fully-empty variants and keeps the rest', () => {
-  const ai = makePromptClient([{
-    name: 'عطر',
-    variants: [
-      { label: '', price: '' },
-      { label: '30 مل', price: '200 ريال' },
-    ],
+test('invalid variant data is marked for review rather than normalized heuristically', () => {
+  const result = organizeProductsForConfig(canonicalConfig(), [{
+    id: 'legacy',
+    name: 'Legacy',
+    aliases: [],
+    description: '',
+    links: [],
+    attributes: {},
+    variants: [{ label: 'سنة', price: '350' }],
   }]);
-  const prompt = ai.buildSystemPrompt([]);
-  assert.match(prompt, /• 30 مل: 200 ريال/);
-  assert.doesNotMatch(prompt, /• —:/);
+  assert.equal(result.merchantPolicy.status, 'needs_review');
+  assert.equal(result.merchantPolicy.catalog.products.length, 0);
 });

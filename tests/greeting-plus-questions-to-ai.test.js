@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const { collectInstantReplies } = require('../src/services/bot/platform-features');
 const AIClient = require('../lib/ai-client');
+const { canonicalConfig } = require('./helpers/canonical-config');
 
 const CFG = { autoReplyKeywords: { 'السلام عليكم': 'وعليكم السلام' } };
 
@@ -37,7 +38,7 @@ test('a short greeting keyword still keeps a PURE greeting on the fast path', ()
 // stop at the greeting.
 test('the system prompt instructs the AI to answer all questions, not just the greeting', () => {
   const ai = new AIClient(
-    { storeName: 'م', model: 'gpt-4o', openaiApiKey: 'sk-' + 'x'.repeat(40) },
+    { ...canonicalConfig(), model: 'gpt-4o', openaiApiKey: 'sk-' + 'x'.repeat(40) },
     { info() {}, warn() {}, error() {} }, { record() {}, save() {} },
   );
   const prompt = ai.buildSystemPrompt([], { latestUserText: 'السلام عليكم كم السعر ومتى التوصيل؟' });

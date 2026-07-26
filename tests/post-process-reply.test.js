@@ -59,9 +59,9 @@ test('stripAvoidedContent matches avoidPhrases with Arabic letter variations (ه
   assert.match(out, /^أبشر/);
 });
 
-test('stripAvoidedContent returns original when filter removes everything', () => {
+test('stripAvoidedContent never restores forbidden content when filter removes everything', () => {
   const config = { replyStyle: { avoidPhrases: ['السعر 99 ريال'] } };
-  assert.equal(stripAvoidedContent('السعر 99 ريال', config), 'السعر 99 ريال');
+  assert.equal(stripAvoidedContent('السعر 99 ريال', config), '');
 });
 
 test('stripAvoidedContent is no-op when config has no avoidPhrases', () => {

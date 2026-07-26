@@ -104,11 +104,55 @@ function createReplyAuditStore({
     if (existing.rowCount !== 1) {
       throw new Error('Reservation conflict did not resolve to a durable row');
     }
+    if (existing.rows[0].status === 'retryable') {
+      const reclaimed = await database.query(
+        `UPDATE whatsapp_send_reservations
+            SET correlation_id = $3,
+                destination = $4,
+                policy_version = $5,
+                status = 'reserved',
+                provider_message_id = NULL,
+                updated_at = $6
+          WHERE user_id = $1 AND idempotency_key = $2 AND status = 'retryable'
+          RETURNING *`,
+        [userId, idempotencyKey, correlationId, destination, policyVersion, timestamp],
+      );
+      if (reclaimed.rowCount === 1) {
+        return { reserved: true, reservation: reclaimed.rows[0] };
+      }
+      const raced = await database.query(
+        `SELECT * FROM whatsapp_send_reservations
+         WHERE user_id = $1 AND idempotency_key = $2`,
+        [userId, idempotencyKey],
+      );
+      if (raced.rowCount !== 1) throw new Error('Reservation reclaim race lost its durable row');
+      return { reserved: false, reservation: raced.rows[0] };
+    }
     return { reserved: false, reservation: existing.rows[0] };
+  }
+
+  async function markReservation({
+    userId,
+    idempotencyKey,
+    status,
+    providerMessageId = null,
+  }) {
+    const updated = await database.query(
+      `UPDATE whatsapp_send_reservations
+          SET status = $3,
+              provider_message_id = COALESCE($4, provider_message_id),
+              updated_at = $5
+        WHERE user_id = $1 AND idempotency_key = $2
+        RETURNING *`,
+      [userId, idempotencyKey, status, providerMessageId, now()],
+    );
+    if (updated.rowCount !== 1) throw new Error('Durable send reservation is missing');
+    return updated.rows[0];
   }
 
   return Object.freeze({
     append,
+    markReservation,
     reserveSend,
   });
 }

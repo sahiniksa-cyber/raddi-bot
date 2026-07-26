@@ -20,7 +20,7 @@ test('mergeConfigForSave strips API keys even when admin sets them', () => {
       googleApiKey: 'AIzaLeakAttemptLong1234567890abcdef',
       anthropicApiKey: 'sk-ant-leak-attempt',
       openrouterApiKey: 'sk-or-leak-attempt',
-      botInstructions: 'hi',
+      replyDelayPreset: '1min',
     },
     isAdmin: true,
   });
@@ -32,7 +32,7 @@ test('mergeConfigForSave strips API keys even when admin sets them', () => {
   assert.ok(!serialized.includes('sk-or-leak'), 'openrouter leaked into persisted config');
 
   // Non-key fields preserved.
-  assert.equal(merged.botInstructions, 'hi');
+  assert.equal(merged.replyDelayPreset, '1min');
 });
 
 test('mergeConfigForSave drops API keys silently for non-admin', () => {

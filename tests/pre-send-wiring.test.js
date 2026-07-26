@@ -25,9 +25,9 @@ test('normal path reviews before the deterministic unified gateway', () => {
   const lidBlock = outgoingWorker.slice(lidStart, outgoingWorker.indexOf('async function completeSuppressedOutgoing'));
 
   assert.ok(normalBlock.indexOf('await reviewBeforeSend') < normalBlock.indexOf('await gateway.send'));
-  assert.ok(lidBlock.indexOf('await reviewBeforeSend') < lidBlock.indexOf('bot.client.sendMessage(sender, finalReply)'));
+  assert.ok(lidBlock.indexOf('await reviewBeforeSend') < lidBlock.indexOf('await gateway.send'));
   assert.doesNotMatch(normalBlock, /gateway\.send\(\{[\s\S]*content:\s*reply,/,
     'normal path must not send the unreviewed payload variable');
-  assert.doesNotMatch(lidBlock, /sendMessage\(sender, reply\)/,
+  assert.doesNotMatch(lidBlock, /gateway\.send\(\{[\s\S]*content:\s*reply,/,
     '@lid path must not send the unreviewed payload variable');
 });

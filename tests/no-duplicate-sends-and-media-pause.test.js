@@ -26,21 +26,24 @@ test('isReplyAlreadySent detects an already-delivered reply (status sent / whats
   }), true, 'a recorded WhatsApp id proves delivery');
 });
 
-test('isReplyAlreadySent fails open (send) on unknown/missing data', async () => {
+test('isReplyAlreadySent returns unknown for missing ids and fails closed on database errors', async () => {
   const dbQueued = { isConfigured: () => true, query: async () => ({ rows: [{ status: 'queued_for_send', whatsapp_message_id: null }] }) };
   assert.equal(await isReplyAlreadySent({
     replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', database: dbQueued,
   }), false);
   assert.equal(await isReplyAlreadySent({ replyMessageId: null, database: dbQueued }), false, 'no id → cannot check → send');
   const dbErr = { isConfigured: () => true, query: async () => { throw new Error('boom'); } };
-  assert.equal(await isReplyAlreadySent({
-    replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', database: dbErr,
-  }), false, 'db hiccup must not block replies');
+  await assert.rejects(
+    isReplyAlreadySent({
+      replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', database: dbErr,
+    }),
+    /boom/,
+  );
 });
 
 test('the outgoing chokepoint checks already-sent BEFORE sending (both paths)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'workers', 'outgoing-whatsapp-worker.js'), 'utf8');
-  const mainSend = src.indexOf('await sendWhatsappReply');
+  const mainSend = src.indexOf('await gateway.send');
   const mainGuard = src.indexOf('isReplyAlreadySent', src.indexOf('async function processOutgoingWhatsapp'));
   assert.ok(mainGuard > -1 && mainGuard < mainSend, 'main path must guard before the send');
   const lidStart = src.indexOf('async function handleLidOutgoing');

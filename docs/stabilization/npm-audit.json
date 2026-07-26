@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-07-26",
+  "command": "npm audit --json",
+  "vulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 10,
+    "critical": 0,
+    "total": 10
+  },
+  "directHighSeverityPackages": ["exceljs", "whatsapp-web.js"],
+  "action": "No automatic fix, downgrade, deployment, or production change was applied."
+}

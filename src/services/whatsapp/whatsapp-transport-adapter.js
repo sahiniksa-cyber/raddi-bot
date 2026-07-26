@@ -5,7 +5,7 @@ function createWhatsAppTransportAdapter({ client, timeoutMs = 30000 }) {
     throw new TypeError('A WhatsApp client with sendMessage is required');
   }
   return Object.freeze({
-    async send({ destination, content, media, providerMessageId }) {
+    async send({ destination, content, media, providerMessageId, options }) {
       const operation = async () => {
         if (providerMessageId && typeof client.getMessageById === 'function') {
           const original = await client.getMessageById(providerMessageId).catch(() => null);
@@ -17,7 +17,7 @@ function createWhatsAppTransportAdapter({ client, timeoutMs = 30000 }) {
             return chat.sendMessage(media || content);
           }
         }
-        return client.sendMessage(destination, media || content);
+        return client.sendMessage(destination, media || content, options);
       };
       const result = await Promise.race([
         operation(),

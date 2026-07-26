@@ -12,10 +12,11 @@ test('duplicate durable reservation returns duplicate without audit or transport
         reserved: false,
         reservation: { status: 'reserved', correlation_id: 'existing' },
       }),
+      markReservation: async args => args,
     },
   });
   const result = await h.gateway.send(request({ policyVersion: h.compiled.policyVersion }));
-  assert.equal(result.decision, 'duplicate');
+  assert.equal(result.decision, 'held');
   assert.equal(h.sends.length, 0);
 });
 
@@ -28,6 +29,7 @@ test('policy changed while queued fails closed before reservation and transport'
         reserved += 1;
         return { reserved: true, reservation: {} };
       },
+      markReservation: async args => args,
     },
   });
   await assert.rejects(

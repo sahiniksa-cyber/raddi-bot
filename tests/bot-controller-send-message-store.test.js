@@ -4,6 +4,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createBotController } = require('../src/controllers/bot.controller');
+const { canonicalConfig } = require('./helpers/canonical-config');
+
+function gatewayFactory() {
+  return {
+    async send(request) {
+      return {
+        decision: 'sent',
+        provider: { providerMessageId: 'provider-manual-1' },
+        request,
+      };
+    },
+  };
+}
 
 function makeDb(overrides = {}) {
   const queries = [];
@@ -12,6 +25,9 @@ function makeDb(overrides = {}) {
     isConfigured: () => true,
     query: async (sql, params) => {
       queries.push({ sql, params });
+      if (sql.includes("config->'merchantPolicy'")) {
+        return { rows: [{ merchant_policy: canonicalConfig().merchantPolicy }] };
+      }
       if (sql.includes('INSERT INTO conversations') || sql.includes('ON CONFLICT')) {
         return { rows: [{ id: 'conv-id-1' }] };
       }
@@ -56,6 +72,7 @@ test('sendMessage stores outbound message to DB after successful send', async ()
   const ctrl = createBotController({
     getUserBot: () => bot,
     database,
+    gatewayFactory,
   });
 
   const req = makeReq();
@@ -81,6 +98,7 @@ test('sendMessage does not attempt DB write when bot is not connected', async ()
   const ctrl = createBotController({
     getUserBot: () => bot,
     database,
+    gatewayFactory,
   });
 
   const req = makeReq();
@@ -91,25 +109,26 @@ test('sendMessage does not attempt DB write when bot is not connected', async ()
   assert.equal(database.queries.length, 0, 'no DB calls when bot not connected');
 });
 
-test('sendMessage does not crash when database is not configured', async () => {
+test('sendMessage fails closed when database is not configured', async () => {
   const database = makeDb({ isConfigured: () => false });
   const bot = makeBot();
   const ctrl = createBotController({
     getUserBot: () => bot,
     database,
+    gatewayFactory,
   });
 
   const req = makeReq();
   const res = makeRes();
   await ctrl.sendMessage(req, res);
 
-  assert.equal(res._body.success, true, 'should still succeed even if DB not configured');
+  assert.equal(res._body.success, false, 'must not send without the audit/policy database');
 });
 
 test('sendMessage rejects missing phone or message', async () => {
   const database = makeDb();
   const bot = makeBot();
-  const ctrl = createBotController({ getUserBot: () => bot, database });
+  const ctrl = createBotController({ getUserBot: () => bot, database, gatewayFactory });
 
   const res = makeRes();
   await ctrl.sendMessage(makeReq({ phone: '' }), res);
@@ -119,7 +138,7 @@ test('sendMessage rejects missing phone or message', async () => {
 test('sendMessage uses an explicit sender JID when phone is unavailable (e.g. @lid)', async () => {
   const database = makeDb();
   const bot = makeBot();
-  const ctrl = createBotController({ getUserBot: () => bot, database });
+  const ctrl = createBotController({ getUserBot: () => bot, database, gatewayFactory });
 
   const req = { session: { userId: 'user-1' }, body: { sender: '12345@lid', message: 'مرحبا' } };
   const res = makeRes();
@@ -133,7 +152,7 @@ test('sendMessage uses an explicit sender JID when phone is unavailable (e.g. @l
 test('sendMessage pauses the AI on the conversation for 30 minutes (manual reply)', async () => {
   const database = makeDb();
   const bot = makeBot();
-  const ctrl = createBotController({ getUserBot: () => bot, database });
+  const ctrl = createBotController({ getUserBot: () => bot, database, gatewayFactory });
 
   await ctrl.sendMessage(makeReq(), makeRes());
 

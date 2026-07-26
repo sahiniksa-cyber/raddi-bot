@@ -59,8 +59,16 @@ function validateRequest(request) {
 }
 
 function snapshotRequest(request) {
+  const draftStages = Array.isArray(request?.draftStages)
+    ? request.draftStages.map(stage => Object.freeze({
+        layer: String(stage?.layer || ''),
+        content: String(stage?.content ?? ''),
+        metadata: Object.freeze({ ...(stage?.metadata || {}) }),
+      }))
+    : [];
   return Object.freeze({
     ...request,
+    draftStages: Object.freeze(draftStages),
     tenantScope: request?.tenantScope && typeof request.tenantScope === 'object'
       ? Object.freeze({ ...request.tenantScope })
       : request?.tenantScope,
@@ -88,7 +96,8 @@ function createWhatsAppSendGateway({
 }) {
   if (!auditStore
       || typeof auditStore.append !== 'function'
-      || typeof auditStore.reserveSend !== 'function') {
+      || typeof auditStore.reserveSend !== 'function'
+      || typeof auditStore.markReservation !== 'function') {
     throw new TypeError('append-only auditStore is required');
   }
   if (!policyStore || typeof policyStore.loadMerchantPolicy !== 'function') {
@@ -101,7 +110,14 @@ function createWhatsAppSendGateway({
     throw new TypeError('transport is required');
   }
 
-  async function append(request, stage, metadata = {}, violations = [], evidenceRefs = []) {
+  async function append(
+    request,
+    stage,
+    metadata = {},
+    violations = [],
+    evidenceRefs = [],
+    content = request.content,
+  ) {
     return auditStore.append({
       correlationId: request.correlationId,
       userId: request.userId,
@@ -111,8 +127,8 @@ function createWhatsAppSendGateway({
       sendClass: request.sendClass,
       stage,
       policyVersion: request.policyVersion,
-      content: request.content,
-      contentHash: contentHash(request.content),
+      content,
+      contentHash: contentHash(content),
       evidenceRefs,
       violations,
       metadata,
@@ -147,45 +163,107 @@ function createWhatsAppSendGateway({
       policyVersion: envelope.policyVersion,
     });
     if (!reservation.reserved) {
+      const status = reservation.reservation?.status;
+      if (['reserved', 'sending', 'unknown'].includes(status)) {
+        return { decision: 'held', reservation: reservation.reservation };
+      }
+      if (status === 'blocked') {
+        return { decision: 'block', reservation: reservation.reservation };
+      }
       return { decision: 'duplicate', reservation: reservation.reservation };
     }
 
-    await append(envelope, 'original');
-
     let validation = { ok: true, evidenceRefs: [], violations: [] };
-    if (envelope.sendClass === 'automated_customer_reply') {
-      validation = validator({
-        customerText: envelope.customerText || '',
-        conversationFocus: envelope.conversationFocus || {},
-        reply: envelope.content,
-        compiledPolicy,
-        platformPolicy,
-      });
-      if (!validation?.ok) {
+    try {
+      await append(
+        envelope,
+        'original',
+        {},
+        [],
+        [],
+        envelope.originalContent ?? envelope.content,
+      );
+      for (const stage of envelope.draftStages) {
+        if (!stage.layer || !stage.content) throw new Error('INVALID_DRAFT_STAGE');
         await append(
           envelope,
-          'blocked',
-          { decision: 'block' },
-          validation?.violations || [{ code: 'VALIDATION_FAILED' }],
-          validation?.evidenceRefs || [],
+          'modified',
+          { ...stage.metadata, layer: stage.layer },
+          [],
+          [],
+          stage.content,
         );
-        return { decision: 'block', validation };
       }
+
+      if (envelope.sendClass === 'automated_customer_reply') {
+        validation = validator({
+          customerText: envelope.customerText || '',
+          conversationFocus: envelope.conversationFocus || {},
+          reply: envelope.content,
+          compiledPolicy,
+          platformPolicy,
+        });
+        if (!validation?.ok) {
+          await append(
+            envelope,
+            'blocked',
+            { decision: 'block' },
+            validation?.violations || [{ code: 'VALIDATION_FAILED' }],
+            validation?.evidenceRefs || [],
+          );
+          await auditStore.markReservation({
+            userId: envelope.userId,
+            idempotencyKey: envelope.idempotencyKey,
+            status: 'blocked',
+          });
+          return { decision: 'block', validation };
+        }
+      }
+
+      await append(
+        envelope,
+        'authorized',
+        { decision: 'allow' },
+        [],
+        validation.evidenceRefs || [],
+      );
+      await auditStore.markReservation({
+        userId: envelope.userId,
+        idempotencyKey: envelope.idempotencyKey,
+        status: 'sending',
+      });
+    } catch (error) {
+      await auditStore.markReservation({
+        userId: envelope.userId,
+        idempotencyKey: envelope.idempotencyKey,
+        status: 'retryable',
+      }).catch(() => {});
+      throw error;
     }
 
-    await append(
-      envelope,
-      'authorized',
-      { decision: 'allow' },
-      [],
-      validation.evidenceRefs || [],
-    );
-    const provider = await transport.send({
-      destination: envelope.destination,
-      content: envelope.content,
-      media: envelope.media,
-      providerMessageId: envelope.providerMessageId,
-      correlationId: envelope.correlationId,
+    let provider;
+    try {
+      provider = await transport.send({
+        destination: envelope.destination,
+        content: envelope.content,
+        media: envelope.media,
+        providerMessageId: envelope.providerMessageId,
+        correlationId: envelope.correlationId,
+      });
+    } catch (error) {
+      await auditStore.markReservation({
+        userId: envelope.userId,
+        idempotencyKey: envelope.idempotencyKey,
+        status: 'unknown',
+      }).catch(() => {});
+      throw error;
+    }
+
+    await auditStore.markReservation({
+      userId: envelope.userId,
+      idempotencyKey: envelope.idempotencyKey,
+      status: 'sent',
+      providerMessageId: provider?.providerMessageId || null,
     });
     await append(envelope, 'sent', {
       providerMessageId: provider?.providerMessageId || null,

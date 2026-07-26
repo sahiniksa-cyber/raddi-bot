@@ -1,73 +1,63 @@
 'use strict';
 
-const { detectEditCommand, isYes, isNo, normalizeArabic } = require('../../../lib/prompt-edit-keywords');
-const { normalizeEscalationTarget } = require('../../workers/escalation-routing');
-const { applyProductOp, applyInstantReplyOp, applyDoNotReplyOp } = require('../../../lib/config-edit-appliers');
-
-const TARGET_FIELD = { prompt: 'botInstructions', products: 'products', instant_replies: 'autoReplyKeywords', do_not_reply: 'doNotReplyList' };
-const APPLIERS = { products: applyProductOp, instant_replies: applyInstantReplyOp, do_not_reply: applyDoNotReplyOp };
-const APPLIED_MSG = {
-  prompt: '✅ تم تعديل البرومنت. أمشي عليه من الحين.',
-  products: '✅ تم تحديث المنتجات.',
-  instant_replies: '✅ تم تحديث الردود الفورية.',
-  do_not_reply: '✅ تم تحديث قائمة الأرقام المحظورة.',
-};
+const { detectEditCommand, isYes, isNo } = require('../../../lib/prompt-edit-keywords');
+const { compileMerchantPolicy } = require('../../policy/merchant-policy-compiler');
+const { PLATFORM_REPLY_POLICY } = require('../../policy/platform-reply-policy');
+const { requireActiveMerchantPolicy } = require('../ai/canonical-prompt-context');
 
 function digitsOf(jid) {
   return String(jid || '').replace(/@.*$/, '').replace(/[^\d]/g, '');
 }
 
-// True when `jid` is one of the escalation contacts configured as a GROUP.
 function groupMatchesEscalation(config, jid) {
   const target = digitsOf(jid);
   if (!target) return false;
-  const contacts = Array.isArray(config?.escalationContacts) ? config.escalationContacts : [];
-  for (const c of contacts) {
-    const norm = normalizeEscalationTarget(c?.phone || c?.target || c?.jid);
-    if (norm && norm.endsWith('@g.us') && digitsOf(norm) === target) return true;
+  let policy;
+  try {
+    policy = requireActiveMerchantPolicy(config).policy;
+  } catch (_) {
+    return false;
   }
-  return false;
+  return (policy.routing?.contacts || []).some(contact => (
+    digitsOf(contact?.phoneNumber) === target
+  ));
 }
 
 function isEnabled(config) {
-  return config?.whatsappPromptEditEnabled !== false; // default ON
+  return config?.whatsappPromptEditEnabled !== false;
 }
 
-// True when the bot has ACTUALLY escalated to this jid before (escalation_threads
-// is the ground truth). Merchants rarely paste the real group JID into
-// escalationContacts — the group is resolved at runtime — so config matching
-// alone misses live escalation groups (production bug 2026-07-01). No time
-// window: any past escalation to this group qualifies it. Fail-closed to false.
 async function isKnownEscalationTarget(database, userId, jid) {
   const digits = digitsOf(jid);
   if (!digits) return false;
   try {
-    const r = await database.query(
+    const result = await database.query(
       `SELECT 1 FROM escalation_threads
         WHERE user_id = $1 AND regexp_replace(target_jid, '\\D', '', 'g') = $2
         LIMIT 1`,
       [userId, digits],
     );
-    return (r?.rows?.length || 0) > 0;
+    return (result?.rows?.length || 0) > 0;
   } catch (_) {
     return false;
   }
 }
 
-// A group qualifies for prompt-edit if it's configured as an escalation contact
-// OR it's a real escalation destination the bot has used.
 async function isEscalationGroup(database, config, userId, jid) {
   if (groupMatchesEscalation(config, jid)) return true;
   return isKnownEscalationTarget(database, userId, jid);
 }
 
 async function loadConfig(database, userId) {
-  const r = await database.query('SELECT config FROM bot_configs WHERE user_id = $1', [userId]);
-  return r?.rows?.[0]?.config || {};
+  const result = await database.query(
+    'SELECT config FROM bot_configs WHERE user_id = $1',
+    [userId],
+  );
+  return result?.rows?.[0]?.config || {};
 }
 
 async function findPendingEdit(database, userId, sourceJid, nowMs, ttlMinutes) {
-  const r = await database.query(
+  const result = await database.query(
     `SELECT id, proposed_instructions, change_summary, created_at, target, proposed_value
        FROM prompt_edit_requests
       WHERE user_id = $1 AND source_jid = $2 AND status = 'pending'
@@ -75,10 +65,9 @@ async function findPendingEdit(database, userId, sourceJid, nowMs, ttlMinutes) {
       LIMIT 1`,
     [userId, sourceJid],
   );
-  const row = r?.rows?.[0];
+  const row = result?.rows?.[0];
   if (!row) return null;
-  const ageMs = nowMs - new Date(row.created_at).getTime();
-  if (ageMs > ttlMinutes * 60 * 1000) {
+  if (nowMs - new Date(row.created_at).getTime() > ttlMinutes * 60 * 1000) {
     await markStatus(database, row.id, 'expired').catch(() => {});
     return null;
   }
@@ -94,56 +83,82 @@ async function expireGroupPendings(database, userId, sourceJid) {
 }
 
 async function insertPending(database, row) {
-  const r = await database.query(
+  const result = await database.query(
     `INSERT INTO prompt_edit_requests
-       (user_id, source_jid, requester_jid, request_text, current_instructions, proposed_instructions, change_summary, status, target, proposed_value)
+       (user_id, source_jid, requester_jid, request_text, current_instructions,
+        proposed_instructions, change_summary, status, target, proposed_value)
      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9::jsonb)
      RETURNING id`,
-    [row.userId, row.sourceJid, row.requesterJid, row.requestText, row.currentInstructions,
-      row.proposedInstructions, row.changeSummary, row.target || 'prompt',
-      row.proposedValue === undefined ? null : JSON.stringify(row.proposedValue)],
+    [
+      row.userId,
+      row.sourceJid,
+      row.requesterJid,
+      row.requestText,
+      row.currentInstructions,
+      row.proposedInstructions,
+      row.changeSummary,
+      row.target,
+      JSON.stringify(row.proposedValue ?? null),
+    ],
   );
-  return r?.rows?.[0]?.id || null;
+  return result?.rows?.[0]?.id || null;
 }
 
 async function markStatus(database, id, status) {
   await database.query(
-    `UPDATE prompt_edit_requests SET status = $2, decided_at = NOW() WHERE id = $1`,
+    'UPDATE prompt_edit_requests SET status = $2, decided_at = NOW() WHERE id = $1',
     [id, status],
   );
 }
 
-async function applyInstructions(database, userId, newInstructions) {
-  return applySectionValue(database, userId, 'botInstructions', String(newInstructions || ''));
-}
-
-// Writes a single config section (botInstructions / products / autoReplyKeywords
-// / doNotReplyList) via jsonb_set. `field` comes from a fixed whitelist.
 async function applySectionValue(database, userId, field, value) {
+  if (field !== 'merchantPolicy') {
+    const error = new Error('Only merchantPolicy is writable at runtime');
+    error.code = 'NON_CANONICAL_POLICY_WRITE';
+    throw error;
+  }
+  const compiled = compileMerchantPolicy(value);
+  if (!compiled.ok || compiled.policy.status !== 'active') {
+    const error = new Error('Merchant policy is invalid or requires review');
+    error.code = 'INVALID_MERCHANT_POLICY';
+    throw error;
+  }
   await database.query(
     `UPDATE bot_configs
-        SET config = jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
+        SET config = jsonb_set(COALESCE(config, '{}'::jsonb), '{merchantPolicy}', $2::jsonb, true),
             updated_at = NOW()
       WHERE user_id = $1`,
-    [userId, `{${field}}`, JSON.stringify(value)],
+    [userId, JSON.stringify(compiled.policy)],
   );
+  return compiled;
+}
+
+async function applyInstructions() {
+  const error = new Error('Free-form runtime instructions require explicit policy review');
+  error.code = 'UNTYPED_POLICY_EDIT_REQUIRES_REVIEW';
+  throw error;
 }
 
 async function send(enqueue, userId, groupJid, reply) {
-  // systemNotice: these are control/confirmation messages to the team group —
-  // NOT billable customer replies. The flag makes the outgoing worker bypass the
-  // message-quota gate (so an empty balance can't silence the confirmation) and
-  // skip decrementing the merchant's quota. (production fix 2026-07-01)
-  await enqueue({ userId, sender: groupJid, reply, systemNotice: true, source: 'prompt_edit' });
+  await enqueue({
+    userId,
+    sender: groupJid,
+    reply,
+    systemNotice: true,
+    source: 'prompt_edit',
+    policyVersion: PLATFORM_REPLY_POLICY.policyVersion,
+  });
 }
 
-/**
- * Main entry. Called from the @g.us branch of message ingest. Returns a result
- * object when it handled the message (so ingest must NOT drop or relay it), or
- * null to let normal group handling continue. Never throws on model failure —
- * it reports the failure to the group and returns a handled result.
- */
-async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger, now = Date.now, ttlMinutes = 10 }) {
+async function tryHandle({
+  database,
+  userId,
+  msg,
+  enqueue,
+  logger,
+  now = Date.now,
+  ttlMinutes = 10,
+}) {
   const groupJid = msg?.from;
   const text = String(msg?.body || '').trim();
   if (!groupJid || !String(groupJid).includes('@g.us') || !text) return null;
@@ -152,141 +167,29 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
   if (!isEnabled(config)) return null;
   if (!(await isEscalationGroup(database, config, userId, groupJid))) return null;
 
-  const nowMs = now();
-  const pending = await findPendingEdit(database, userId, groupJid, nowMs, ttlMinutes);
-
-  const applyPending = async () => {
-    const target = pending.target || 'prompt';
-    if (target === 'prompt') {
-      await applyInstructions(database, userId, pending.proposed_instructions);
-    } else {
-      await applySectionValue(database, userId, TARGET_FIELD[target], pending.proposed_value);
-    }
-    await markStatus(database, pending.id, 'applied');
-    await send(enqueue, userId, groupJid, APPLIED_MSG[target] || '✅ تم الحفظ.');
-    logger?.info?.('prompt-edit', `applied ${target} edit ${pending.id} for ${userId}`);
-    return { accepted: true, statusCode: 200, promptEdit: 'applied' };
-  };
-  const cancelPending = async () => {
-    await markStatus(database, pending.id, 'rejected');
-    await send(enqueue, userId, groupJid, 'تمام، ألغيت التعديل. ما غيّرت شيء.');
-    return { accepted: true, statusCode: 200, promptEdit: 'rejected' };
-  };
-
-  // Confirmation flow (only meaningful when a pending edit exists).
-  // Fast path: obvious yes/no words are handled instantly with no AI cost.
-  if (pending) {
-    if (isYes(text)) return applyPending();
-    if (isNo(text)) return cancelPending();
-    // Neither obvious yes nor no — fall through; maybe it's a brand-new edit command.
+  const pending = await findPendingEdit(database, userId, groupJid, now(), ttlMinutes);
+  if (pending && (isYes(text) || isNo(text))) {
+    await markStatus(database, pending.id, isNo(text) ? 'rejected' : 'needs_review');
+    await send(
+      enqueue,
+      userId,
+      groupJid,
+      isNo(text)
+        ? 'تم إلغاء التعديل، ولم تتغير السياسة.'
+        : 'تم حفظ الطلب للمراجعة. لن يُفعّل أي تغيير غير مهيكل تلقائياً.',
+    );
+    return {
+      accepted: true,
+      statusCode: 200,
+      promptEdit: isNo(text) ? 'rejected' : 'needs_review',
+    };
   }
 
   const { matched, body } = detectEditCommand(text);
-  if (!matched) {
-    if (pending) {
-      const wordCount = text.split(/\s+/).filter(Boolean).length;
-      // ANY natural confirmation wording should work — not a fixed keyword list.
-      // For short-ish replies, ask the AI whether the merchant means confirm /
-      // cancel / other. Fail-safe: 'other' on any error (never auto-acts).
-      if (wordCount <= 8) {
-        let intent = 'other';
-        try {
-          const ai = await buildAiClient(userId);
-          intent = await ai.classifyReplyIntent(text);
-        } catch (err) {
-          logger?.warn?.('prompt-edit', `intent classify failed: ${err.message}`);
-        }
-        if (intent === 'confirm') return applyPending();
-        if (intent === 'cancel') return cancelPending();
-      }
-      // Still unclear: for a SHORT reply, remind instead of going silent
-      // (production 2026-07-02: the bot went quiet and the merchant typed "الو").
-      if (wordCount <= 3) {
-        await send(enqueue, userId, groupJid, 'عندك تعديل بانتظار التأكيد — رد بـ (نعم) للتطبيق أو (لا) للإلغاء.');
-        return { accepted: true, statusCode: 200, promptEdit: 'reprompt' };
-      }
-    }
-    return null;
-  }
-
+  if (!matched) return null;
   if (!body) {
-    await send(enqueue, userId, groupJid,
-      'اكتب التعديل بعد كلمة "تعديل". مثال: تعديل: أضف إننا نوصّل للرياض مجاناً.');
+    await send(enqueue, userId, groupJid, 'اكتب التعديل المطلوب بعد كلمة «تعديل».');
     return { accepted: true, statusCode: 200, promptEdit: 'help' };
-  }
-
-  // Explicit "برومنت" keyword => definitely a prompt edit; skip classification
-  // so an instruction mentioning a product/price isn't misrouted to a data edit.
-  const firstTok = normalizeArabic(text.split(/\s+/)[0] || '');
-  const forcePrompt = firstTok === normalizeArabic('برومنت') || firstTok === normalizeArabic('البرومنت');
-
-  // Classify the command into a structured section edit. A non-prompt target is
-  // handled here; anything else (or a classification failure) falls through to
-  // the unchanged prompt path below — the safe default.
-  let plan = null;
-  if (!forcePrompt) {
-    try {
-      const ai = await buildAiClient(userId);
-      plan = await ai.planConfigEdit(config, body);
-    } catch (err) {
-      logger?.warn?.('prompt-edit', `planConfigEdit failed: ${err.message}`);
-    }
-  }
-
-  // Instant replies are OPT-IN: a rigid keyword→canned reply (bypasses the AI)
-  // must be explicitly requested. A general behavior instruction ("لو العميل يبي
-  // كذا قوله كذا") must shape the PROMPT, not become a fixed auto-reply
-  // (production 2026-07-02: a Tamara payment instruction got keyed as an instant
-  // reply on "تمارا"). Without an explicit فوري/تلقائي marker, treat as prompt.
-  if (plan && plan.target === 'instant_replies' && !/(فوري|تلقائ|تلقاي|instant|auto)/i.test(body)) {
-    plan = null;
-  }
-
-  if (plan && plan.target && plan.target !== 'prompt') {
-    if (plan.clarify) {
-      await send(enqueue, userId, groupJid, String(plan.clarify));
-      return { accepted: true, statusCode: 200, promptEdit: 'clarify' };
-    }
-    const applier = APPLIERS[plan.target];
-    const field = TARGET_FIELD[plan.target];
-    const result = applier(config[field], plan);
-    if (result.error) {
-      await send(enqueue, userId, groupJid, `⚠️ ${result.error}`);
-      return { accepted: true, statusCode: 200, promptEdit: 'error' };
-    }
-    if (result.needsClarify) {
-      await send(enqueue, userId, groupJid, result.needsClarify);
-      return { accepted: true, statusCode: 200, promptEdit: 'clarify' };
-    }
-    await expireGroupPendings(database, userId, groupJid);
-    await insertPending(database, {
-      userId,
-      sourceJid: groupJid,
-      requesterJid: msg.author || msg.from || null,
-      requestText: body,
-      currentInstructions: '',
-      proposedInstructions: result.summary,
-      changeSummary: result.summary,
-      target: plan.target,
-      proposedValue: result.value,
-    });
-    await send(enqueue, userId, groupJid, [
-      '📝 فهمت التعديل:',
-      `• ${result.summary}`,
-      'أأكّد التطبيق؟ رد بـ (نعم) للتطبيق أو (لا) للإلغاء.',
-    ].join('\n'));
-    logger?.info?.('prompt-edit', `proposed ${plan.target} edit for ${userId} in ${groupJid}`);
-    return { accepted: true, statusCode: 200, promptEdit: 'proposed' };
-  }
-
-  let proposal;
-  try {
-    const ai = await buildAiClient(userId);
-    proposal = await ai.proposePromptEdit(config.botInstructions || '', body);
-  } catch (err) {
-    logger?.warn?.('prompt-edit', `model failed: ${err.message}`);
-    await send(enqueue, userId, groupJid, 'ما قدرت أفهم التعديل 😅 جرّب تكتبه بصيغة أوضح.');
-    return { accepted: true, statusCode: 200, promptEdit: 'error' };
   }
 
   await expireGroupPendings(database, userId, groupJid);
@@ -295,24 +198,28 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     sourceJid: groupJid,
     requesterJid: msg.author || msg.from || null,
     requestText: body,
-    currentInstructions: config.botInstructions || '',
-    proposedInstructions: proposal.newInstructions,
-    changeSummary: proposal.summary,
-    target: 'prompt',
+    currentInstructions: '',
+    proposedInstructions: '',
+    changeSummary: 'طلب غير مهيكل يحتاج مراجعة وربطه بحقول السياسة الرسمية',
+    target: 'merchant_policy_review',
+    proposedValue: {
+      request: body,
+      activePolicyVersion: config.merchantPolicy?.policyVersion || null,
+      automaticActivation: false,
+    },
   });
-
-  const reply = [
-    '📝 فهمت التعديل:',
-    `• ${proposal.summary}`,
-    'أأكّد التطبيق؟ رد بـ (نعم) للتطبيق أو (لا) للإلغاء.',
-  ].join('\n');
-  await send(enqueue, userId, groupJid, reply);
-  logger?.info?.('prompt-edit', `proposed edit for ${userId} in ${groupJid}`);
-  return { accepted: true, statusCode: 200, promptEdit: 'proposed' };
+  await send(
+    enqueue,
+    userId,
+    groupJid,
+    'حُفظ طلب التعديل للمراجعة، ولم تتغير سياسة المتجر أو معلوماته تلقائياً.',
+  );
+  logger?.info?.('prompt-edit', `queued canonical policy review for ${userId}`);
+  return { accepted: true, statusCode: 200, promptEdit: 'needs_review' };
 }
 
 async function listRecentEdits(database, userId, limit = 10) {
-  const r = await database.query(
+  const result = await database.query(
     `SELECT id, requester_jid, change_summary, status, created_at, decided_at
        FROM prompt_edit_requests
       WHERE user_id = $1
@@ -320,7 +227,7 @@ async function listRecentEdits(database, userId, limit = 10) {
       LIMIT $2`,
     [userId, limit],
   );
-  return r?.rows || [];
+  return result?.rows || [];
 }
 
 module.exports = {

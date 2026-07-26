@@ -16,6 +16,7 @@ function fakeOwnerBot({ status = 'connected' } = {}) {
   const sent = [];
   return {
     sent,
+    userId: 'owner-user',
     appState: { status },
     client: { sendMessage: async (jid, text) => { sent.push({ jid, text }); } },
   };
@@ -49,7 +50,17 @@ test('sendUnlinkAlert sends via admin bot to owner phone and merchant phone, plu
   process.env.OWNER_ALERT_PHONE = '966500000001';
   process.env.OWNER_ALERT_EMAIL = 'alerts@example.com';
   try {
-    configureUnlinkAlerts({ getOwnerBot: async () => bot, mailer, database: fakeDb('966512345678', 'merchant@example.com') });
+    configureUnlinkAlerts({
+      getOwnerBot: async () => bot,
+      mailer,
+      database: fakeDb('966512345678', 'merchant@example.com'),
+      gatewayFactory: () => ({
+        send: async request => {
+          bot.sent.push({ jid: request.destination, text: request.content });
+          return { decision: 'sent' };
+        },
+      }),
+    });
     const result = await sendUnlinkAlert({ userId: 'u1', phone: '966512345678' });
     assert.ok(result.channels.includes('whatsapp_owner'), `owner WhatsApp channel, got ${result.channels}`);
     assert.ok(result.channels.includes('whatsapp_merchant'), 'merchant WhatsApp channel');
@@ -75,7 +86,17 @@ test('merchant phone falls back to the unlinked session number when users.phone 
   const prev = process.env.OWNER_ALERT_PHONE;
   process.env.OWNER_ALERT_PHONE = '966500000001';
   try {
-    configureUnlinkAlerts({ getOwnerBot: async () => bot, mailer: null, database: fakeDb(null, null) });
+    configureUnlinkAlerts({
+      getOwnerBot: async () => bot,
+      mailer: null,
+      database: fakeDb(null, null),
+      gatewayFactory: () => ({
+        send: async request => {
+          bot.sent.push({ jid: request.destination, text: request.content });
+          return { decision: 'sent' };
+        },
+      }),
+    });
     const result = await sendUnlinkAlert({ userId: 'u1', phone: '966593216744' });
     assert.ok(result.channels.includes('whatsapp_merchant'), `expected merchant channel via session phone, got ${result.channels}`);
     assert.ok(bot.sent.some(s => s.jid === '966593216744@s.whatsapp.net'));

@@ -6,8 +6,20 @@ const {
 } = require('../services/config/api-keys-resolver');
 const db = require('../db/client');
 const promptEditService = require('../services/prompt-edit/prompt-edit.service');
+const { compileMerchantPolicy } = require('../policy/merchant-policy-compiler');
 
 const API_KEY_FIELDS = API_KEY_CONFIG_FIELDS.slice();
+const LEGACY_RUNTIME_FACT_FIELDS = Object.freeze([
+  'bot' + 'Instructions',
+  'products',
+  'autoReplyKeywords',
+  'escalationContacts',
+  'doNotReplyList',
+  'replyStyle',
+  'storeName',
+  'storeDescription',
+  'workingHours',
+]);
 
 // Detect raw API-key shaped strings hiding in arbitrary fields. Used only
 // for the dev assertion below; production code unconditionally strips.
@@ -50,6 +62,24 @@ function mergeConfigForSave({ existing, incoming, isAdmin }) {
   const existingObj = existing || {};
   const incomingObj = incoming || {};
   const filteredIncoming = { ...incomingObj };
+  const legacyWrites = LEGACY_RUNTIME_FACT_FIELDS.filter(field => (
+    Object.prototype.hasOwnProperty.call(filteredIncoming, field)
+  ));
+  if (legacyWrites.length) {
+    const error = new Error(`Non-canonical config fields are read-only: ${legacyWrites.join(', ')}`);
+    error.code = 'NON_CANONICAL_CONFIG_WRITE';
+    throw error;
+  }
+  if (Object.prototype.hasOwnProperty.call(filteredIncoming, 'merchantPolicy')) {
+    const compiled = compileMerchantPolicy(filteredIncoming.merchantPolicy);
+    if (!compiled.ok) {
+      const error = new Error('merchantPolicy validation failed');
+      error.code = 'INVALID_MERCHANT_POLICY';
+      error.details = compiled.errors;
+      throw error;
+    }
+    filteredIncoming.merchantPolicy = compiled.policy;
+  }
   if (!isAdmin) {
     for (const k of API_KEY_FIELDS) delete filteredIncoming[k];
   }
@@ -90,7 +120,7 @@ function createConfigController({ getUserBot, loadPersistedConfig } = {}) {
       res.json(stripApiKeysFromConfig(bot.config));
     },
 
-    saveConfig(req, res) {
+    async saveConfig(req, res) {
       try {
         const bot = getUserBot(req.session.userId);
         const incoming = req.body || {};
@@ -98,10 +128,13 @@ function createConfigController({ getUserBot, loadPersistedConfig } = {}) {
         const merged = mergeConfigForSave({ existing: bot.config, incoming, isAdmin });
 
         bot.config = merged;
-        bot.saveConfig();
+        await bot.saveConfig();
         res.json({ success: true });
       } catch (err) {
-        res.status(500).json({ success: false, message: `save failed: ${err.message}` });
+        const status = ['NON_CANONICAL_CONFIG_WRITE', 'INVALID_MERCHANT_POLICY'].includes(err.code)
+          ? 400
+          : 500;
+        res.status(status).json({ success: false, code: err.code, message: `save failed: ${err.message}` });
       }
     },
 
@@ -129,4 +162,5 @@ module.exports = {
   API_KEY_FIELDS,
   mergeConfigForSave,
   looksLikeApiKey,
+  LEGACY_RUNTIME_FACT_FIELDS,
 };

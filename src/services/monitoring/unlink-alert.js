@@ -11,14 +11,53 @@
 // email (SMTP_* + OWNER_ALERT_EMAIL) is the only instant channel for that case.
 
 const dbDefault = require('../../db/client');
+const { PLATFORM_REPLY_POLICY } = require('../../policy/platform-reply-policy');
+const { createReplyAuditStore } = require('../audit/reply-audit-store');
+const { WhatsAppSendGateway } = require('../whatsapp/whatsapp-send-gateway');
+const { createWhatsAppTransportAdapter } = require('../whatsapp/whatsapp-transport-adapter');
+const { stableCorrelationId } = require('../whatsapp/runtime-send-gateway');
 
 const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://jwap.net').trim();
 
-let deps = { getOwnerBot: null, mailer: null, database: dbDefault };
+function createUnlinkAlertGateway({ bot, database, allowedDestination }) {
+  const gateway = new WhatsAppSendGateway({
+    auditStore: createReplyAuditStore({ database }),
+    policyStore: { loadMerchantPolicy: async () => null },
+    scopeStore: {
+      async assertSendScope(request) {
+        if (request.destination !== allowedDestination
+            || request.tenantScope.internalDestination !== allowedDestination) {
+          const error = new Error('Unlink alert destination is not authorized');
+          error.code = 'OUTGOING_SCOPE_MISMATCH';
+          throw error;
+        }
+      },
+    },
+    transport: createWhatsAppTransportAdapter({ client: bot.client }),
+  });
+  return gateway;
+}
+
+let deps = {
+  getOwnerBot: null,
+  mailer: null,
+  database: dbDefault,
+  gatewayFactory: createUnlinkAlertGateway,
+};
 const __lastSent = new Map(); // userId -> epoch ms
 
-function configureUnlinkAlerts({ getOwnerBot = null, mailer = null, database = dbDefault } = {}) {
-  deps = { getOwnerBot, mailer, database };
+function configureUnlinkAlerts({
+  getOwnerBot = null,
+  mailer = null,
+  database = dbDefault,
+  gatewayFactory = createUnlinkAlertGateway,
+} = {}) {
+  deps = {
+    getOwnerBot,
+    mailer,
+    database,
+    gatewayFactory,
+  };
 }
 
 function cooldownMs() {
@@ -42,9 +81,30 @@ async function sendViaOwnerBot(jidPhone, text) {
   if (!digits || typeof deps.getOwnerBot !== 'function') return false;
   try {
     const bot = await deps.getOwnerBot();
-    if (!bot || bot.appState?.status !== 'connected' || !bot.client?.sendMessage) return false;
-    await bot.client.sendMessage(`${digits}@s.whatsapp.net`, text);
-    return true;
+    if (!bot || bot.appState?.status !== 'connected' || !bot.client) return false;
+    if (!bot.userId || !deps.database?.isConfigured?.()) return false;
+    const destination = `${digits}@s.whatsapp.net`;
+    const idempotencyKey = `unlink-alert:${stableCorrelationId(`${destination}:${text}`)}`;
+    const gateway = deps.gatewayFactory({
+      bot,
+      database: deps.database,
+      allowedDestination: destination,
+    });
+    const result = await gateway.send({
+      sendClass: 'platform_alert',
+      userId: bot.userId,
+      channelId: 'whatsapp',
+      destination,
+      idempotencyKey: idempotencyKey,
+      correlationId: stableCorrelationId(`${bot.userId}:${idempotencyKey}`),
+      content: text,
+      policyVersion: PLATFORM_REPLY_POLICY.policyVersion,
+      tenantScope: {
+        userId: bot.userId,
+        internalDestination: destination,
+      },
+    });
+    return result.decision === 'sent' || result.decision === 'duplicate';
   } catch (_) {
     return false;
   }
@@ -100,4 +160,10 @@ async function sendUnlinkAlert({ userId, phone } = {}) {
   return { channels };
 }
 
-module.exports = { buildUnlinkMessage, configureUnlinkAlerts, sendUnlinkAlert, __lastSent };
+module.exports = {
+  buildUnlinkMessage,
+  configureUnlinkAlerts,
+  createUnlinkAlertGateway,
+  sendUnlinkAlert,
+  __lastSent,
+};

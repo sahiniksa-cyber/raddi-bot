@@ -296,12 +296,9 @@ function findUnsupportedFacts(reply, { config = {}, matchedPolicies = [], custom
 }
 
 function buildSafeUnknownReply(config = {}, customerText = '') {
-  const contact = Array.isArray(config.escalationContacts) ? config.escalationContacts[0] : null;
-  if (!contact) return 'المعلومة غير مذكورة عندي بشكل مؤكد، لذلك ما راح أعطيك جواباً غير مضمون.';
-  const name = String(contact.name || 'المالك').replace(/[|\]]/g, ' ').trim() || 'المالك';
-  const summary = String(customerText || 'سؤال يحتاج معلومة غير موجودة')
-    .replace(/[|\]\n]/g, ' ').trim().slice(0, 80) || 'سؤال يحتاج تأكيد';
-  return `المعلومة غير مذكورة عندي بشكل مؤكد، لذلك بحوّل سؤالك لـ${name} للتأكد. [تحويل:${name}|${summary}]`;
+  void config;
+  void customerText;
+  return 'المعلومة غير مذكورة عندي بشكل مؤكد، لذلك ما راح أعطيك جواباً غير مضمون.';
 }
 
 function buildReviewUnavailableReply() {

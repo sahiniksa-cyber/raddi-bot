@@ -4,19 +4,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { routePreSendEscalation } = require('../src/workers/outgoing-whatsapp-worker');
+const { canonicalConfig } = require('./helpers/canonical-config');
 
-const config = {
-  escalationContacts: [{
+const config = canonicalConfig({
+  contacts: [{
+    id: 'support',
     name: 'الموظف',
-    role: 'خدمة العملاء',
-    phone: '966500000000',
+    phoneNumber: '+966500000000',
   }],
-};
+});
 
 test('handoff job key is unique per inbound message when no persisted reply row exists', async () => {
   const enqueued = [];
   const common = {
-    finalReply: 'تم، بخلي الموظف يتابع معك. [تحويل:الموظف|مشكلة مالية]',
+    finalReply: 'تم، بخلي الموظف يتابع معك. [تحويل:support|مشكلة مالية]',
     config,
     userId: 'tenant-1',
     conversationId: 'conversation-1',

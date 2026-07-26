@@ -18,6 +18,7 @@ const {
 const db = require('../../db/client');
 const { RETRY, TIMERS } = require('../../../lib/constants');
 const { MessageIngestService } = require('./message-ingest.service');
+const { createWhatsAppTransportAdapter } = require('./whatsapp-transport-adapter');
 const { enqueueCampaignSegmentation } = require('../../queues/campaign-queue');
 const { isOriginalMessageStale } = require('../../../lib/message-staleness');
 const { usePostgresBaileysAuthState, BaileysPostgresAuthState } = require('./baileys-postgres-auth');
@@ -203,6 +204,7 @@ function createBaileysClientWrapper({
   reserveBotSend = null,
   confirmBotSend = null,
 }) {
+  const transport = createWhatsAppTransportAdapter({ client: sock });
   return {
     sendMessage: async (target, content, options = {}) => {
       if (isReadOnly()) {
@@ -217,13 +219,14 @@ function createBaileysClientWrapper({
         // fromMe echo. If persistence fails, do not send; the queue can retry.
         await reserveBotSend({ messageId, target: normalizedTarget });
       }
-      const result = await sock.sendMessage(
-        normalizedTarget,
-        content && typeof content === 'object' && !Buffer.isBuffer(content)
+      const sent = await transport.send({
+        destination: normalizedTarget,
+        content: content && typeof content === 'object' && !Buffer.isBuffer(content)
           ? content
           : { text: String(content || '') },
-        { ...options, messageId },
-      );
+        options: { ...options, messageId },
+      });
+      const result = sent.raw;
       if (confirmBotSend) {
         await confirmBotSend({ messageId, target: normalizedTarget }).catch(() => {});
       }

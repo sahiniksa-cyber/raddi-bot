@@ -4,9 +4,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const AIClient = require('../lib/ai-client');
+const { canonicalConfig } = require('./helpers/canonical-config');
 
 function makeClient(overrides = {}) {
   const config = {
+    ...canonicalConfig(),
     storeName: 'متجري',
     model: 'google/gemini-2.0-flash',
     googleApiKey: 'AIzaSyDummyKeyForTesting1234',

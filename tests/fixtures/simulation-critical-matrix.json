@@ -1,0 +1,18 @@
+{
+  "seed": 20260726,
+  "minimumSequences": 10000,
+  "cases": [
+    { "id": "valid-canonical-reply", "expected": "sent", "invariant": "canonical fact/greeting may send" },
+    { "id": "cross-product-number", "expected": "blocked", "invariant": "facts are product-bound" },
+    { "id": "unauthorized-contact", "expected": "blocked", "invariant": "invented contacts never send" },
+    { "id": "safe-fallback", "expected": "safe", "invariant": "fallback adds no commercial data" },
+    { "id": "missing-policy", "expected": "held", "invariant": "missing policy is fail-closed" },
+    { "id": "stale-policy", "expected": "held", "invariant": "latest policy wins at network boundary" },
+    { "id": "duplicate-job", "expected": "deduplicated", "invariant": "one network send per idempotency key" },
+    { "id": "tenant-mismatch", "expected": "blocked", "invariant": "tenant/destination scope is enforced" },
+    { "id": "database-failure", "expected": "held", "invariant": "dependency failure produces zero sends" },
+    { "id": "human-byte-preservation", "expected": "sent", "invariant": "human content is not rewritten" },
+    { "id": "campaign-byte-preservation", "expected": "sent", "invariant": "campaign content is not rewritten" },
+    { "id": "platform-policy-version", "expected": "blocked", "invariant": "platform sends require code-owned version" }
+  ]
+}

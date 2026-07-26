@@ -2,6 +2,62 @@
 
 const crypto = require('crypto');
 const { TIMERS } = require('../../lib/constants');
+const { compileMerchantPolicy } = require('../policy/merchant-policy-compiler');
+const { createReplyAuditStore } = require('../services/audit/reply-audit-store');
+const { WhatsAppSendGateway } = require('../services/whatsapp/whatsapp-send-gateway');
+const { createWhatsAppTransportAdapter } = require('../services/whatsapp/whatsapp-transport-adapter');
+const { stableCorrelationId } = require('../services/whatsapp/runtime-send-gateway');
+
+async function loadActivePolicyVersion(database, userId) {
+  const result = await database.query(
+    `SELECT config->'merchantPolicy' AS merchant_policy
+       FROM bot_configs WHERE user_id = $1 LIMIT 1`,
+    [userId],
+  );
+  const compiled = compileMerchantPolicy(result.rows[0]?.merchant_policy);
+  if (!compiled.ok || compiled.policy.status !== 'active') {
+    const error = new Error('Active merchant policy is required');
+    error.code = 'POLICY_INVALID';
+    throw error;
+  }
+  return compiled.policyVersion;
+}
+
+function createManualSendGateway({ bot, database }) {
+  const gateway = new WhatsAppSendGateway({
+    auditStore: createReplyAuditStore({ database }),
+    policyStore: {
+      async loadMerchantPolicy(userId) {
+        const result = await database.query(
+          `SELECT config->'merchantPolicy' AS merchant_policy
+             FROM bot_configs WHERE user_id = $1 LIMIT 1`,
+          [userId],
+        );
+        return result.rows[0]?.merchant_policy || null;
+      },
+    },
+    scopeStore: {
+      async assertSendScope(request) {
+        const result = await database.query(
+          `SELECT id FROM conversations
+            WHERE id = $1 AND user_id = $2 AND sender = $3 AND channel_id = 'whatsapp'
+            LIMIT 1`,
+          [request.conversationId, request.userId, request.destination],
+        );
+        if (!result.rows[0]) {
+          const error = new Error('Manual destination is outside the tenant conversation scope');
+          error.code = 'OUTGOING_SCOPE_MISMATCH';
+          throw error;
+        }
+      },
+    },
+    transport: createWhatsAppTransportAdapter({
+      client: bot.client,
+      timeoutMs: TIMERS.SEND_MESSAGE_TIMEOUT_MS,
+    }),
+  });
+  return gateway;
+}
 
 function describeStartState(state = {}) {
   const status = state.status || 'unknown';
@@ -15,7 +71,11 @@ function describeStartState(state = {}) {
   return 'طلب التشغيل وصل. إذا لم تتغير الحالة خلال لحظات، اضغط تشغيل مرة ثانية.';
 }
 
-function createBotController({ getUserBot, database = null }) {
+function createBotController({
+  getUserBot,
+  database = null,
+  gatewayFactory = createManualSendGateway,
+}) {
   if (typeof getUserBot !== 'function') throw new Error('getUserBot dependency is required');
 
   const db = database || (() => {
@@ -187,37 +247,63 @@ function createBotController({ getUserBot, database = null }) {
       const text = message.trim();
 
       try {
-        await Promise.race([
-          bot.client.sendMessage(sender, text),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), TIMERS.SEND_MESSAGE_TIMEOUT_MS)),
-        ]);
-        bot.log(`direct message sent to ${sender}`);
+        if (!db?.isConfigured?.()) throw new Error('Database is required for audited manual sending');
+        const userId = bot.userId || req.session.userId;
+        const policyVersion = await loadActivePolicyVersion(db, userId);
+        const idempotencyKey = String(
+          req.body?.idempotencyKey
+          || req.headers?.['idempotency-key']
+          || `manual:${crypto.randomUUID()}`,
+        );
+        const gateway = gatewayFactory({ bot, database: db });
 
-        // Persist to DB so the message appears in conversation history
-        if (db && typeof db.isConfigured === 'function' && db.isConfigured()) {
+        const convResult = await db.query(
+          `INSERT INTO conversations (user_id, sender, channel_id, last_message_at)
+           VALUES ($1, $2, 'whatsapp', NOW())
+           ON CONFLICT (user_id, sender) DO UPDATE SET last_message_at = NOW()
+           RETURNING id`,
+          [userId, sender],
+        );
+        const conversationId = convResult.rows[0]?.id;
+        if (!conversationId) throw new Error('Unable to establish manual-send conversation scope');
+        const result = await gateway.send({
+          sendClass: 'human_manual_reply',
+          userId,
+          channelId: 'whatsapp',
+          destination: sender,
+          conversationId,
+          customerId: sender,
+          idempotencyKey: idempotencyKey,
+          correlationId: stableCorrelationId(`${userId}:${idempotencyKey}`),
+          content: text,
+          policyVersion: policyVersion,
+          tenantScope: {
+            userId,
+            conversationId,
+            customerId: sender,
+          },
+        });
+        if (!['sent', 'duplicate'].includes(result.decision)) {
+          throw new Error(`Manual send was not authorized: ${result.decision}`);
+        }
+        const providerMessageId = result.provider?.providerMessageId
+          || result.reservation?.provider_message_id
+          || `manual:${userId}:${idempotencyKey}`;
+        await db.query(
+          `INSERT INTO messages
+             (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
+           VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'sent', $6::jsonb)
+           ON CONFLICT (user_id, provider_message_id) DO NOTHING`,
+          [conversationId, userId, sender, text, providerMessageId,
+            JSON.stringify({ source: 'manual_send', idempotencyKey })],
+        );
+        if (true) {
           try {
-            const userId = bot.userId || req.session.userId;
-            const convResult = await db.query(
-              `INSERT INTO conversations (user_id, sender, last_message_at)
-               VALUES ($1, $2, NOW())
-               ON CONFLICT (user_id, sender) DO UPDATE SET last_message_at = NOW()
-               RETURNING id`,
-              [userId, sender],
-            );
-            const conversationId = convResult.rows[0]?.id;
-            if (conversationId) {
-              const providerMessageId = `manual:${userId}:${crypto.randomUUID()}`;
-              await db.query(
-                `INSERT INTO messages
-                   (conversation_id, user_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-                 VALUES ($1, $2, $3, 'outbound', 'assistant', $4, $5, 'sent', $6::jsonb)`,
-                [conversationId, userId, sender, text, providerMessageId,
-                  JSON.stringify({ source: 'manual_send' })],
-              );
               // Owner replied manually → pause the AI on this conversation for
               // 30 minutes so it doesn't talk over the human (mirrors the
               // fromMe-on-phone behavior). escalated_until may not exist on very
               // old schemas — fail open.
+              if (true) {
               try {
                 await db.query(
                   `UPDATE conversations SET escalated_until = NOW() + INTERVAL '30 minutes' WHERE id = $1`,
@@ -227,7 +313,8 @@ function createBotController({ getUserBot, database = null }) {
             }
           } catch (dbErr) {
             // Log but don't fail — message was already sent
-            bot.log?.(`warning: failed to persist manual send to DB: ${dbErr.message}`);
+            bot.log?.(`manual send post-send persistence failed: ${dbErr.message}`);
+            throw dbErr;
           }
         }
 
@@ -239,4 +326,9 @@ function createBotController({ getUserBot, database = null }) {
   };
 }
 
-module.exports = { createBotController, describeStartState };
+module.exports = {
+  createBotController,
+  createManualSendGateway,
+  describeStartState,
+  loadActivePolicyVersion,
+};

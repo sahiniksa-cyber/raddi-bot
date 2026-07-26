@@ -24,6 +24,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+const { canonicalConfig } = require('./helpers/canonical-config');
 
 function stub(modulePath, exports) {
   const resolved = require.resolve(modulePath);
@@ -151,7 +152,9 @@ stub(path.resolve(__dirname, '..', 'src', 'db', 'client.js'), dbMock);
 
 // runtime-bot — minimal config, learning off.
 stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'runtime-bot.js'), {
-  resolveConfigForAI: async () => ({ learningEnabled: false, memoryMessages: 50 }),
+  resolveConfigForAI: async () => canonicalConfig({
+    operational: { learningEnabled: false, memoryMessages: 50 },
+  }),
 });
 // platform-features — force the AI path (no auto/instant replies) but DELEGATE
 // buildPlatformPromptBlock to the genuine implementation, because the real
@@ -260,7 +263,7 @@ function customerEnqueues() {
 
 function createPromptClient(config) {
   return new AIClient(
-    { ...DEFAULT_CONFIG, ...config },
+    { ...DEFAULT_CONFIG, ...canonicalConfig(), ...config },
     { info: () => {}, warn: () => {}, error: () => {} },
     { record: () => {} },
   );

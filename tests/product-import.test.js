@@ -2,41 +2,37 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
 const { organizeProductsForConfig } = require('../src/services/products/product-import');
+const { canonicalConfig, product } = require('./helpers/canonical-config');
 
-test('organizeProductsForConfig merges imported products with existing platform products', () => {
-  const result = organizeProductsForConfig(
-    {
-      products: [
-        { name: 'Adobe كريتيف كلاود', price: '59 ريال', description: 'شهر' },
-      ],
-      botInstructions: '',
-    },
-    [
-      { name: 'أدوبي كريتيف كلاود', price: '99 ريال', description: 'ثلاثة أشهر' },
-      { name: 'Gemini Pro', price: '29 ريال', description: 'شهر' },
-    ],
+test('typed product import writes only merchantPolicy and derives a new version', () => {
+  const config = canonicalConfig({
+    products: [product({ id: 'existing', name: 'Existing' })],
+  });
+  const before = config.merchantPolicy.policyVersion;
+  const result = organizeProductsForConfig(config, [
+    product({ id: 'new', name: 'New product' }),
+  ]);
+  assert.deepEqual(
+    result.merchantPolicy.catalog.products.map(entry => entry.id),
+    ['existing', 'new'],
   );
-
-  assert.equal(result.products.length, 2);
-  assert.equal(result.products[0].name, 'Adobe كريتيف كلاود');
-  assert.match(result.products[0].description, /ثلاثة أشهر/);
-  assert.match(result.products[1].name, /Gemini Pro/);
+  assert.notEqual(result.merchantPolicy.policyVersion, before);
+  assert.equal(result.products, undefined);
 });
 
-test('organizeProductsForConfig also extracts products from prompt when fields are empty', () => {
-  const result = organizeProductsForConfig({
-    products: [],
-    botInstructions: `
-### المنتجات
-كانفا برو
-- السعر: 12 ريال
-- المدة: سنة
-`,
-  });
+test('untyped external product is quarantined and never inferred', () => {
+  const result = organizeProductsForConfig(canonicalConfig(), [
+    { name: 'Legacy product', price: '99' },
+  ]);
+  assert.equal(result.merchantPolicy.status, 'needs_review');
+  assert.equal(result.merchantPolicy.catalog.products.length, 0);
+  assert.equal(result.productImportReport.reviewItems.length, 1);
+});
 
-  assert.equal(result.products.length, 1);
-  assert.equal(result.products[0].name, 'كانفا برو');
-  assert.match(result.products[0].description, /السعر/);
+test('product import fails closed without an active canonical policy', () => {
+  assert.throws(
+    () => organizeProductsForConfig({ products: [] }, []),
+    error => error.code === 'POLICY_INVALID',
+  );
 });

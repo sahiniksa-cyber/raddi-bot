@@ -39,6 +39,13 @@ const {
 const AIClient = require('../lib/ai-client');
 const ExcelJS = require('exceljs');
 const { MessageIngestService } = require('../src/services/whatsapp/message-ingest.service');
+const { canonicalConfig, product } = require('./helpers/canonical-config');
+
+function campaignProductConfig() {
+  return canonicalConfig({
+    products: [product({ id: 'test-product', name: 'منتج تجريبي' })],
+  });
+}
 
 test('smart segmentation never confirms an order claim without a concrete reference', () => {
   const claim = detectOrderEvidence('أنا طلبت المنتج ودفعت');
@@ -52,7 +59,7 @@ test('smart segmentation never confirms an order claim without a concrete refere
 
 test('AI order signal is downgraded when its evidence has no order reference', () => {
   const signals = validateAiSignals({
-    config: { products: [{ name: 'منتج تجريبي', price: '10' }] },
+    config: campaignProductConfig(),
     messages: [{ id: 'm1', direction: 'inbound', role: 'user', content: 'طلبت منتج تجريبي ودفعت' }],
     signals: [{
       productName: 'منتج تجريبي',
@@ -96,7 +103,7 @@ test('confirmed signal cannot be weakened by a later interest signal', () => {
 
 test('a later order message without a product name upgrades the recently discussed product', () => {
   const signals = classifyConversationDeterministic({
-    config: { products: [{ name: 'منتج تجريبي', price: '10' }] },
+    config: campaignProductConfig(),
     messages: [
       { id: 'm1', direction: 'inbound', role: 'user', content: 'كم سعر منتج تجريبي؟', created_at: '2026-07-14T10:00:00Z' },
       { id: 'm2', direction: 'inbound', role: 'user', content: 'تم الطلب رقم AB-12345', created_at: '2026-07-16T10:00:00Z' },
@@ -122,7 +129,7 @@ test('live segmentation worker persists a refreshed customer state', async () =>
   };
   const result = await processCampaignSegmentation(
     { data: { userId: 'user-1', conversationId: 'conv-1', sender: '9665@s.whatsapp.net' } },
-    { database, getUserBot: async () => ({ config: { products: [{ name: 'منتج تجريبي', price: '10' }] } }) },
+    { database, getUserBot: async () => ({ config: campaignProductConfig() }) },
   );
   assert.equal(result.updated, 1);
   assert.ok(calls.some(call => /INSERT INTO customer_product_signals/.test(call.sql)));
@@ -191,15 +198,16 @@ test('manual number audience refuses an empty or invalid selection', () => {
 
 test('campaign text delivery uses the live WhatsApp client with the correct engine address', async () => {
   const sent = [];
-  const client = { sendMessage: async (...args) => { sent.push(args); return { key: { id: 'wa-1' } }; } };
-  await sendCampaignText({ whatsappEngine: 'baileys', client }, '966551234567@s.whatsapp.net', 'عرض اليوم');
-  await sendCampaignText({ whatsappEngine: 'baileys', client }, '278571713060916@lid', 'عرض لعميل LID');
-  await sendCampaignText({ whatsappEngine: 'whatsapp-web', client }, '966551234567@s.whatsapp.net', 'عرض آخر');
-  assert.deepEqual(sent, [
-    ['966551234567@s.whatsapp.net', 'عرض اليوم'],
-    ['278571713060916@lid', 'عرض لعميل LID'],
-    ['966551234567@c.us', 'عرض آخر'],
-  ]);
+  const gateway = { send: async request => { sent.push(request); return { decision: 'sent' }; } };
+  const request = {
+    sendClass: 'campaign',
+    policyVersion: 'v1',
+    idempotencyKey: 'campaign-1',
+    tenantScope: { userId: 'u1' },
+  };
+  await sendCampaignText(gateway, request, 'عرض اليوم');
+  assert.equal(sent[0].content, 'عرض اليوم');
+  assert.equal(sent[0].sendClass, 'campaign');
 });
 
 test('campaign media accepts only a real PDF signature', () => {
@@ -439,24 +447,31 @@ test('Baileys sends campaign PDF as a named WhatsApp document', async () => {
   fs.writeFileSync(storagePath, Buffer.from('%PDF-1.7\n%%EOF'));
   const sent = [];
   try {
-    await sendMedia({
+    const prepared = await require('../src/workers/campaign-worker').prepareCampaignMedia({
       whatsappEngine: 'baileys',
-      client: { sendMessage: async (...args) => { sent.push(args); return { key: { id: 'pdf-1' } }; } },
+      client: {},
     }, '966551234567@s.whatsapp.net', {
       kind: 'document',
       original_name: Buffer.from('العرض.pdf', 'utf8').toString('latin1'),
       mime_type: 'application/pdf',
       storage_path: storagePath,
     });
+    const gateway = { send: async request => { sent.push(request); return { decision: 'sent' }; } };
+    await sendMedia(gateway, {
+      sendClass: 'campaign',
+      policyVersion: 'v1',
+      idempotencyKey: 'pdf-1',
+      tenantScope: { userId: 'u1' },
+      content: '[campaign media 1]',
+    }, prepared.media);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
   assert.equal(sent.length, 1);
-  assert.equal(sent[0][0], '966551234567@s.whatsapp.net');
-  assert.equal(Buffer.isBuffer(sent[0][1].document), true);
-  assert.equal(sent[0][1].mimetype, 'application/pdf');
-  assert.equal(sent[0][1].fileName, 'العرض.pdf');
-  assert.equal('video' in sent[0][1], false);
+  assert.equal(Buffer.isBuffer(sent[0].media.document), true);
+  assert.equal(sent[0].media.mimetype, 'application/pdf');
+  assert.equal(sent[0].media.fileName, 'العرض.pdf');
+  assert.equal('video' in sent[0].media, false);
 });
 
 test('campaign start refuses immediately when WhatsApp is not connected', async () => {

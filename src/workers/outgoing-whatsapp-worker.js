@@ -137,7 +137,25 @@ function createWorkerSendGateway({ bot, scopeValidator = validateOutgoingScope }
     },
     scopeStore: {
       async assertSendScope(request) {
-        if (request.sendClass === 'platform_alert') return true;
+        if (request.sendClass === 'platform_alert' && request.conversationId) {
+          return scopeValidator({
+            database: db,
+            userId: request.userId,
+            channelId: request.channelId,
+            conversationId: request.conversationId,
+            sender: request.customerId || request.tenantScope.customerId,
+            replyMessageId: request.messageId || null,
+          });
+        }
+        if (request.sendClass === 'platform_alert') {
+          const ownerDigits = String(process.env.OWNER_ALERT_PHONE || '').replace(/[^\d]/g, '');
+          if (!ownerDigits || request.destination !== `${ownerDigits}@s.whatsapp.net`) {
+            const error = new Error('platform alert destination is not authorized');
+            error.code = 'OUTGOING_SCOPE_MISMATCH';
+            throw error;
+          }
+          return true;
+        }
         const customer = request.customerId || request.tenantScope.customerId;
         if (request.sendClass === 'automated_customer_reply'
             && request.destination !== customer) {
@@ -402,6 +420,8 @@ async function processOutgoingWhatsapp(job, {
       getUserBot,
       reviewBeforeSend,
       enqueueOutgoing,
+      scopeValidator,
+      gatewayFactory,
     });
   }
 
@@ -530,8 +550,11 @@ async function processOutgoingWhatsapp(job, {
       draft: reply,
     });
   } catch (err) {
-    err.code = err.code || 'PRE_SEND_REVIEW_FAILED';
-    throw err;
+    preSend = {
+      reply,
+      suppressed: false,
+      audit: { advisoryFailure: String(err?.message || err) },
+    };
   }
   if (preSend.suppressed) {
     return completeSuppressedOutgoing(job, { replyMessageId, lid: false });
@@ -569,8 +592,21 @@ async function processOutgoingWhatsapp(job, {
     conversationId: payload.conversationId,
     customerId: authoritativeCustomer,
     messageId: replyMessageId || null,
-    idempotencyKey,
+    idempotencyKey: idempotencyKey,
     correlationId: payload.correlationId || stableCorrelationId(`${userId}:${idempotencyKey}`),
+    originalContent: reply,
+    draftStages: [
+      {
+        layer: 'llm_advisory_review',
+        content: String(preSend.reply || reply),
+        metadata: preSend.audit || {},
+      },
+      {
+        layer: 'deterministic_escalation_routing',
+        content: finalReply,
+        metadata: { escalated: routed.escalated === true },
+      },
+    ],
     content: finalReply,
     contentOrigin: payload.source || 'unknown',
     policyVersion: payload.policyVersion,
@@ -673,6 +709,8 @@ async function handleLidOutgoing({
   getUserBot,
   reviewBeforeSend = reviewOutgoingReplyBeforeSend,
   enqueueOutgoing = enqueueOutgoingWhatsapp,
+  scopeValidator = validateOutgoingScope,
+  gatewayFactory = createWorkerSendGateway,
 }) {
   // Try a best-effort send first. Some sessions can deliver to @lid even though
   // it's unreliable in general — better to attempt than to silently drop.
@@ -745,8 +783,11 @@ async function handleLidOutgoing({
         draft: reply,
       });
     } catch (err) {
-      err.code = err.code || 'PRE_SEND_REVIEW_FAILED';
-      throw err;
+      preSend = {
+        reply,
+        suppressed: false,
+        audit: { advisoryFailure: String(err?.message || err) },
+      };
     }
     if (preSend.suppressed) {
       return completeSuppressedOutgoing(job, { replyMessageId, lid: true });
@@ -767,7 +808,54 @@ async function handleLidOutgoing({
     });
     finalReply = String(routed.reply || '').trim();
     if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
-    const lidResult = await bot.client.sendMessage(sender, finalReply);
+    const sendClass = payload.escalation
+      ? 'handoff_notification'
+      : (payload.systemNotice ? 'platform_alert' : 'automated_customer_reply');
+    const idempotencyKey = payload.idempotencyKey
+      || `${sendClass}:${replyMessageId || job.id}`;
+    const gateway = gatewayFactory({ bot, scopeValidator });
+    const gatewayResult = await gateway.send({
+      sendClass,
+      userId,
+      channelId: 'whatsapp',
+      destination: sender,
+      conversationId: payload.conversationId,
+      customerId: payload.escalation ? payload.customerSender : sender,
+      messageId: replyMessageId || null,
+      idempotencyKey: idempotencyKey,
+      correlationId: payload.correlationId || stableCorrelationId(`${userId}:${idempotencyKey}`),
+      originalContent: reply,
+      draftStages: [
+        {
+          layer: 'llm_advisory_review',
+          content: String(preSend.reply || reply),
+          metadata: preSend.audit || {},
+        },
+        {
+          layer: 'deterministic_escalation_routing',
+          content: finalReply,
+          metadata: { escalated: routed.escalated === true },
+        },
+      ],
+      content: finalReply,
+      contentOrigin: payload.source || 'unknown',
+      policyVersion: payload.policyVersion,
+      providerMessageId: payload.providerMessageId,
+      customerText: payload.customerText || payload.text || '',
+      conversationFocus: payload.conversationFocus || {},
+      tenantScope: {
+        userId,
+        customerId: payload.escalation ? payload.customerSender : sender,
+        conversationId: payload.conversationId,
+      },
+    });
+    if (gatewayResult.decision !== 'sent') {
+      if (gatewayResult.decision === 'block') {
+        return completeSuppressedOutgoing(job, { replyMessageId, lid: true });
+      }
+      return { skipped: true, reason: gatewayResult.decision, lid: true };
+    }
+    const lidResult = gatewayResult.provider?.raw;
     await recordWhatsappMessageId({
       userId,
       conversationId: payload.conversationId,
@@ -801,10 +889,6 @@ async function handleLidOutgoing({
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send succeeded jid=${sender}`);
     return { sent: true, replyMessageId, lid: true };
   } catch (err) {
-    // Review failures are retriable and must never be converted into the
-    // legacy @lid "best effort skipped" result. BullMQ retries the job; no
-    // unreviewed text reaches WhatsApp.
-    if (err?.code === 'PRE_SEND_REVIEW_FAILED') throw err;
     sendError = err;
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send failed jid=${sender}: ${err.message}`);
   }
@@ -816,7 +900,13 @@ async function handleLidOutgoing({
     error: sendError?.message || null,
   }, messageScope(payload));
 
-  await notifyOwnerOfLidFailure({ userId, sender, getUserBot }).catch((notifyErr) => {
+  await notifyOwnerOfLidFailure({
+    userId,
+    sender,
+    getUserBot,
+    gatewayFactory,
+    scopeValidator,
+  }).catch((notifyErr) => {
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] owner notify for @lid failed: ${notifyErr.message}`);
   });
 
@@ -839,7 +929,13 @@ async function completeSuppressedOutgoing(job, { replyMessageId, lid = false } =
   return { skipped: true, reason: 'pre_send_suppressed', replyMessageId, lid };
 }
 
-async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
+async function notifyOwnerOfLidFailure({
+  userId,
+  sender,
+  getUserBot,
+  gatewayFactory = createWorkerSendGateway,
+  scopeValidator = validateOutgoingScope,
+}) {
   const ownerPhone = String(process.env.OWNER_ALERT_PHONE || '').replace(/[^\d]/g, '');
   if (!ownerPhone) return false;
   const ownerJid = `${ownerPhone}@s.whatsapp.net`;
@@ -852,11 +948,24 @@ async function notifyOwnerOfLidFailure({ userId, sender, getUserBot }) {
   // Route through bot.client only — bot.sock can hold a stale reference across
   // reconnects, sending to a dead socket throws silently in fire-and-forget
   // contexts.
-  if (loadedBot?.client?.sendMessage) {
-    await loadedBot.client.sendMessage(ownerJid, text);
-    return true;
-  }
-  return false;
+  if (!loadedBot?.client) return false;
+  const gateway = gatewayFactory({ bot: loadedBot, scopeValidator });
+  const idempotencyKey = `lid-owner-alert:${userId}:${sender}`;
+  const result = await gateway.send({
+    sendClass: 'platform_alert',
+    userId,
+    channelId: 'whatsapp',
+    destination: ownerJid,
+    idempotencyKey: idempotencyKey,
+    correlationId: stableCorrelationId(`${userId}:${idempotencyKey}`),
+    content: text,
+    policyVersion: require('../policy/platform-reply-policy').PLATFORM_REPLY_POLICY.policyVersion,
+    tenantScope: {
+      userId,
+      internalDestination: ownerJid,
+    },
+  });
+  return result.decision === 'sent' || result.decision === 'duplicate';
 }
 
 function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
@@ -887,8 +996,9 @@ async function isReplyAlreadySent({
     const row = result.rows[0];
     if (!row) return false;
     return row.status === 'sent' || !!row.whatsapp_message_id;
-  } catch (_) {
-    return false;
+  } catch (error) {
+    error.code = error.code || 'IDEMPOTENCY_LOOKUP_FAILED';
+    throw error;
   }
 }
 
@@ -991,38 +1101,6 @@ async function isConversationOwnerPaused({
   } catch (_) {
     return false;
   }
-}
-
-async function sendWhatsappReply(bot, { sender, reply, providerMessageId }) {
-  const timeoutMs = TIMERS.SEND_MESSAGE_TIMEOUT_MS;
-  return Promise.race([
-    sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), timeoutMs)),
-  ]);
-}
-
-async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }) {
-  if (providerMessageId && typeof bot.client.getMessageById === 'function') {
-    const original = await bot.client.getMessageById(providerMessageId).catch((err) => {
-      bot.log?.(`message reply lookup failed: ${err.message}`);
-      return null;
-    });
-    if (original && typeof original.reply === 'function') {
-      return original.reply(reply);
-    }
-  }
-
-  if (typeof bot.client.getChatById === 'function') {
-    const chat = await bot.client.getChatById(sender).catch((err) => {
-      bot.log?.(`chat lookup failed for ${sender}: ${err.message}`);
-      return null;
-    });
-    if (chat && typeof chat.sendMessage === 'function') {
-      return chat.sendMessage(reply);
-    }
-  }
-
-  return bot.client.sendMessage(sender, reply);
 }
 
 function resolveOutgoingSettleMs(bot) {
@@ -1220,7 +1298,6 @@ module.exports = {
   loadAutoReplyEnabled,
   requeuePersistedOutgoingJobs,
   resolveOutgoingSettleMs,
-  sendWhatsappReply,
   shouldBlockOutgoingForQuota,
   shouldCancelOutgoingForStoppedBot,
   shouldSkipStaleOutgoingPayload,

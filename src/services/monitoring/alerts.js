@@ -1,6 +1,12 @@
 'use strict';
 
 const { normalizeOutboundJid } = require('../whatsapp/baileys-connection-manager');
+const dbDefault = require('../../db/client');
+const { PLATFORM_REPLY_POLICY } = require('../../policy/platform-reply-policy');
+const { createReplyAuditStore } = require('../audit/reply-audit-store');
+const { WhatsAppSendGateway } = require('../whatsapp/whatsapp-send-gateway');
+const { createWhatsAppTransportAdapter } = require('../whatsapp/whatsapp-transport-adapter');
+const { stableCorrelationId } = require('../whatsapp/runtime-send-gateway');
 
 function formatIncidentMessage(kind, incident) {
   const title = kind === 'resolved' ? '✅ تعافت الخدمة' : '🚨 تنبيه: عطل في منصة جواب';
@@ -21,6 +27,25 @@ function ownerJid(phone) {
   return digits ? normalizeOutboundJid(digits) : null;
 }
 
+function createAlertSendGateway({ bot, database, allowedDestination }) {
+  const gateway = new WhatsAppSendGateway({
+    auditStore: createReplyAuditStore({ database }),
+    policyStore: { loadMerchantPolicy: async () => null },
+    scopeStore: {
+      async assertSendScope(request) {
+        if (request.destination !== allowedDestination
+            || request.tenantScope.internalDestination !== allowedDestination) {
+          const error = new Error('Alert destination is not authorized');
+          error.code = 'OUTGOING_SCOPE_MISMATCH';
+          throw error;
+        }
+      },
+    },
+    transport: createWhatsAppTransportAdapter({ client: bot.client }),
+  });
+  return gateway;
+}
+
 /**
  * Sends incident alerts through every configured channel. Each channel is best-effort:
  * a failure in one never blocks the others, and the function never throws.
@@ -31,6 +56,8 @@ function createAlertDispatcher({
   ownerPhone = process.env.OWNER_ALERT_PHONE || '',
   ownerEmail = process.env.OWNER_ALERT_EMAIL || '',
   logger = console,
+  database = dbDefault,
+  gatewayFactory = createAlertSendGateway,
 } = {}) {
   async function sendWhatsapp(text) {
     const jid = ownerJid(ownerPhone);
@@ -38,8 +65,25 @@ function createAlertDispatcher({
     try {
       const bot = await getOwnerBot();
       if (!bot || bot.appState?.status !== 'connected' || !bot.client) return false;
-      await bot.client.sendMessage(jid, text);
-      return true;
+      const userId = bot.userId;
+      if (!userId || !database?.isConfigured?.()) return false;
+      const idempotencyKey = `platform-alert:${stableCorrelationId(text)}`;
+      const gateway = gatewayFactory({ bot, database, allowedDestination: jid });
+      const result = await gateway.send({
+        sendClass: 'platform_alert',
+        userId,
+        channelId: 'whatsapp',
+        destination: jid,
+        idempotencyKey: idempotencyKey,
+        correlationId: stableCorrelationId(`${userId}:${idempotencyKey}`),
+        content: text,
+        policyVersion: PLATFORM_REPLY_POLICY.policyVersion,
+        tenantScope: {
+          userId,
+          internalDestination: jid,
+        },
+      });
+      return result.decision === 'sent' || result.decision === 'duplicate';
     } catch (err) {
       logger.warn?.('monitor', `owner WhatsApp alert failed: ${err.message}`);
       return false;
@@ -71,4 +115,9 @@ function createAlertDispatcher({
   return { dispatch, sendWhatsapp, sendEmail };
 }
 
-module.exports = { createAlertDispatcher, formatIncidentMessage, ownerJid };
+module.exports = {
+  createAlertDispatcher,
+  createAlertSendGateway,
+  formatIncidentMessage,
+  ownerJid,
+};

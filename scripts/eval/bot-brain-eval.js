@@ -27,7 +27,7 @@ const config = {
   model: MODEL,
   openaiApiKey: KEY,
   maxResponseLength: 300,
-  botInstructions: 'أنت خبير عطور اسمك سلطان. أسلوب خليجي راقي ومختصر.',
+    merchantPolicy: require('../../tests/helpers/canonical-config').makeCanonicalConfig().merchantPolicy,
   products: [
     { name: 'عود كمبودي', price: '450 ريال', description: 'تجربة 3 جرام' },
     { name: 'مسك أبيض', price: '120 ريال' },

@@ -111,7 +111,18 @@ test('alert dispatcher sends WhatsApp to the owner when a connected bot is avail
   const sent = [];
   const dispatcher = createAlertDispatcher({
     ownerPhone: '+966500000000',
-    getOwnerBot: async () => ({ appState: { status: 'connected' }, client: { sendMessage: async (jid, text) => sent.push({ jid, text }) } }),
+    database: { isConfigured: () => true },
+    getOwnerBot: async () => ({
+      userId: 'owner-user',
+      appState: { status: 'connected' },
+      client: {},
+    }),
+    gatewayFactory: () => ({
+      send: async request => {
+        sent.push({ jid: request.destination, text: request.content });
+        return { decision: 'sent' };
+      },
+    }),
   });
   const channels = await dispatcher.dispatch({ kind: 'open', incident: { component: 'واتساب', detail: 'down', severity: 'critical' } });
   assert.deepEqual(channels, ['whatsapp']);

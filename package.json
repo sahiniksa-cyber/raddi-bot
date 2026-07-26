@@ -12,7 +12,9 @@
     "db:compact-message-media": "node scripts/compact-message-media.js",
     "migrate:json": "node scripts/migrate-json-to-postgres.js",
     "worker:ai": "node src/workers/ai-worker.js",
-    "test": "node --test"
+    "test": "node --test",
+    "simulate:stabilization": "node scripts/simulate-stabilization.js --seed 20260726 --sequences 10000 --report docs/stabilization/simulation-report.json",
+    "test:critical-mutations": "node scripts/run-critical-mutations.js --report docs/stabilization/mutation-report.json"
   },
   "engines": {
     "node": ">=20.18.1"

@@ -98,30 +98,27 @@ test('suppressed duplicate completes without any WhatsApp send', async () => {
   assert.equal(sent.length, 0);
 });
 
-test('review failure is fail-closed on the normal path', async () => {
+test('advisory LLM review failure cannot veto a deterministically authorized normal reply', async () => {
   const sent = [];
-  await assert.rejects(
-    processOutgoingWhatsapp(makeJob(), {
-      getUserBot: async () => makeBot(sent),
-      scopeValidator: validateScope,
-      reviewBeforeSend: async () => { throw new Error('review timeout'); },
-      gatewayFactory,
-    }),
-    /review timeout/,
-  );
-  assert.equal(sent.length, 0);
+  const result = await processOutgoingWhatsapp(makeJob(), {
+    getUserBot: async () => makeBot(sent),
+    scopeValidator: validateScope,
+    reviewBeforeSend: async () => { throw new Error('review timeout'); },
+    gatewayFactory,
+  });
+  assert.equal(result.sent, true);
+  assert.deepEqual(sent.map(item => item.text), ['مسودة غير مراجعة']);
 });
-test('review failure is retried, not swallowed, on the @lid path', async () => {
+test('advisory LLM review failure cannot bypass or veto the deterministic @lid gateway', async () => {
   const sent = [];
-  await assert.rejects(
-    processOutgoingWhatsapp(makeJob('278571713060916@lid'), {
-      getUserBot: async () => makeBot(sent),
-      scopeValidator: validateScope,
-      reviewBeforeSend: async () => { throw new Error('review timeout'); },
-    }),
-    /review timeout/,
-  );
-  assert.equal(sent.length, 0);
+  const result = await processOutgoingWhatsapp(makeJob('278571713060916@lid'), {
+    getUserBot: async () => makeBot(sent),
+    scopeValidator: validateScope,
+    reviewBeforeSend: async () => { throw new Error('review timeout'); },
+    gatewayFactory,
+  });
+  assert.equal(result.sent, true);
+  assert.deepEqual(sent.map(item => item.text), ['مسودة غير مراجعة']);
 });
 
 test('disabled auto-reply cancels an already queued AI reply before review or send', async () => {

@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+const { gatewayFactory } = require('./helpers/outgoing-gateway-double');
 
 // Stub db before loading the worker so markReplyMessage / updateJobStatus don't try
 // to talk to a real database.
@@ -79,7 +80,11 @@ test('@lid send failure triggers owner notification with Arabic alert', async ()
 
     const getUserBot = async () => fakeBot;
 
-    const result = await processOutgoingWhatsapp(makeJob(), { getUserBot });
+    const result = await processOutgoingWhatsapp(makeJob(), {
+      getUserBot,
+      gatewayFactory,
+      scopeValidator: async () => ({ content: null }),
+    });
 
     assert.equal(result.skipped, true);
     assert.equal(result.reason, 'sender_is_lid_only');
@@ -138,7 +143,11 @@ test('@lid best-effort send that succeeds marks job completed (no alert)', async
       log: () => {},
     });
 
-    const result = await processOutgoingWhatsapp(makeJob(), { getUserBot });
+    const result = await processOutgoingWhatsapp(makeJob(), {
+      getUserBot,
+      gatewayFactory,
+      scopeValidator: async () => ({ content: null }),
+    });
     assert.equal(result.sent, true);
     assert.equal(result.lid, true);
     // Only the customer send — no owner alert

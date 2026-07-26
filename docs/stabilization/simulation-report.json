@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-07-26T17:00:28.538Z",
+  "seed": 20260726,
+  "sequences": 10000,
+  "networkDependencies": 0,
+  "assertions": 10000,
+  "criticalCases": 12,
+  "coverage": {
+    "valid-canonical-reply": 834,
+    "cross-product-number": 834,
+    "unauthorized-contact": 833,
+    "safe-fallback": 833,
+    "missing-policy": 833,
+    "stale-policy": 833,
+    "duplicate-job": 833,
+    "tenant-mismatch": 833,
+    "database-failure": 833,
+    "human-byte-preservation": 833,
+    "campaign-byte-preservation": 834,
+    "platform-policy-version": 834
+  },
+  "status": "passed"
+}

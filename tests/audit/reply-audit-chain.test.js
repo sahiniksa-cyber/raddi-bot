@@ -236,7 +236,7 @@ test('audit store exposes append-only operations and no update or delete API', (
   const { database } = makeAuditDatabase();
   const store = createReplyAuditStore({ database });
 
-  assert.deepEqual(Object.keys(store).sort(), ['append', 'reserveSend']);
+  assert.deepEqual(Object.keys(store).sort(), ['append', 'markReservation', 'reserveSend']);
   assert.equal(store.update, undefined);
   assert.equal(store.delete, undefined);
 });

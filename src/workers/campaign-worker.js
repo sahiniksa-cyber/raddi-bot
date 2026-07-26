@@ -8,6 +8,11 @@ const { createRedisConnection } = require('../queues/redis');
 const { CAMPAIGN_QUEUE_NAME, enqueueCampaignRecipient } = require('../queues/campaign-queue');
 const { checkMessageQuota, decrementMessageQuota } = require('../services/billing/message-quota');
 const { buildProductCatalog } = require('../services/products/product-knowledge');
+const { compileMerchantPolicy } = require('../policy/merchant-policy-compiler');
+const { createReplyAuditStore } = require('../services/audit/reply-audit-store');
+const { WhatsAppSendGateway } = require('../services/whatsapp/whatsapp-send-gateway');
+const { createWhatsAppTransportAdapter } = require('../services/whatsapp/whatsapp-transport-adapter');
+const { stableCorrelationId } = require('../services/whatsapp/runtime-send-gateway');
 const { normalizeAudienceRules } = require('../services/campaigns/campaign-service');
 const { normalizeUploadFilename } = require('../services/campaigns/media-store');
 const {
@@ -129,7 +134,7 @@ async function recoverCampaignDeliveries({ database = db, campaignQueue, staleMs
   return summary;
 }
 
-async function sendMedia(bot, sender, media) {
+async function prepareCampaignMedia(bot, sender, media) {
   const buffer = await fs.readFile(media.storage_path);
   const originalName = normalizeUploadFilename(
     media.original_name,
@@ -148,19 +153,118 @@ async function sendMedia(bot, sender, media) {
             mimetype: media.mime_type,
             fileName: originalName,
           };
-    return bot.client.sendMessage(target, content);
+    return { target, media: content };
   }
   const { MessageMedia } = require('whatsapp-web.js');
   const encoded = buffer.toString('base64');
   const payload = new MessageMedia(media.mime_type, encoded, originalName);
-  return bot.client.sendMessage(target, payload);
+  return { target, media: payload };
 }
 
-async function sendCampaignText(bot, sender, message) {
-  const target = bot.whatsappEngine === 'whatsapp-web'
+function campaignTarget(bot, sender) {
+  return bot.whatsappEngine === 'whatsapp-web'
     ? String(sender).replace(/@s\.whatsapp\.net$/i, '@c.us')
     : sender;
-  return bot.client.sendMessage(target, message);
+}
+
+async function sendMedia(gateway, request, media) {
+  return gateway.send({
+    ...request,
+    sendClass: request.sendClass,
+    policyVersion: request.policyVersion,
+    idempotencyKey: request.idempotencyKey,
+    tenantScope: request.tenantScope,
+    media,
+  });
+}
+
+async function sendCampaignText(gateway, request, message) {
+  return gateway.send({
+    ...request,
+    sendClass: request.sendClass,
+    policyVersion: request.policyVersion,
+    idempotencyKey: request.idempotencyKey,
+    tenantScope: request.tenantScope,
+    content: message,
+  });
+}
+
+async function loadCampaignPolicyVersion(database, userId) {
+  const result = await database.query(
+    `SELECT config->'merchantPolicy' AS merchant_policy
+       FROM bot_configs WHERE user_id = $1 LIMIT 1`,
+    [userId],
+  );
+  const compiled = compileMerchantPolicy(result.rows[0]?.merchant_policy);
+  if (!compiled.ok || compiled.policy.status !== 'active') throw new Error('POLICY_INVALID');
+  return compiled.policyVersion;
+}
+
+function createCampaignSendGateway({ bot, database }) {
+  const gateway = new WhatsAppSendGateway({
+    auditStore: createReplyAuditStore({ database }),
+    policyStore: {
+      async loadMerchantPolicy(userId) {
+        const result = await database.query(
+          `SELECT config->'merchantPolicy' AS merchant_policy
+             FROM bot_configs WHERE user_id = $1 LIMIT 1`,
+          [userId],
+        );
+        return result.rows[0]?.merchant_policy || null;
+      },
+    },
+    scopeStore: {
+      async assertSendScope(request) {
+        const result = await database.query(
+          `SELECT r.id FROM campaign_recipients r
+             JOIN campaigns c ON c.id = r.campaign_id
+            WHERE r.id = $1 AND c.id = $2 AND c.user_id = $3 AND r.sender = $4
+            LIMIT 1`,
+          [
+            request.tenantScope.recipientId,
+            request.tenantScope.campaignId,
+            request.userId,
+            request.tenantScope.customerId,
+          ],
+        );
+        if (!result.rows[0]) {
+          const error = new Error('Campaign destination is outside tenant scope');
+          error.code = 'OUTGOING_SCOPE_MISMATCH';
+          throw error;
+        }
+      },
+    },
+    transport: createWhatsAppTransportAdapter({ client: bot.client }),
+  });
+  return gateway;
+}
+
+function campaignGatewayRequest({
+  campaign,
+  recipient,
+  destination,
+  content,
+  policyVersion,
+  idempotencyKey,
+}) {
+  return {
+    sendClass: 'campaign',
+    userId: campaign.user_id,
+    channelId: 'whatsapp',
+    destination,
+    conversationId: recipient.conversation_id || null,
+    customerId: recipient.sender,
+    idempotencyKey,
+    correlationId: stableCorrelationId(`${campaign.user_id}:${idempotencyKey}`),
+    content,
+    policyVersion,
+    tenantScope: {
+      userId: campaign.user_id,
+      campaignId: campaign.id,
+      recipientId: recipient.id,
+      customerId: recipient.sender,
+    },
+  };
 }
 
 async function recordOutbound(database, campaign, recipient, providerMessageIds) {
@@ -274,7 +378,11 @@ async function recipientMatchesKeywordAudience(database, campaign, recipient, au
   return Boolean(result.rows[0]);
 }
 
-async function processCampaignRecipient(job, { database = db, getUserBot } = {}) {
+async function processCampaignRecipient(job, {
+  database = db,
+  getUserBot,
+  gatewayFactory = createCampaignSendGateway,
+} = {}) {
   const { campaignId, recipientId } = job.data || {};
   const loaded = await database.transaction(async client => {
     const result = await client.query(
@@ -373,6 +481,9 @@ async function processCampaignRecipient(job, { database = db, getUserBot } = {})
       error.code = 'WHATSAPP_NOT_CONNECTED';
       throw error;
     }
+    const policyVersion = await loadCampaignPolicyVersion(database, campaign.user_id);
+    const gateway = gatewayFactory({ bot, database });
+    const destination = campaignTarget(bot, recipient.sender);
 
     const mediaResult = await database.query(
       `SELECT * FROM campaign_media WHERE campaign_id = $1 ORDER BY sort_order`,
@@ -381,8 +492,23 @@ async function processCampaignRecipient(job, { database = db, getUserBot } = {})
     const ids = Array.isArray(recipient.provider_message_ids) ? [...recipient.provider_message_ids] : [];
     let cursor = Number(recipient.media_cursor) || 0;
     for (; cursor < mediaResult.rows.length; cursor += 1) {
-      const result = await sendMedia(bot, recipient.sender, mediaResult.rows[cursor]);
-      const id = providerId(result);
+      const prepared = await prepareCampaignMedia(bot, recipient.sender, mediaResult.rows[cursor]);
+      const idempotencyKey = `campaign:${campaign.id}:${recipient.id}:media:${cursor}`;
+      const request = campaignGatewayRequest({
+        campaign,
+        recipient,
+        destination: prepared.target,
+        content: `[campaign media ${cursor + 1}]`,
+        policyVersion,
+        idempotencyKey,
+      });
+      const result = await sendMedia(gateway, request, prepared.media);
+      if (!['sent', 'duplicate'].includes(result.decision)) {
+        throw new Error(`Campaign media was not authorized: ${result.decision}`);
+      }
+      const id = result.provider?.providerMessageId
+        || result.reservation?.provider_message_id
+        || '';
       if (id) ids.push(id);
       await database.query(
         `UPDATE campaign_recipients SET media_cursor = $2, provider_message_ids = $3::jsonb, updated_at = NOW() WHERE id = $1`,
@@ -391,8 +517,22 @@ async function processCampaignRecipient(job, { database = db, getUserBot } = {})
     }
     if (!recipient.text_sent) {
       if (String(campaign.message_text || '').trim()) {
-        const result = await sendCampaignText(bot, recipient.sender, campaign.message_text);
-        const id = providerId(result);
+        const idempotencyKey = `campaign:${campaign.id}:${recipient.id}:text`;
+        const request = campaignGatewayRequest({
+          campaign,
+          recipient,
+          destination,
+          content: campaign.message_text,
+          policyVersion,
+          idempotencyKey,
+        });
+        const result = await sendCampaignText(gateway, request, campaign.message_text);
+        if (!['sent', 'duplicate'].includes(result.decision)) {
+          throw new Error(`Campaign text was not authorized: ${result.decision}`);
+        }
+        const id = result.provider?.providerMessageId
+          || result.reservation?.provider_message_id
+          || '';
         if (id) ids.push(id);
       }
       await database.query(
@@ -461,6 +601,9 @@ module.exports = {
   recoverCampaignDeliveries,
   recipientMatchesKeywordAudience,
   randomDelayMs,
+  createCampaignSendGateway,
+  loadCampaignPolicyVersion,
+  prepareCampaignMedia,
   sendMedia,
   sendCampaignText,
   scheduleNextRecipient,

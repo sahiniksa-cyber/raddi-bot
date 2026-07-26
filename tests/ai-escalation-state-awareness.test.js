@@ -6,10 +6,11 @@ const assert = require('node:assert/strict');
 const { getPendingEscalation } = require('../src/workers/ai-worker');
 const AIClient = require('../lib/ai-client');
 const { DEFAULT_CONFIG } = require('../lib/constants');
+const { canonicalConfig } = require('./helpers/canonical-config');
 
 function createClient(config) {
   return new AIClient(
-    { ...DEFAULT_CONFIG, ...config },
+    { ...DEFAULT_CONFIG, ...canonicalConfig(), ...config },
     { info: () => {}, warn: () => {}, error: () => {} },
     { record: () => {} },
   );
