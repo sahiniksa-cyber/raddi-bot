@@ -2,22 +2,49 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
 
-const { buildFixtureCorpus, createLegacyOracleEvidence } = require('../scripts/legacy-exceljs-oracle');
+const {
+  buildFixtureCorpus,
+  loadFrozenLegacyEvidence,
+} = require('../scripts/legacy-exceljs-oracle');
 
-const execFileAsync = promisify(execFile);
+const evidencePath = path.join(
+  __dirname,
+  '..',
+  'docs',
+  'stabilization',
+  'dependency-hardening',
+  'legacy-exceljs-oracle.json',
+);
 
-test('legacy ExcelJS oracle preserves semantic import, export, and ledger behavior', async () => {
-  const evidence = await createLegacyOracleEvidence();
-  const committedEvidence = JSON.parse(fs.readFileSync(path.join(
-    __dirname, '..', 'docs', 'stabilization', 'dependency-hardening', 'legacy-exceljs-oracle.json',
-  ), 'utf8'));
+test('committed legacy ExcelJS evidence has frozen integrity and the literal semantic schema', async () => {
+  const rawEvidence = fs.readFileSync(evidencePath);
+  assert.equal(
+    crypto.createHash('sha256').update(rawEvidence).digest('hex'),
+    'e294421774e7b6abf78dd8c527058a53e65e6e21579fee8fd456df74058592ae',
+  );
+  const evidence = await loadFrozenLegacyEvidence();
 
   assert.equal(evidence.oracle, 'legacy-exceljs-4.4.0');
+  assert.equal(evidence.generatedAt, 'deterministic-fixture-corpus');
+  assert.deepEqual(Object.keys(evidence.imports), [
+    'semanticWorkbook',
+    'missingPhoneColumn',
+    'largeWorkbook',
+    'validCsv',
+    'corruptXlsx',
+    'emptyXlsx',
+    'spoofedXlsx',
+    'unsupportedExtension',
+  ]);
+  assert.deepEqual(Object.keys(evidence.exports), [
+    'contactTemplate',
+    'contactExport',
+    'signalExport',
+  ]);
   assert.equal(evidence.imports.semanticWorkbook.result.totalRows, 8);
   assert.deepEqual(evidence.imports.semanticWorkbook.normalizedPhones, [
     '966551234567',
@@ -73,39 +100,13 @@ test('legacy ExcelJS oracle preserves semantic import, export, and ledger behavi
     category: 'BAD_REQUEST', code: 'BAD_REQUEST', statusCode: 400,
     message: 'صيغة الملف غير مدعومة. استخدم CSV أو XLSX',
   });
-  assert.deepEqual(evidence, committedEvidence);
+  for (const importEvidence of Object.values(evidence.imports)) {
+    assert.deepEqual(Object.keys(importEvidence.fixture), ['fileName']);
+  }
 });
 
 test('large workbook corpus fixture exceeds 64 KiB outside canonical evidence', async () => {
   const fixtures = await buildFixtureCorpus();
 
   assert.ok(fixtures.largeWorkbook.buffer.length > 64 * 1024);
-});
-
-test('legacy oracle canonical evidence is deterministic across concurrent subprocesses', async () => {
-  const projectRoot = path.join(__dirname, '..');
-  const generateEvidence = [
-    "const { createLegacyOracleEvidence } = require('./scripts/legacy-exceljs-oracle');",
-    'createLegacyOracleEvidence()',
-    "  .then(evidence => process.stdout.write(JSON.stringify(evidence)))",
-    "  .catch(error => { process.stderr.write(error.stack || error.message); process.exitCode = 1; });",
-  ].join('');
-  const runGenerator = () => execFileAsync(
-    process.execPath,
-    ['-e', generateEvidence],
-    { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024 },
-  );
-
-  const [left, right] = await Promise.all([runGenerator(), runGenerator()]);
-  const leftEvidence = JSON.parse(left.stdout);
-  const rightEvidence = JSON.parse(right.stdout);
-
-  assert.deepEqual(leftEvidence, rightEvidence);
-  for (const importEvidence of Object.values(leftEvidence.imports)) {
-    assert.deepEqual(
-      Object.keys(importEvidence.fixture),
-      ['fileName'],
-      'canonical fixture evidence must contain semantic identity only',
-    );
-  }
 });

@@ -19,6 +19,10 @@ const PAYMENT_COLUMNS = Object.freeze([
   { header: 'Activation Type', key: 'activationType', width: 18 },
   { header: 'Note', key: 'note', width: 34 },
 ]);
+const PAYMENT_KEY_BY_HEADER = new Map(PAYMENT_COLUMNS.map(column => [
+  column.header.trim().toLowerCase(),
+  column.key,
+]));
 const ledgerQueues = new Map();
 
 function buildLedgerRow(record = {}) {
@@ -40,26 +44,38 @@ function ledgerPath(dataDir) {
   return path.join(dataDir || process.env.DATA_DIR || process.cwd(), 'billing', 'payments-ledger.xlsx');
 }
 
-function ledgerRowValues(record) {
+function ledgerRowValues(record, columns = PAYMENT_COLUMNS) {
   const row = buildLedgerRow(record);
-  return PAYMENT_COLUMNS.map(column => row[column.key]);
+  return columns.map(column => {
+    const key = PAYMENT_KEY_BY_HEADER.get(String(column.header ?? '').trim().toLowerCase());
+    return key ? row[key] : null;
+  });
 }
 
 function restoreSheet(sheet) {
-  if (sheet.name === 'Payments') {
+  const header = sheet.rows[0] || [];
+  if (sheet.name === 'Payments' && header.length === 0) {
     return {
       name: sheet.name,
       columns: PAYMENT_COLUMNS.map(column => ({ ...column })),
-      rows: sheet.rows.slice(1).map(row => [...row]),
+      rows: [],
     };
   }
-  const header = sheet.rows[0] || [];
   return {
     name: sheet.name,
-    columns: header.map((value, index) => ({
-      header: value,
-      key: `column${index + 1}`,
-    })),
+    columns: header.map((value, index) => {
+      const paymentKey = sheet.name === 'Payments'
+        ? PAYMENT_KEY_BY_HEADER.get(String(value ?? '').trim().toLowerCase())
+        : null;
+      const canonicalColumn = paymentKey
+        ? PAYMENT_COLUMNS.find(column => column.key === paymentKey)
+        : null;
+      return {
+        header: value,
+        key: `column${index + 1}`,
+        width: canonicalColumn?.width,
+      };
+    }),
     rows: sheet.rows.slice(1).map(row => [...row]),
   };
 }
@@ -93,7 +109,7 @@ async function appendLedgerRow(record, { dataDir } = {}) {
       };
       sheets.push(payments);
     }
-    payments.rows.push(ledgerRowValues(record));
+    payments.rows.push(ledgerRowValues(record, payments.columns));
     await writeBillingLedgerAtomic(file, { sheets });
     return file;
   });

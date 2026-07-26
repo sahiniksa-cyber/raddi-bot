@@ -155,3 +155,101 @@ test('billing append accepts an existing valid workbook with no used cells', asy
     payment(1).date, 'Customer 1', 'user1@example.com', 10.01, 'SAR', 'card', 'pay-1', 'paid', 'paid', 'append 1',
   ]);
 });
+
+test('existing Payments headers and cells stay positional while canonical labels align the new row', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'billing-ledger-reordered-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const billingDirectory = path.join(dataDir, 'billing');
+  const file = path.join(billingDirectory, 'payments-ledger.xlsx');
+  await fs.mkdir(billingDirectory, { recursive: true });
+  const headers = [
+    'Legacy Customer Ref',
+    'Currency',
+    'Name',
+    'Provider Payment ID',
+    'Date',
+    'Amount',
+    'Paid Total',
+    'Email',
+    'Note',
+    'Method',
+    'Status',
+    'Activation Type',
+  ];
+  const legacyRow = [
+    'legacy-ref-1',
+    'EUR',
+    'Legacy Name',
+    'legacy-payment',
+    'legacy-date',
+    77.7,
+    'renamed-value',
+    'legacy@example.com',
+    'legacy note',
+    'bank',
+    'settled',
+    'migration',
+  ];
+  const original = new ExcelJS.Workbook();
+  const payments = original.addWorksheet('Payments');
+  payments.addRow(headers);
+  payments.addRow(legacyRow);
+  await original.xlsx.writeFile(file);
+  const record = payment(2);
+
+  await appendLedgerRow(record, { dataDir });
+
+  const reopened = new ExcelJS.Workbook();
+  await reopened.xlsx.readFile(file);
+  const sheet = reopened.getWorksheet('Payments');
+  const positionalValues = rowNumber => Array.from(
+    { length: headers.length },
+    (_, index) => sheet.getRow(rowNumber).getCell(index + 1).value,
+  );
+  assert.deepEqual(positionalValues(1), headers);
+  assert.deepEqual(positionalValues(2), legacyRow);
+  assert.deepEqual(positionalValues(3), [
+    null,
+    'USD',
+    'Customer 2',
+    'pay-2',
+    record.date,
+    10.02,
+    null,
+    'user2@example.com',
+    'append 2',
+    'card',
+    'paid',
+    'paid',
+  ]);
+});
+
+test('a rejected ledger append does not poison the per-path queue for the next valid append', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'billing-ledger-recovery-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const billingDirectory = path.join(dataDir, 'billing');
+  const file = path.join(billingDirectory, 'payments-ledger.xlsx');
+  await fs.mkdir(billingDirectory, { recursive: true });
+  await fs.writeFile(file, 'not an XLSX ledger');
+
+  await assert.rejects(appendLedgerRow(payment(1), { dataDir }), error => (
+    error.code === 'SPREADSHEET_NOT_XLSX'
+  ));
+  await fs.rm(file);
+
+  await appendLedgerRow(payment(2), { dataDir });
+
+  const rows = await readPaymentRows(file);
+  assert.deepEqual(rows.slice(1), [[
+    payment(2).date,
+    'Customer 2',
+    'user2@example.com',
+    10.02,
+    'USD',
+    'card',
+    'pay-2',
+    'paid',
+    'paid',
+    'append 2',
+  ]]);
+});

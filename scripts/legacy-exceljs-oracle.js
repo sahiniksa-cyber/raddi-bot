@@ -321,13 +321,13 @@ async function createCurrentSpreadsheetEvidence() {
   };
 }
 
-async function createLegacyOracleEvidence() {
+async function loadFrozenLegacyEvidence() {
   return JSON.parse(await fs.readFile(LEGACY_EVIDENCE_PATH, 'utf8'));
 }
 
 async function main() {
   const output = process.argv[2] || path.join('docs', 'stabilization', 'dependency-hardening', 'legacy-exceljs-oracle.json');
-  const evidence = await createLegacyOracleEvidence();
+  const evidence = await loadFrozenLegacyEvidence();
   await fs.mkdir(path.dirname(output), { recursive: true });
   await fs.writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
   process.stdout.write(`${output}\n`);
@@ -343,5 +343,5 @@ if (require.main === module) {
 module.exports = {
   buildFixtureCorpus,
   createCurrentSpreadsheetEvidence,
-  createLegacyOracleEvidence,
+  loadFrozenLegacyEvidence,
 };
