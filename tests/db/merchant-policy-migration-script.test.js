@@ -359,9 +359,18 @@ test('dry-run reports unsafe raw JSON numbers without parsing or changing data',
     '{"products":[{"id":"p1","name":"unsafe","price":{"amountMinor":9007199254740993,"currency":"SAR"}}],"botInstructions":"literal 9007199254740993 stays text"}';
   const unsafeDecimalRaw =
     '{"products":[],"legacyDecimal":1.0000000000000001e+0}';
+  const unsafeOrdinaryDecimalRaw =
+    '{"products":[],"legacyDecimal":0.1}';
+  const unsafeSubnormalRaw =
+    '{"products":[],"legacyDecimal":1e-323}';
   const { database, state, calls } = makeDatabase([
     { user_id: 'merchant-unsafe-product', configRaw: unsafeProductRaw },
     { user_id: 'merchant-unsafe-decimal', configRaw: unsafeDecimalRaw },
+    {
+      user_id: 'merchant-unsafe-ordinary-decimal',
+      configRaw: unsafeOrdinaryDecimalRaw,
+    },
+    { user_id: 'merchant-unsafe-subnormal', configRaw: unsafeSubnormalRaw },
   ]);
 
   const result = await runMerchantPolicyMigration({ database });
@@ -369,14 +378,18 @@ test('dry-run reports unsafe raw JSON numbers without parsing or changing data',
   assert.deepEqual(result.reviewIds, [
     'merchant-unsafe-product',
     'merchant-unsafe-decimal',
+    'merchant-unsafe-ordinary-decimal',
+    'merchant-unsafe-subnormal',
   ]);
   assert.deepEqual(result.merchants.map((merchant) => merchant.status), [
+    'invalid',
+    'invalid',
     'invalid',
     'invalid',
   ]);
   assert.deepEqual(
     result.merchants.map((merchant) => merchant.numericSafetyIssues[0].lexeme),
-    ['9007199254740993', '1.0000000000000001e+0'],
+    ['9007199254740993', '1.0000000000000001e+0', '0.1', '1e-323'],
   );
   assert.equal(
     result.merchants.every(
@@ -387,6 +400,8 @@ test('dry-run reports unsafe raw JSON numbers without parsing or changing data',
   assert.deepEqual(state.map((row) => row.config_raw), [
     unsafeProductRaw,
     unsafeDecimalRaw,
+    unsafeOrdinaryDecimalRaw,
+    unsafeSubnormalRaw,
   ]);
   assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
 });
@@ -421,7 +436,8 @@ test('raw numeric safety accepts exactly round-trippable decimals and exponents'
   const { database } = makeDatabase([
     {
       user_id: 'merchant-safe-numbers',
-      configRaw: '{"products":[],"legacyRatio":1.25,"legacyExponent":1e3}',
+      configRaw:
+        '{"products":[],"legacyRatio":1.25,"legacyExponent":1e3,"legacyNumericText":"9007199254740993 \\" 0.1 \\\\ 1e-323"}',
     },
   ]);
 

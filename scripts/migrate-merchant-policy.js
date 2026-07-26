@@ -79,10 +79,55 @@ function canonicalDecimalValue(lexeme) {
   return { coefficient, exponent };
 }
 
-function decimalValuesEqual(left, right) {
-  const a = canonicalDecimalValue(left);
-  const b = canonicalDecimalValue(right);
-  return a.coefficient === b.coefficient && a.exponent === b.exponent;
+function decimalRational(lexeme) {
+  const { coefficient, exponent } = canonicalDecimalValue(lexeme);
+  if (coefficient === 0n) return { numerator: 0n, denominator: 1n };
+  if (exponent >= 0n) {
+    return {
+      numerator: coefficient * (10n ** exponent),
+      denominator: 1n,
+    };
+  }
+  return {
+    numerator: coefficient,
+    denominator: 10n ** (-exponent),
+  };
+}
+
+function doubleRational(value) {
+  if (!Number.isFinite(value)) {
+    throw new TypeError('Cannot convert a non-finite number to an exact rational');
+  }
+  if (value === 0) return { numerator: 0n, denominator: 1n };
+
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setFloat64(0, value, false);
+  const bits = view.getBigUint64(0, false);
+  const negative = (bits >> 63n) === 1n;
+  const exponentBits = (bits >> 52n) & 0x7ffn;
+  const fraction = bits & ((1n << 52n) - 1n);
+  const significand = exponentBits === 0n
+    ? fraction
+    : (1n << 52n) + fraction;
+  const exponent = exponentBits === 0n
+    ? -1074n
+    : exponentBits - 1023n - 52n;
+  let numerator = negative ? -significand : significand;
+  let denominator = 1n;
+  if (exponent >= 0n) {
+    numerator <<= exponent;
+  } else {
+    denominator <<= -exponent;
+  }
+  return { numerator, denominator };
+}
+
+function isExactlyRepresentableAsDouble(lexeme, parsed) {
+  const decimal = decimalRational(lexeme);
+  const binary = doubleRational(parsed);
+  return decimal.numerator * binary.denominator
+    === binary.numerator * decimal.denominator;
 }
 
 function findUnsafeJsonNumbers(raw) {
@@ -119,7 +164,7 @@ function findUnsafeJsonNumbers(raw) {
       reason = 'non_finite_after_parse';
     } else if (Number.isInteger(parsed) && !Number.isSafeInteger(parsed)) {
       reason = 'unsafe_integer';
-    } else if (!decimalValuesEqual(lexeme, JSON.stringify(parsed))) {
+    } else if (!isExactlyRepresentableAsDouble(lexeme, parsed)) {
       reason = 'precision_loss';
     }
     if (reason) issues.push({ lexeme, offset: index, reason });
