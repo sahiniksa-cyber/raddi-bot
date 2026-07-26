@@ -1,10 +1,13 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const {
+  ISO_4217_CURRENCY_CODES,
+  isIso4217CurrencyCode,
+} = require('./iso-4217');
 
 const POLICY_SCHEMA_VERSION = 1;
 const POLICY_STATUSES = Object.freeze(['active', 'needs_review', 'invalid']);
-const SUPPORTED_CURRENCIES = Object.freeze(['AED', 'SAR', 'USD']);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const VOLATILE_MIGRATION_KEYS = new Set([
   'createdAt',
@@ -345,7 +348,7 @@ function validateMerchantPolicy(input) {
               if (!Object.prototype.hasOwnProperty.call(variant.price, 'currency')) {
                 addError(`${variantBase}.price.currency`, 'required');
               } else if (typeof variant.price.currency !== 'string'
-                         || !SUPPORTED_CURRENCIES.includes(variant.price.currency)) {
+                         || !isIso4217CurrencyCode(variant.price.currency)) {
                 addError(`${variantBase}.price.currency`, 'invalid_currency');
               }
             }
@@ -646,7 +649,7 @@ function validateMerchantPolicy(input) {
 module.exports = {
   POLICY_SCHEMA_VERSION,
   POLICY_STATUSES,
-  SUPPORTED_CURRENCIES,
+  ISO_4217_CURRENCY_CODES,
   canonicalJson,
   deepFreeze,
   derivePolicyVersion,

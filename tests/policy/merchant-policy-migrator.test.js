@@ -408,3 +408,44 @@ test('versions a structurally valid existing policy and keeps the normalized out
   );
   assert.deepEqual(second.report, first.report);
 });
+
+test('maps explicit three-decimal KWD into integer minor units', () => {
+  const result = migrateLegacyConfig({
+    products: [
+      {
+        id: 'product-kwd',
+        name: 'Kuwait plan',
+        price: '1.250 KWD',
+      },
+    ],
+  });
+  const policy = result.migratedConfig.merchantPolicy;
+
+  assert.equal(policy.status, 'active');
+  assert.deepEqual(
+    policy.catalog.products[0].variants[0].price,
+    { amountMinor: 1250, currency: 'KWD' },
+  );
+});
+
+test('quarantines an explicit non-ISO ZZZ legacy price', () => {
+  const result = migrateLegacyConfig({
+    products: [
+      {
+        id: 'product-zzz',
+        name: 'Unsupported plan',
+        price: '10 ZZZ',
+      },
+    ],
+  });
+  const policy = result.migratedConfig.merchantPolicy;
+
+  assert.equal(policy.status, 'needs_review');
+  assert.deepEqual(policy.catalog.products, []);
+  assert.equal(
+    policy.migration.reviewItems.some(
+      (item) => item.code === 'ambiguous_product_price',
+    ),
+    true,
+  );
+});

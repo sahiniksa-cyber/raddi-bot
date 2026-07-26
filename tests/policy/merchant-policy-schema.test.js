@@ -399,3 +399,18 @@ test('rejects syntactically plausible but unsupported currencies', () => {
     true,
   );
 });
+
+test('accepts a canonical policy price denominated in EUR', () => {
+  const policy = validPolicy();
+  policy.catalog.products[0].variants[0].price = {
+    amountMinor: 4599,
+    currency: 'EUR',
+  };
+
+  const result = validateMerchantPolicy(policy);
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.policy.catalog.products[0].variants[0].price,
+    { amountMinor: 4599, currency: 'EUR' },
+  );
+});

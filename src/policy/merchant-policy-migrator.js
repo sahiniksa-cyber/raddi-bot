@@ -3,13 +3,16 @@
 const crypto = require('node:crypto');
 
 const {
-  SUPPORTED_CURRENCIES,
   canonicalJson,
   derivePolicyVersion,
   isPlainObject,
   normalizeLookupKey,
   validateMerchantPolicy,
 } = require('./merchant-policy-schema');
+const {
+  isIso4217CurrencyCode,
+  minorUnitForCurrency,
+} = require('./iso-4217');
 
 const ARCHIVED_FIELDS = [
   'products',
@@ -89,7 +92,7 @@ function currencyCode(raw) {
   const normalized = String(raw).normalize('NFKC').trim();
   if (/^[A-Za-z]{3}$/.test(normalized)) {
     const code = normalized.toUpperCase();
-    return SUPPORTED_CURRENCIES.includes(code) ? code : null;
+    return isIso4217CurrencyCode(code) ? code : null;
   }
   if (/^(?:ر\.?\s?س\.?|ريال|ريال سعودي)$/.test(normalized)) return 'SAR';
   return null;
@@ -107,12 +110,17 @@ function parseStructuredPrice(rawPrice) {
   const match = rawPrice
     .normalize('NFKC')
     .trim()
-    .match(/^(\d+)(?:[.,](\d{1,2}))?\s*([A-Za-z]{3}|ر\.?\s?س\.?|ريال|ريال سعودي)$/);
+    .match(/^(\d+)(?:[.,](\d{1,4}))?\s*([A-Za-z]{3}|ر\.?\s?س\.?|ريال|ريال سعودي)$/);
   if (!match) return null;
   const currency = currencyCode(match[3]);
   if (!currency) return null;
-  const fraction = (match[2] || '').padEnd(2, '0');
-  const amountMinor = (Number(match[1]) * 100) + Number(fraction || 0);
+  const minorUnit = minorUnitForCurrency(currency);
+  if (!Number.isInteger(minorUnit)) return null;
+  const rawFraction = match[2] || '';
+  if (rawFraction.length > minorUnit) return null;
+  const scale = 10 ** minorUnit;
+  const fraction = rawFraction.padEnd(minorUnit, '0');
+  const amountMinor = (Number(match[1]) * scale) + Number(fraction || 0);
   if (!Number.isSafeInteger(amountMinor)) return null;
   return { amountMinor, currency };
 }
