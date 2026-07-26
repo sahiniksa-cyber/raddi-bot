@@ -50,7 +50,7 @@ async function saveCatalogVersion({
   const changedBy = String(actor || '').trim();
   if (!changedBy) throw new Error('actor is required for catalog version changes');
 
-  return database.transaction(async (client) => {
+  const write = async (client) => {
     // Serialise version assignment per tenant. This prevents two dashboard
     // saves from receiving the same version under concurrent requests.
     await client.query(
@@ -67,6 +67,9 @@ async function saveCatalogVersion({
       [tenantId],
     );
     const latest = latestResult.rows[0] || null;
+    if (latest && JSON.stringify(cloneJson(latest.products)) === JSON.stringify(nextProducts)) {
+      return { ...mapRow(latest), unchanged: true };
+    }
     const version = Number(latest?.version || 0) + 1;
     const previousProducts = cloneJson(latest?.products);
     const inserted = await client.query(
@@ -85,8 +88,11 @@ async function saveCatalogVersion({
         String(source || 'unknown'),
       ],
     );
-    return mapRow(inserted.rows[0]);
-  });
+    return { ...mapRow(inserted.rows[0]), unchanged: false };
+  };
+  return typeof database.transaction === 'function'
+    ? database.transaction(write)
+    : write(database);
 }
 
 async function loadCatalogVersion({ database, tenantId, version }) {

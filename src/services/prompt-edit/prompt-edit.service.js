@@ -122,19 +122,28 @@ async function applyInstructions(database, userId, newInstructions) {
 // Writes a single config section (botInstructions / products / autoReplyKeywords
 // / doNotReplyList) via jsonb_set. `field` comes from a fixed whitelist.
 async function applySectionValue(database, userId, field, value, metadata = {}) {
-  let catalogVersion = null;
-  if (field === 'products' && typeof database.transaction === 'function') {
-    catalogVersion = await saveCatalogVersion({
-      database,
-      scope: { tenantId: userId },
-      products: Array.isArray(value) ? value : [],
-      actor: metadata.actor || `merchant:${userId}`,
-      reason: metadata.reason || 'products updated from prompt edit',
-      source: metadata.source || 'prompt-edit',
-    });
-  }
-  if (catalogVersion) {
-    await database.query(
+  const applyWith = async (executor) => {
+    const catalogVersion = field === 'products'
+      ? await saveCatalogVersion({
+        database: executor,
+        scope: { tenantId: userId },
+        products: Array.isArray(value) ? value : [],
+        actor: metadata.actor || `merchant:${userId}`,
+        reason: metadata.reason || 'products updated from prompt edit',
+        source: metadata.source || 'prompt-edit',
+      })
+      : null;
+    if (!catalogVersion) {
+      await executor.query(
+        `UPDATE bot_configs
+            SET config = jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
+                updated_at = NOW()
+          WHERE user_id = $1`,
+        [userId, `{${field}}`, JSON.stringify(value)],
+      );
+      return;
+    }
+    await executor.query(
       `UPDATE bot_configs
           SET config = jsonb_set(
                 jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
@@ -146,15 +155,12 @@ async function applySectionValue(database, userId, field, value, metadata = {}) 
         WHERE user_id = $1`,
       [userId, `{${field}}`, JSON.stringify(value), JSON.stringify(catalogVersion.version)],
     );
-  } else {
-    await database.query(
-      `UPDATE bot_configs
-          SET config = jsonb_set(COALESCE(config, '{}'::jsonb), $2::text[], $3::jsonb, true),
-              updated_at = NOW()
-        WHERE user_id = $1`,
-      [userId, `{${field}}`, JSON.stringify(value)],
-    );
+  };
+
+  if (field === 'products' && typeof database.transaction === 'function') {
+    return database.transaction(applyWith);
   }
+  return applyWith(database);
 }
 
 async function send(enqueue, userId, groupJid, reply) {

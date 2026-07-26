@@ -102,6 +102,23 @@ test('concurrent catalog saves receive distinct monotonic versions', async () =>
   assert.deepEqual(results.map(result => result.version), [1, 2]);
 });
 
+test('saving an unchanged catalog reuses the current version without audit noise', async () => {
+  const database = makeDatabase();
+  const input = {
+    database,
+    scope: { tenantId: 'tenant-1' },
+    products: [{ id: 'adobe', price: '189' }],
+    actor: 'merchant:user-1',
+  };
+  const first = await saveCatalogVersion(input);
+  const second = await saveCatalogVersion(input);
+
+  assert.equal(first.version, 1);
+  assert.equal(second.version, 1);
+  assert.equal(second.unchanged, true);
+  assert.equal(database.rows.length, 1);
+});
+
 test('loadCatalogVersion always scopes by tenant and version', async () => {
   const database = makeDatabase();
   await saveCatalogVersion({

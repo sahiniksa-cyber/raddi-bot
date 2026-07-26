@@ -563,6 +563,27 @@ class RuntimeBot {
     reason = 'bot configuration update',
     source = 'dashboard',
   } = {}) {
+    if (!this._saveBotConfig && typeof this.db.transaction === 'function') {
+      await this.db.transaction(async (client) => {
+        const catalogVersion = await saveCatalogVersion({
+          database: client,
+          scope: { tenantId: this.userId },
+          products: Array.isArray(this.config.products) ? this.config.products : [],
+          actor,
+          reason,
+          source,
+        });
+        this.config.productCatalogVersion = catalogVersion.version;
+        await client.query(
+          `INSERT INTO bot_configs (user_id, config, source)
+           VALUES ($1, $2::jsonb, 'src-server')
+           ON CONFLICT (user_id) DO UPDATE SET config = EXCLUDED.config, source = EXCLUDED.source`,
+          [this.userId, JSON.stringify(this.config)],
+        );
+      });
+      this.ai.updateConfig(this.config);
+      return;
+    }
     if (this._saveCatalogVersion) {
       const catalogVersion = await this._saveCatalogVersion({
         database: this.db,
