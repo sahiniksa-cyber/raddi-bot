@@ -494,7 +494,11 @@ async function preflightXlsx(source, openZipImpl = openZip) {
 }
 
 function createSpreadsheetReader({ readXlsx = readExcelFile, openZipImpl = openZip } = {}) {
-  return async function readSpreadsheetWithDependencies({ source, originalName }) {
+  return async function readSpreadsheetWithDependencies({
+    source,
+    originalName,
+    allowEmptyWorkbook = false,
+  }) {
     const extension = extensionFor(originalName);
     if (extension !== '.xlsx' && extension !== '.csv') {
       throw adapterError(
@@ -524,7 +528,7 @@ function createSpreadsheetReader({ readXlsx = readExcelFile, openZipImpl = openZ
       }
     }
 
-    if (!sheets.length || sheets.every(sheet => sheet.rows.length === 0)) {
+    if (!allowEmptyWorkbook && (!sheets.length || sheets.every(sheet => sheet.rows.length === 0))) {
       throw adapterError('SPREADSHEET_EMPTY', 'Spreadsheet contains no used cells', 400);
     }
     return { sheets, rowCount: enforceRowLimit(sheets) };
@@ -586,7 +590,10 @@ function createUploadSpooler({ fsOps = fsp, tempRoot = os.tmpdir() } = {}) {
 const spoolUploadToTempFile = createUploadSpooler();
 
 function cellForWrite(value, { bold = false } = {}) {
-  const cell = { value: value === undefined ? null : value };
+  // write-excel-file treats "" as a missing cell. A NUL sentinel is non-empty
+  // to its shared-string registry but is stripped by its XML sanitizer, which
+  // yields the explicit empty shared string that ExcelJS writes and reopens.
+  const cell = { value: value === '' ? '\0' : (value === undefined ? null : value) };
   if (value instanceof Date) {
     cell.type = Date;
     cell.format = 'yyyy-mm-dd hh:mm:ss';
@@ -686,12 +693,16 @@ async function writeSpreadsheetBuffer(workbook) {
 }
 
 async function readBillingLedger(filePath) {
-  return readSpreadsheet({ source: filePath, originalName: filePath });
+  return readSpreadsheet({
+    source: filePath,
+    originalName: filePath,
+    allowEmptyWorkbook: true,
+  });
 }
 
-async function writeBillingLedgerAtomic(filePath, workbook) {
+async function writeBillingLedgerAtomic(filePath, workbook, { fsOps = fsp } = {}) {
   const directory = path.dirname(filePath);
-  await fsp.mkdir(directory, { recursive: true });
+  await fsOps.mkdir(directory, { recursive: true });
   const temporaryPath = path.join(
     directory,
     `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
@@ -699,15 +710,15 @@ async function writeBillingLedgerAtomic(filePath, workbook) {
   let handle;
   try {
     const buffer = await writeSpreadsheetBuffer(workbook);
-    handle = await fsp.open(temporaryPath, 'wx', 0o600);
+    handle = await fsOps.open(temporaryPath, 'wx', 0o600);
     await handle.writeFile(buffer);
     await handle.sync();
     await handle.close();
     handle = null;
-    await fsp.rename(temporaryPath, filePath);
+    await fsOps.rename(temporaryPath, filePath);
   } catch (error) {
     await handle?.close().catch(() => {});
-    await fsp.rm(temporaryPath, { force: true }).catch(() => {});
+    await fsOps.rm(temporaryPath, { force: true }).catch(() => {});
     throw error;
   }
   return filePath;

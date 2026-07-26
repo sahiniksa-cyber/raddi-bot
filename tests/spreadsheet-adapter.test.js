@@ -859,6 +859,63 @@ test('reads and atomically rewrites the billing ledger without losing later rows
   assert.deepEqual(siblingNames, ['payments-ledger.xlsx']);
 });
 
+test('billing ledger reads allow a valid workbook with no used cells while campaign reads still reject it', async t => {
+  const directory = await makeTempDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, 'blank-ledger.xlsx');
+  const blank = new ExcelJS.Workbook();
+  blank.addWorksheet('Empty source');
+  await blank.xlsx.writeFile(filePath);
+
+  const ledger = await readBillingLedger(filePath);
+  assert.deepEqual(ledger, {
+    sheets: [{ name: 'Empty source', rows: [] }],
+    rowCount: 0,
+  });
+  await assert.rejects(
+    readSpreadsheet({ source: filePath, originalName: 'blank-campaign.xlsx' }),
+    error => error.code === 'SPREADSHEET_EMPTY' && error.statusCode === 400,
+  );
+});
+
+test('atomic billing write failure preserves the prior workbook and removes its temporary sibling', async t => {
+  const directory = await makeTempDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, 'billing', 'payments-ledger.xlsx');
+  const ledgerWorkbook = rows => ({
+    sheets: [{
+      name: 'Payments',
+      columns: [
+        { header: 'Date', key: 'date', width: 22 },
+        { header: 'Name', key: 'name', width: 24 },
+        { header: 'Amount', key: 'amount', width: 12 },
+        { header: 'Currency', key: 'currency', width: 10 },
+      ],
+      rows,
+    }],
+  });
+  const first = ledgerWorkbook([{ date: new Date('2026-07-26T10:00:00.000Z'), name: 'Layan', amount: 1750, currency: 'SAR' }]);
+  await writeBillingLedgerAtomic(filePath, first);
+  const original = await fs.readFile(filePath);
+  const fsOps = {
+    ...fs,
+    async rename() {
+      throw new Error('SIMULATED_ATOMIC_RENAME_FAILURE');
+    },
+  };
+
+  await assert.rejects(
+    writeBillingLedgerAtomic(filePath, ledgerWorkbook([
+      ...first.sheets[0].rows,
+      { date: new Date('2026-07-27T10:00:00.000Z'), name: 'John', amount: 19.99, currency: 'USD' },
+    ]), { fsOps }),
+    /SIMULATED_ATOMIC_RENAME_FAILURE/,
+  );
+
+  assert.deepEqual(await fs.readFile(filePath), original);
+  assert.deepEqual(await fs.readdir(path.dirname(filePath)), ['payments-ledger.xlsx']);
+});
+
 test('publishes the fixed security limits as adapter-owned constants', () => {
   assert.deepEqual(LIMITS, {
     maxCompressedBytes: 25 * 1024 * 1024,

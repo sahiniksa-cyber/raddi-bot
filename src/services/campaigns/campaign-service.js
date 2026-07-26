@@ -2,10 +2,13 @@
 
 const crypto = require('crypto');
 const fs = require('fs/promises');
-const ExcelJS = require('exceljs');
 
 const db = require('../../db/client');
 const { checkMessageQuota } = require('../billing/message-quota');
+const {
+  readSpreadsheet,
+  writeSpreadsheetBuffer,
+} = require('../spreadsheets/spreadsheet-adapter');
 const { normalizeUploadFilename } = require('./media-store');
 const {
   WhatsAppHistoryImportService,
@@ -839,30 +842,35 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
     return { added, duplicates, invalid };
   }
 
-  async function importContacts(userId, buffer, originalName = '') {
-    const workbook = new ExcelJS.Workbook();
-    const lower = String(originalName).toLowerCase();
+  async function importContacts(userId, source, originalName = '') {
+    let workbook;
     try {
-      if (lower.endsWith('.csv')) await workbook.csv.read(require('stream').Readable.from(buffer));
-      else if (lower.endsWith('.xlsx')) await workbook.xlsx.load(buffer);
-      else throw badRequest('صيغة الملف غير مدعومة. استخدم CSV أو XLSX');
+      workbook = await readSpreadsheet({ source, originalName });
     } catch (error) {
-      if (error.statusCode) throw error;
+      if (error.code === 'SPREADSHEET_UNSUPPORTED_EXTENSION') {
+        throw badRequest('صيغة الملف غير مدعومة. استخدم CSV أو XLSX');
+      }
+      if (new Set([
+        'SPREADSHEET_FILE_TOO_LARGE',
+        'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED',
+        'SPREADSHEET_ARCHIVE_ENTRY_LIMIT_EXCEEDED',
+        'SPREADSHEET_ROW_LIMIT_EXCEEDED',
+      ]).has(error.code)) {
+        throw error;
+      }
       throw badRequest('تعذر قراءة الملف. تأكد أنه ملف CSV أو XLSX صالح', 'INVALID_CONTACT_FILE');
     }
-    if (!workbook.worksheets[0]) throw badRequest('الملف لا يحتوي على ورقة بيانات');
     const rows = [];
-    for (const sheet of workbook.worksheets) {
-      const headers = [];
-      sheet.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => { headers[col] = normalizeHeader(cell.text); });
-      sheet.eachRow((row, number) => {
-        if (number === 1) return;
+    for (const sheet of workbook.sheets) {
+      const headers = (sheet.rows[0] || []).map(normalizeHeader);
+      for (let index = 1; index < sheet.rows.length; index += 1) {
+        const values = sheet.rows[index];
         const data = {};
-        row.eachCell({ includeEmpty: true }, (cell, col) => {
-          data[headers[col] || `column ${col}`] = cell.value instanceof Date ? cell.value : cell.text;
-        });
-        rows.push({ data, rowNumber: number, sheetName: sheet.name });
-      });
+        for (let column = 0; column < values.length; column += 1) {
+          data[headers[column] || `column ${column + 1}`] = values[column];
+        }
+        rows.push({ data, rowNumber: index + 1, sheetName: sheet.name });
+      }
     }
     const phoneHeaders = ['phone', 'mobile', 'whatsapp', 'الجوال', 'رقم', 'رقم الجوال', 'رقم الهاتف', 'رقم العميل'];
     const nameHeaders = ['name', 'customer name', 'الاسم', 'اسم العميل'];
@@ -1313,36 +1321,49 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
   }
 
   async function exportContactTemplate() {
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('نموذج الاستهداف', { views: [{ rightToLeft: true }] });
-    sheet.columns = [
-      { header: 'رقم الجوال', key: 'phone', width: 20 },
-      { header: 'اسم العميل', key: 'name', width: 24 },
-      { header: 'نوع السجل', key: 'status', width: 18 },
-      { header: 'المنتج أو الاشتراك', key: 'product', width: 30 },
-      { header: 'رقم الطلب', key: 'orderReference', width: 20 },
-      { header: 'تاريخ الطلب', key: 'orderDate', width: 18 },
-      { header: 'بداية الاشتراك', key: 'subscriptionStart', width: 18 },
-      { header: 'نهاية الاشتراك', key: 'subscriptionEnd', width: 18 },
-    ];
-    sheet.addRow({ phone: '0551234567', name: 'مثال عميل طلب', status: 'طلب', product: 'اسم المنتج', orderReference: 'ORD-1001', orderDate: '2026-07-16' });
-    sheet.addRow({ phone: '0559876543', name: 'مثال عميل مشترك', status: 'اشتراك', product: 'الاشتراك السنوي', subscriptionStart: '2026-07-01', subscriptionEnd: '2027-06-30' });
-    sheet.getRow(1).font = { bold: true };
-    sheet.autoFilter = { from: 'A1', to: 'H1' };
-    for (let row = 2; row <= 1000; row += 1) {
-      sheet.getCell(`C${row}`).dataValidation = { type: 'list', allowBlank: true, formulae: ['"عميل,طلب,اشتراك"'] };
-    }
-    const guide = workbook.addWorksheet('التعليمات', { views: [{ rightToLeft: true }] });
-    guide.addRows([
-      ['الحقل', 'الشرح'],
-      ['نوع السجل', 'اكتب عميل أو طلب أو اشتراك. إذا وُجد رقم طلب أو تاريخ اشتراك تتعرف المنصة عليه تلقائياً.'],
-      ['التواريخ', 'استخدم الصيغة الواضحة YYYY-MM-DD، مثال: 2026-07-16.'],
-      ['التكرار', 'الرقم المكرر يُدمج مع السجل الموجود ولا يُنشئ عميلاً جديداً.'],
-      ['الأمثلة', 'احذف صفّي المثال قبل رفع ملفك الحقيقي.'],
-    ]);
-    guide.columns = [{ width: 22 }, { width: 90 }];
-    guide.getRow(1).font = { bold: true };
-    return workbook.xlsx.writeBuffer();
+    return writeSpreadsheetBuffer({
+      sheets: [{
+        name: 'نموذج الاستهداف',
+        rightToLeft: true,
+        columns: [
+          { header: 'رقم الجوال', key: 'phone', width: 20 },
+          { header: 'اسم العميل', key: 'name', width: 24 },
+          { header: 'نوع السجل', key: 'status', width: 18 },
+          { header: 'المنتج أو الاشتراك', key: 'product', width: 30 },
+          { header: 'رقم الطلب', key: 'orderReference', width: 20 },
+          { header: 'تاريخ الطلب', key: 'orderDate', width: 18 },
+          { header: 'بداية الاشتراك', key: 'subscriptionStart', width: 18 },
+          { header: 'نهاية الاشتراك', key: 'subscriptionEnd', width: 18 },
+        ],
+        rows: [
+          { phone: '0551234567', name: 'مثال عميل طلب', status: 'طلب', product: 'اسم المنتج', orderReference: 'ORD-1001', orderDate: '2026-07-16' },
+          { phone: '0559876543', name: 'مثال عميل مشترك', status: 'اشتراك', product: 'الاشتراك السنوي', subscriptionStart: '2026-07-01', subscriptionEnd: '2027-06-30' },
+          ...Array.from({ length: 997 }, () => []),
+        ],
+        headerBold: true,
+        autoFilter: 'A1:H1',
+        dataValidations: [{
+          range: 'C2:C1000',
+          type: 'list',
+          allowBlank: true,
+          formulae: ['"عميل,طلب,اشتراك"'],
+        }],
+      }, {
+        name: 'التعليمات',
+        rightToLeft: true,
+        columns: [
+          { header: 'الحقل', width: 22 },
+          { header: 'الشرح', width: 90 },
+        ],
+        rows: [
+          ['نوع السجل', 'اكتب عميل أو طلب أو اشتراك. إذا وُجد رقم طلب أو تاريخ اشتراك تتعرف المنصة عليه تلقائياً.'],
+          ['التواريخ', 'استخدم الصيغة الواضحة YYYY-MM-DD، مثال: 2026-07-16.'],
+          ['التكرار', 'الرقم المكرر يُدمج مع السجل الموجود ولا يُنشئ عميلاً جديداً.'],
+          ['الأمثلة', 'احذف صفّي المثال قبل رفع ملفك الحقيقي.'],
+        ],
+        headerBold: true,
+      }],
+    });
   }
 
   async function exportContacts(userId) {
@@ -1352,9 +1373,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
        FROM campaign_contacts WHERE user_id = $1 ORDER BY updated_at DESC`,
       [userId],
     );
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('قاعدة العملاء', { views: [{ rightToLeft: true }] });
-    sheet.columns = [
+    const columns = [
       { header: 'رقم الجوال', key: 'phone', width: 20 },
       { header: 'اسم العميل', key: 'name', width: 24 },
       { header: 'نوع السجل', key: 'status', width: 18 },
@@ -1367,7 +1386,7 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
       { header: 'آخر تحديث', key: 'updatedAt', width: 24 },
     ];
     const statusLabels = { contact: 'عميل', ordered: 'طلب', subscription: 'اشتراك' };
-    for (const row of result.rows) sheet.addRow({
+    const rows = result.rows.map(row => ({
       phone: row.normalized_phone,
       name: row.name || '',
       status: statusLabels[row.customer_status] || 'عميل',
@@ -1378,25 +1397,32 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
       subscriptionEnd: row.subscription_end_date || '',
       source: row.source || '',
       updatedAt: row.updated_at || '',
+    }));
+    return writeSpreadsheetBuffer({
+      sheets: [{
+        name: 'قاعدة العملاء',
+        rightToLeft: true,
+        columns,
+        rows,
+        headerBold: true,
+        autoFilter: 'A1:J1',
+      }],
     });
-    sheet.getRow(1).font = { bold: true };
-    sheet.autoFilter = { from: 'A1', to: 'J1' };
-    return workbook.xlsx.writeBuffer();
   }
 
   async function exportSignals(userId, state = null) {
     if (state && !SIGNAL_STATES.has(state)) throw badRequest('التصنيف المطلوب غير صالح');
     const rows = await listSignals(userId, state ? { states: [state] } : {});
-    const workbook = new ExcelJS.Workbook();
     const stateSheets = {
       interested_unverified: 'مهتمون بلا طلب مؤكد',
       ordered_confirmed: 'الطلبات المؤكدة',
       needs_verification: 'يحتاجون تحقق',
     };
     const statesToWrite = state ? [state] : Object.keys(stateSheets);
-    for (const targetState of statesToWrite) {
-      const sheet = workbook.addWorksheet(stateSheets[targetState], { views: [{ rightToLeft: true }] });
-      sheet.columns = [
+    const sheets = statesToWrite.map(targetState => ({
+      name: stateSheets[targetState],
+      rightToLeft: true,
+      columns: [
         { header: 'رقم العميل', key: 'phone', width: 20 },
         { header: 'اسم العميل', key: 'name', width: 24 },
         { header: 'المنتج', key: 'product', width: 28 },
@@ -1409,8 +1435,8 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
         { header: 'الدليل', key: 'evidence', width: 50 },
         { header: 'المصدر', key: 'source', width: 20 },
         { header: 'آخر تحديث', key: 'updatedAt', width: 24 },
-      ];
-      for (const row of rows.filter(item => item.customer_state === targetState)) sheet.addRow({
+      ],
+      rows: rows.filter(item => item.customer_state === targetState).map(row => ({
         phone: row.normalized_phone || row.sender,
         name: row.customer_name || '',
         product: row.product_name || '',
@@ -1423,11 +1449,11 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
         evidence: row.evidence_text || '',
         source: row.source || '',
         updatedAt: row.last_detected_at || '',
-      });
-      sheet.getRow(1).font = { bold: true };
-      sheet.autoFilter = { from: 'A1', to: 'L1' };
-    }
-    return workbook.xlsx.writeBuffer();
+      })),
+      headerBold: true,
+      autoFilter: 'A1:L1',
+    }));
+    return writeSpreadsheetBuffer({ sheets });
   }
 
   return {

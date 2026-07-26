@@ -1,7 +1,8 @@
 'use strict';
 
-// This is intentionally a legacy-only oracle.  It drives the currently shipped
-// ExcelJS call sites and records observable workbook semantics, never bytes.
+// The committed JSON is the immutable legacy oracle. Fixture construction and
+// current-call-site capture remain executable for replacement parity tests, but
+// loading OLD evidence must never invoke newly wired production code.
 
 const fs = require('fs/promises');
 const os = require('os');
@@ -12,6 +13,15 @@ const ExcelJS = require('exceljs');
 
 const { createCampaignService } = require('../src/services/campaigns/campaign-service');
 const { appendLedgerRow, buildLedgerRow } = require('../src/services/billing/excel-ledger');
+
+const LEGACY_EVIDENCE_PATH = path.join(
+  __dirname,
+  '..',
+  'docs',
+  'stabilization',
+  'dependency-hardening',
+  'legacy-exceljs-oracle.json',
+);
 
 function semanticValue(value) {
   if (value instanceof Date) return { type: 'date', value: value.toISOString() };
@@ -287,10 +297,10 @@ async function captureBillingLedger() {
   }
 }
 
-async function createLegacyOracleEvidence() {
+async function createCurrentSpreadsheetEvidence() {
   const fixtures = await buildFixtureCorpus();
   return {
-    oracle: 'legacy-exceljs-4.4.0',
+    oracle: 'current-spreadsheet-call-sites',
     generatedAt: 'deterministic-fixture-corpus',
     fixtureBehavior: {
       workbookSheetTraversal: 'all worksheets in workbook order',
@@ -311,6 +321,10 @@ async function createLegacyOracleEvidence() {
   };
 }
 
+async function createLegacyOracleEvidence() {
+  return JSON.parse(await fs.readFile(LEGACY_EVIDENCE_PATH, 'utf8'));
+}
+
 async function main() {
   const output = process.argv[2] || path.join('docs', 'stabilization', 'dependency-hardening', 'legacy-exceljs-oracle.json');
   const evidence = await createLegacyOracleEvidence();
@@ -326,4 +340,8 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildFixtureCorpus, createLegacyOracleEvidence };
+module.exports = {
+  buildFixtureCorpus,
+  createCurrentSpreadsheetEvidence,
+  createLegacyOracleEvidence,
+};

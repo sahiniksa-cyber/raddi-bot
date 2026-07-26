@@ -6,10 +6,42 @@ const multer = require('multer');
 const db = require('../db/client');
 const { createCampaignService } = require('../services/campaigns/campaign-service');
 const { deleteCampaignMedia, saveCampaignMedia } = require('../services/campaigns/media-store');
+const {
+  LIMITS: SPREADSHEET_LIMITS,
+  spoolUploadToTempFile,
+} = require('../services/spreadsheets/spreadsheet-adapter');
 
-const upload = multer({
+const mediaUpload = multer({
   storage: multer.memoryStorage(),
   limits: { files: 10, fileSize: 25 * 1024 * 1024 },
+});
+
+function createContactImportStorage({ spoolUpload = spoolUploadToTempFile } = {}) {
+  return {
+    _handleFile(_req, file, callback) {
+      spoolUpload(file.stream, { originalName: file.originalname })
+        .then(spooled => callback(null, {
+          path: spooled.filePath,
+          cleanup: spooled.cleanup,
+          size: spooled.byteLength,
+          byteLength: spooled.byteLength,
+        }))
+        .catch(callback);
+    },
+    _removeFile(_req, file, callback) {
+      const cleanup = file.cleanup;
+      delete file.path;
+      delete file.cleanup;
+      delete file.size;
+      delete file.byteLength;
+      Promise.resolve(cleanup?.()).then(() => callback(), callback);
+    },
+  };
+}
+
+const contactUpload = multer({
+  storage: createContactImportStorage(),
+  limits: { files: 1, fileSize: SPREADSHEET_LIMITS.maxCompressedBytes },
 });
 
 function asyncHandler(handler) {
@@ -28,10 +60,17 @@ function asyncHandler(handler) {
   };
 }
 
-function handleUpload(middleware) {
+function handleUpload(middleware, { spreadsheet = false } = {}) {
   return (req, res, next) => middleware(req, res, error => {
     if (!error) return next();
     if (error instanceof multer.MulterError) {
+      if (spreadsheet && error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          success: false,
+          error: 'SPREADSHEET_FILE_TOO_LARGE',
+          message: 'Spreadsheet file exceeds the 25 MiB compressed-file limit',
+        });
+      }
       return res.status(400).json({
         success: false,
         error: error.code,
@@ -46,7 +85,9 @@ function createCampaignRoutes(deps = {}) {
   const router = express.Router();
   const requireAuth = deps.requireAuth || ((req, res, next) => next());
   const database = deps.database || db;
-  const service = createCampaignService({ database, getUserBot: deps.getUserBot });
+  const service = deps.campaignService
+    || createCampaignService({ database, getUserBot: deps.getUserBot });
+  const persistCampaignMedia = deps.saveCampaignMedia || saveCampaignMedia;
   const userId = req => req.session.userId;
 
   router.use('/api/campaigns', requireAuth);
@@ -99,9 +140,14 @@ function createCampaignRoutes(deps = {}) {
     res.setHeader('Content-Disposition', `attachment; filename="campaign-contacts-${new Date().toISOString().slice(0, 10)}.xlsx"`);
     res.send(Buffer.from(buffer));
   }));
-  router.post('/api/campaigns/contacts/import', handleUpload(upload.single('file')), asyncHandler(async (req, res) => {
+  router.post('/api/campaigns/contacts/import', handleUpload(contactUpload.single('file'), { spreadsheet: true }), asyncHandler(async (req, res) => {
     if (!req.file) return res.status(400).json({ success: false, message: 'اختر ملف CSV أو Excel' });
-    const result = await service.importContacts(userId(req), req.file.buffer, req.file.originalname);
+    let result;
+    try {
+      result = await service.importContacts(userId(req), req.file.path, req.file.originalname);
+    } finally {
+      await req.file.cleanup();
+    }
     res.json({ success: true, ...result });
   }));
 
@@ -164,8 +210,8 @@ function createCampaignRoutes(deps = {}) {
   router.get('/api/campaigns/:id/preview', asyncHandler(async (req, res) => {
     res.json({ success: true, ...(await service.preview(userId(req), req.params.id)) });
   }));
-  router.post('/api/campaigns/:id/media', handleUpload(upload.array('media', 10)), asyncHandler(async (req, res) => {
-    const media = await saveCampaignMedia({ database, userId: userId(req), campaignId: req.params.id, files: req.files || [] });
+  router.post('/api/campaigns/:id/media', handleUpload(mediaUpload.array('media', 10)), asyncHandler(async (req, res) => {
+    const media = await persistCampaignMedia({ database, userId: userId(req), campaignId: req.params.id, files: req.files || [] });
     res.status(201).json({ success: true, media });
   }));
   router.delete('/api/campaigns/:id/media/:mediaId', asyncHandler(async (req, res) => {
@@ -190,4 +236,4 @@ function createCampaignRoutes(deps = {}) {
   return router;
 }
 
-module.exports = { createCampaignRoutes };
+module.exports = { createCampaignRoutes, createContactImportStorage };
