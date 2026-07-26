@@ -303,7 +303,7 @@ test('SCENARIO 1: three rapid customer messages produce ONE combined prompt and 
 });
 
 // ── SCENARIO 2 — Duplicate suppression (Issue 1) ─────────────────────────────
-test('SCENARIO 2: a near-duplicate reply (and near-duplicate regeneration) is suppressed', async () => {
+test('SCENARIO 2: a new customer turn is not silenced when regeneration stays near-duplicate', async () => {
   resetState();
   const EXISTING = 'نعم التوصيل متوفر لجميع مدن المملكة خلال يومين إن شاء الله';
   const NEAR_DUP = 'نعم التوصيل متوفر لجميع مدن المملكة خلال يومين ان شاء الله';
@@ -314,10 +314,9 @@ test('SCENARIO 2: a near-duplicate reply (and near-duplicate regeneration) is su
 
   const result = await processAiReply(makeJob());
 
-  assert.equal(customerEnqueues().length, 0, 'no customer reply may be enqueued when both candidate + regen are near-duplicates');
-  assert.equal(insertedAssistantReplies.length, 0, 'no assistant reply may be persisted');
-  assert.equal(result.skipped, true, 'job must report a skip');
-  assert.equal(result.reason, 'duplicate_suppressed', 'reason must be duplicate_suppressed');
+  assert.equal(customerEnqueues().length, 1, 'the newer customer turn must receive one reviewed reply');
+  assert.equal(insertedAssistantReplies.length, 1, 'one assistant reply must be persisted');
+  assert.notEqual(result.skipped, true, 'job must not strand the new turn');
 });
 
 test('SCENARIO 2b (no over-suppression): a genuinely different regeneration is still sent', async () => {

@@ -24,7 +24,7 @@ test('normal and @lid paths review before their WhatsApp send calls', () => {
   const lidBlock = outgoingWorker.slice(lidStart, outgoingWorker.indexOf('async function completeSuppressedOutgoing'));
 
   assert.ok(normalBlock.indexOf('await reviewBeforeSend') < normalBlock.indexOf('await sendWhatsappReply'));
-  assert.ok(lidBlock.indexOf('await reviewBeforeSend') < lidBlock.indexOf('bot.client.sendMessage(sender, finalReply)'));
+  assert.ok(lidBlock.indexOf('await reviewBeforeSend') < lidBlock.indexOf('await sendWhatsappReply'));
   assert.doesNotMatch(normalBlock, /sendWhatsappReply\([^\n]*reply, providerMessageId/,
     'normal path must not send the unreviewed payload variable');
   assert.doesNotMatch(lidBlock, /sendMessage\(sender, reply\)/,

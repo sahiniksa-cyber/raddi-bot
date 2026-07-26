@@ -71,15 +71,14 @@ test('CX-2: the escalation side-channel is wrapped best-effort (does not rethrow
   );
 });
 
-test('CX-2: markInboundMessagesAnswered is invoked at exactly 2 intentional call sites', () => {
-  // There are intentionally TWO call sites — both correct and necessary:
-  //   1. Duplicate-suppression early-return path (suppressDuplicate branch): marks
-  //      the inbound answered so no retry/recovery regenerates a near-duplicate
-  //      reply for a message we already sent a response for.
-  //   2. B1 success path: marks the inbound answered BEFORE enqueueing the outbound
+test('CX-2: markInboundMessagesAnswered is invoked at the single send-success call site', () => {
+  // Duplicate similarity no longer creates an early-return silence: a newer
+  // customer turn must receive an answer. The remaining B1 success path marks
+  // the inbound answered BEFORE enqueueing the outbound
   //      so a SIGTERM / lock-loss / enqueue-throw cannot leave the inbound in
   //      'queued_for_ai' and trigger a second AI reply via ai-recovery.
-  // Any count other than 2 signals either a missing guard or an accidental merge.
+  // Any count other than 1 signals either a missing guard or a reintroduced
+  // duplicate-suppression path that strands the customer.
   const matches = aiWorkerSource.match(/await markInboundMessagesAnswered\(\{/g) || [];
-  assert.equal(matches.length, 2, `expected exactly 2 markInboundMessagesAnswered call sites (dedup-suppression + B1 success path), found ${matches.length}`);
+  assert.equal(matches.length, 1, `expected exactly 1 markInboundMessagesAnswered success-path call site, found ${matches.length}`);
 });

@@ -68,7 +68,7 @@ test('source: handleLidOutgoing checks isConversationOwnerPaused before sending'
   const fnIdx = src.indexOf('async function handleLidOutgoing(');
   assert.ok(fnIdx > 0, 'handleLidOutgoing exists');
   const checkIdx = src.indexOf('isConversationOwnerPaused', fnIdx);
-  const sendIdx = src.indexOf('bot.client.sendMessage(sender, reply)', fnIdx);
+  const sendIdx = src.indexOf('sendWhatsappReply(bot,', fnIdx);
   assert.ok(checkIdx > fnIdx, 'owner-pause check exists inside handleLidOutgoing');
   assert.ok(sendIdx > checkIdx, 'owner-pause check runs BEFORE the @lid send');
 });
