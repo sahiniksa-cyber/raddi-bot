@@ -1,0 +1,57 @@
+{
+  "storeName": "محمصة الاختبار",
+  "products": [
+    {
+      "id": "product-coffee",
+      "name": "قهوة مختصة",
+      "aliases": ["قهوة"],
+      "description": "بن محمّص",
+      "variants": [
+        {
+          "id": "variant-coffee-250g",
+          "label": "250 جرام",
+          "price": "45 SAR",
+          "availability": "available"
+        }
+      ]
+    }
+  ],
+  "replyStyle": {
+    "tone": "ودود",
+    "useDialect": true,
+    "dialect": "saudi",
+    "useShortReplies": true,
+    "multilineFormat": false
+  },
+  "responseLanguage": "ar",
+  "avoidWords": ["مستحيل"],
+  "avoidPhrases": ["لا أقدر"],
+  "businessRules": [
+    {
+      "id": "rule-delivery",
+      "topic": "delivery",
+      "statement": "التوصيل خلال يومين"
+    }
+  ],
+  "routing": {
+    "contacts": [
+      {
+        "id": "contact-support",
+        "name": "الدعم",
+        "phoneNumber": "+966500000000"
+      }
+    ],
+    "rules": [
+      {
+        "id": "route-support",
+        "topic": "support",
+        "contactId": "contact-support"
+      }
+    ],
+    "pauseAfterHandoff": true
+  },
+  "autoReplyKeywords": {
+    "الشحن": "التوصيل خلال يومين",
+    "قهوة": "قهوة مختصة"
+  }
+}

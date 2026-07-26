@@ -1,0 +1,11 @@
+{
+  "storeName": "متجر تحويل",
+  "escalationContacts": [
+    {
+      "name": "المبيعات",
+      "number": "0500000000 أو 0555555555"
+    }
+  ],
+  "escalationConditions": "حوّل إلى الرقم الأنسب حسب سؤال العميل",
+  "escalationPausesBot": true
+}
