@@ -1046,7 +1046,6 @@ async function processAiReply(job) {
     // second, differently-worded copy of the same answer — that is the Issue-1
     // duplicate the customer used to see. The inbound is still marked answered so
     // neither the follow-up nor ai-recovery regenerates yet another duplicate.
-    let suppressDuplicate = false;
     try {
       const dup = await findDuplicateRecentReply({
         db,
@@ -1100,29 +1099,17 @@ async function processAiReply(job) {
         if (regenerated && !stillDuplicate) {
           customerReply = regenerated;
         } else {
-          suppressDuplicate = true;
+          // This job exists because a newer inbound customer turn needs an
+          // answer. A similarity match is not authorization to leave that turn
+          // silent. Keep the already validated candidate; the send-boundary
+          // reviewer will remove repeated clauses and may suppress only a true
+          // idempotent double-send with no intervening customer message.
+          customerReply = candidateAfterRetry;
+          logger.warn('dedup', 'near-duplicate retained because a new customer turn requires a reply');
         }
       }
     } catch (dedupErr) {
       logger.warn('dedup', `dedup check failed: ${dedupErr.message}`);
-    }
-
-    if (suppressDuplicate) {
-      // Mark the inbound answered so the just-sent earlier reply stands and no
-      // retry/recovery/follow-up regenerates another near-duplicate. No outbound
-      // is enqueued; the completed-handler skips follow-up on a skipped result.
-      await markInboundMessagesAnswered({
-        userId,
-        conversationId: conversation.id,
-        messageIds: enrichedMessages.map(message => message.id),
-      });
-      await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
-        status: 'skipped_duplicate',
-        finished_at: new Date(),
-        attempts: job.attemptsMade + 1,
-      });
-      logger.warn('dedup', 'near-duplicate reply suppressed (not sent) after failed regeneration');
-      return { skipped: true, reason: 'duplicate_suppressed' };
     }
 
     const replyMessageId = await storeAssistantMessage({

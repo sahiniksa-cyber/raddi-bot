@@ -117,6 +117,35 @@ test('final pre-send reviewer cannot suppress a first-contact greeting', async (
   assert.ok(result.audit.violations.includes('invalid_suppress_without_previous_assistant'));
 });
 
+test('final pre-send reviewer cannot suppress a reply to a newer customer turn', async () => {
+  const openai = { chat: { completions: { create: async () => ({
+    choices: [{ message: { content: JSON.stringify({
+      decision: 'suppress',
+      reason: 'يشبه الرد السابق',
+      repeated_claims: ['السعر نفسه'],
+      violations: ['semantic_duplicate'],
+      final_reply: '',
+    }) } }],
+    usage: {},
+  }) } } };
+  const result = await reviewFinalReplyBeforeSend({
+    openai,
+    model: 'test-model',
+    draft: 'السعر ما تغيّر، هو 189 ريال.',
+    customerText: 'متأكد السعر 189؟',
+    history: [
+      { role: 'assistant', content: 'السعر 189 ريال.' },
+      { role: 'user', content: 'متأكد السعر 189؟' },
+    ],
+    config: { products: [{ name: 'أدوبي', price: '189 ريال' }] },
+    logger: silentLogger,
+  });
+
+  assert.equal(result.suppressed, false);
+  assert.match(result.reply, /189 ريال/);
+  assert.ok(result.audit.violations.includes('invalid_suppress_with_new_customer_turn'));
+});
+
 test('deterministic guard suppresses a rephrased double-send when no customer turn intervened', () => {
   const result = deterministicDuplicateGuard(
     'حالياً ما عندنا كود خصم شغال، وتقدر تستفيد من تقسيط تمارا.',

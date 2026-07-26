@@ -114,13 +114,13 @@
 - Produces `enforceReplyBudget(reply, policy, protectedFacts)`.
 - Produces `resolveDuplicateReply({ draft, history, customerText })`.
 
-- [ ] Write failing tests for character/sentence/line limits, URL/fact preservation, and revalidation after shortening.
-- [ ] Write failing tests for repeated greeting, price, question, exact/semantic duplicate, and retry without a new customer turn.
-- [ ] Verify RED.
-- [ ] Implement bounded sentence-aware shortening and distinguish duplicate send from a new customer turn.
-- [ ] Ensure a new turn receives a safe response or clarification, while idempotent retry may suppress.
-- [ ] Re-run validator, deduplication, worker, and pre-send tests.
-- [ ] Commit the isolated task.
+- [x] Write failing tests for character/sentence/line limits, URL/fact preservation, and revalidation after shortening.
+- [x] Write failing tests for repeated greeting, price, question, exact/semantic duplicate, and retry without a new customer turn.
+- [x] Verify RED.
+- [x] Implement bounded sentence-aware shortening and distinguish duplicate send from a new customer turn.
+- [x] Ensure a new turn receives a safe response or clarification, while idempotent retry may suppress.
+- [x] Re-run validator, deduplication, worker, and pre-send tests.
+- [x] Commit the isolated task.
 
 ### Task 6: Catalog version history
 

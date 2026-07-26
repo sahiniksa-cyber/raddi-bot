@@ -533,8 +533,14 @@ async function reviewFinalReplyBeforeSend({
   }
   const parsed = parseFinalPreSendReview(response.choices?.[0]?.message?.content || '');
   if (parsed.decision === 'suppress') {
-    const hasPreviousAssistantReply = history.some(message =>
-      message?.role === 'assistant' && String(message?.content || '').trim().length > 1);
+    let lastAssistantIndex = -1;
+    let lastUserIndex = -1;
+    history.forEach((message, index) => {
+      if (message?.role === 'assistant' && String(message?.content || '').trim().length > 1) lastAssistantIndex = index;
+      if (message?.role === 'user' && String(message?.content || '').trim().length > 0) lastUserIndex = index;
+    });
+    const hasPreviousAssistantReply = lastAssistantIndex >= 0;
+    const hasNewCustomerTurn = lastUserIndex > lastAssistantIndex;
     // Suppression is exclusively a duplicate-send decision. With no earlier
     // assistant reply there is nothing the draft can duplicate, so allowing a
     // model-only suppress would silence first-contact greetings (caught by the
@@ -551,6 +557,20 @@ async function reviewFinalReplyBeforeSend({
         latencyMs: Date.now() - startedAt,
       };
       logger?.warn?.('pre-send-review', 'suppression rejected because no previous assistant reply exists');
+      return { reply: cleanedDraft, suppressed: false, audit };
+    }
+    if (hasNewCustomerTurn) {
+      const audit = {
+        status: 'reviewed',
+        decision: 'repair',
+        reason: 'invalid_suppress_with_new_customer_turn_overridden',
+        repeatedClaims: parsed.repeatedClaims,
+        violations: [...parsed.violations, 'invalid_suppress_with_new_customer_turn'],
+        unsupportedClaims: [],
+        hardFallback: false,
+        latencyMs: Date.now() - startedAt,
+      };
+      logger?.warn?.('pre-send-review', 'suppression rejected because a newer customer turn needs an answer');
       return { reply: cleanedDraft, suppressed: false, audit };
     }
     const audit = {

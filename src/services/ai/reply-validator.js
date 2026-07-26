@@ -37,6 +37,87 @@ function enforceLength(reply, maxLen) {
   return text.slice(0, limit).trim();
 }
 
+function resolveReplyBudgetPolicy(config = {}, customerText = '') {
+  const replyStyle = config?.replyStyle || {};
+  const short = replyStyle.useShortReplies === true || replyStyle.replyLength === 'short';
+  const maxCharacters = scaledMaxLength(
+    replyStyle.maxCharacters ?? config.maxResponseLength,
+    customerText,
+  );
+  const integerOr = (value, fallback) => {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
+  return {
+    maxCharacters,
+    maxSentences: integerOr(replyStyle.maxSentences, short ? 2 : Number.MAX_SAFE_INTEGER),
+    maxLines: integerOr(replyStyle.maxLines, short ? 2 : Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function completeSentenceUnits(text) {
+  const units = [];
+  const matcher = /[^.!؟!\n]+(?:[.!؟!]+(?=\s|$)|\n)/gu;
+  for (const match of String(text || '').matchAll(matcher)) {
+    const value = match[0].trim();
+    if (value) units.push(value);
+  }
+  return units;
+}
+
+function enforceReplyBudget(reply, policy = {}, protectedFacts = []) {
+  const text = String(reply || '').trim();
+  const maxCharacters = Math.max(40, parseInt(policy.maxCharacters, 10) || 300);
+  const maxSentences = Math.max(1, parseInt(policy.maxSentences, 10) || Number.MAX_SAFE_INTEGER);
+  const maxLines = Math.max(1, parseInt(policy.maxLines, 10) || Number.MAX_SAFE_INTEGER);
+  const lineCount = text ? text.split(/\r?\n/).length : 0;
+  const sentenceCount = completeSentenceUnits(text).length
+    + (text && !/[.!؟!\n]\s*$/u.test(text) ? 1 : 0);
+  if (text.length <= maxCharacters && sentenceCount <= maxSentences && lineCount <= maxLines) {
+    return { valid: true, reply: text, shortened: false, reason: 'within_budget', exception: null };
+  }
+
+  const units = completeSentenceUnits(text);
+  const selected = [];
+  for (const unit of units) {
+    if (selected.length >= maxSentences) break;
+    const candidate = [...selected, unit].join(' ');
+    if (candidate.length > maxCharacters) break;
+    if (candidate.split(/\r?\n/).length > maxLines) break;
+    selected.push(unit);
+  }
+  const shortened = selected.join(' ').trim();
+  const required = (Array.isArray(protectedFacts) ? protectedFacts : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+
+  if (required.some(value => !shortened.includes(value)) && required.every(value => text.includes(value))) {
+    return {
+      valid: true,
+      reply: text,
+      shortened: false,
+      reason: 'protected_content_exception',
+      exception: 'protected_content',
+    };
+  }
+  if (!shortened) {
+    return {
+      valid: false,
+      reply: '',
+      shortened: false,
+      reason: 'no_complete_boundary',
+      exception: null,
+    };
+  }
+  return {
+    valid: true,
+    reply: shortened,
+    shortened: shortened !== text,
+    reason: 'shortened_at_complete_boundary',
+    exception: null,
+  };
+}
+
 // توكنات كلمات الطلب (بعد التطبيع بـnormalizeArabic)
 const WANT_TOKENS = new Set([
   'يبي', 'يبغي',           // يبي / يبغى (مطبّع)
@@ -171,7 +252,6 @@ function stripStyleViolations(reply) {
 // المنسّق: إصلاحات حتمية أولاً، ثم إعادة توليد واحدة عند تهرّب رغم سياسة مطابقة.
 async function validateAndRepair({ reply, config = {}, customerText = '', matched = [], regenerate } = {}) {
   let current = String(reply || '').trim();
-  const maxLen = config.maxResponseLength;
 
   // 1) إعادة توليد واحدة عند التهرّب رغم سياسة مطابقة
   if (needsRepairForCopOut(current, matched) && typeof regenerate === 'function') {
@@ -191,7 +271,18 @@ async function validateAndRepair({ reply, config = {}, customerText = '', matche
   const tagMatch = tagged.match(/\s*\[تحويل:[^\]]*\]\s*$/);
   const tag = tagMatch ? tagMatch[0].trim() : '';
   const body = tagMatch ? tagged.slice(0, tagMatch.index).trim() : tagged;
-  const trimmedBody = enforceLength(body, scaledMaxLength(maxLen, customerText));   // القصّ على المتن فقط
+  const protectedUrls = body.match(/https?:\/\/\S+/gi) || [];
+  const budget = enforceReplyBudget(
+    body,
+    resolveReplyBudgetPolicy(config, customerText),
+    protectedUrls,
+  );
+  if (!budget.valid) {
+    const error = new Error(`reply budget could not preserve a complete response: ${budget.reason}`);
+    error.code = 'REPLY_BUDGET_UNSAFE';
+    throw error;
+  }
+  const trimmedBody = budget.reply;
   current = tag ? `${trimmedBody} ${tag}` : trimmedBody;
   return current;
 }
@@ -215,7 +306,7 @@ function enforceStyleRules(reply, config = {}) {
 }
 
 module.exports = {
-  enforceLength, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
+  enforceLength, enforceReplyBudget, resolveReplyBudgetPolicy, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
   enforceStyleRules, botSignalsTransfer, customerRequestedEscalation,
 };

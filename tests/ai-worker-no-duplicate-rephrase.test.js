@@ -179,7 +179,7 @@ function makeJob() {
   };
 }
 
-test('suppresses a near-duplicate rephrased reply instead of sending it', async () => {
+test('does not leave a new customer turn silent when regeneration remains a near-duplicate', async () => {
   outgoingCalls.length = 0;
   insertedAssistantReplies.length = 0;
   aiReplies = [NEAR_DUPLICATE, NEAR_DUPLICATE];
@@ -187,26 +187,20 @@ test('suppresses a near-duplicate rephrased reply instead of sending it', async 
 
   const result = await processAiReply(makeJob());
 
-  // No customer-facing reply must be stored or enqueued when both the candidate
-  // and the regenerated reply remain near-duplicates of the last assistant reply.
   const customerEnqueues = outgoingCalls.filter(
     c => !c.payload.escalation && c.payload.source !== 'ai_failure_fallback',
   );
   assert.equal(
     customerEnqueues.length,
-    0,
-    `expected NO second customer reply to be enqueued, got ${customerEnqueues.length}: ${JSON.stringify(customerEnqueues.map(c => c.payload.reply))}`,
+    1,
+    `expected one safe answer for the new customer turn, got ${customerEnqueues.length}`,
   );
   assert.equal(
     insertedAssistantReplies.length,
-    0,
-    `expected NO assistant reply to be persisted, got: ${JSON.stringify(insertedAssistantReplies)}`,
+    1,
+    `expected one assistant reply to be persisted, got: ${JSON.stringify(insertedAssistantReplies)}`,
   );
-
-  // And the job should report it skipped (so the completed-handler follow-up
-  // does not re-enqueue and regenerate yet another duplicate).
-  assert.equal(result.skipped, true, 'job should return a skipped outcome');
-  assert.equal(result.reason, 'duplicate_suppressed');
+  assert.notEqual(result.skipped, true);
 });
 
 test('still sends when regeneration produces a genuinely different reply', async () => {
