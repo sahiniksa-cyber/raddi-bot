@@ -95,6 +95,31 @@ function contentTypesXml(worksheetPart = '/custom/sheet-data.xml') {
   );
 }
 
+function workbookXml(relationIds = ['rSheet1']) {
+  return Buffer.from(
+    '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+      + `<sheets>${relationIds.map((relationId, index) => (
+        `<sheet name="Sheet ${index + 1}" sheetId="${index + 1}" r:id="${relationId}"/>`
+      )).join('')}</sheets></workbook>`,
+    'utf8',
+  );
+}
+
+function workbookRelationshipsXml(relations = [
+  { id: 'rSheet1', target: '../custom/sheet-data.xml' },
+]) {
+  return Buffer.from(
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + relations.map(relation => (
+        `<Relationship Id="${relation.id}" `
+        + 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        + `Target="${relation.target}"/>`
+      )).join('')
+      + '</Relationships>',
+    'utf8',
+  );
+}
+
 async function deflateZeroBytes(byteCount) {
   const deflater = createDeflateRaw({ level: 9 });
   const chunks = [];
@@ -396,7 +421,7 @@ test('rejects excessive declared XLSX expansion before candidate parsing', async
   assert.ok(input.length < 2048);
 });
 
-test('discovers normalized nonstandard worksheet parts and ignores row markup in comments', async () => {
+test('resolves normalized nonstandard worksheet relationships and ignores row markup in comments', async () => {
   const rows = Array.from({ length: 50_000 }, () => '<x:row/>').join('');
   const worksheet = Buffer.from(
     `<worksheet xmlns:x="urn:test"><!-- <row/> --><sheetData>${rows}</sheetData></worksheet>`,
@@ -404,7 +429,13 @@ test('discovers normalized nonstandard worksheet parts and ignores row markup in
   );
   const input = makeZip([
     { path: '[Content_Types].xml', data: contentTypesXml('/custom/parts/../sheet-data.xml') },
-    { path: 'xl/workbook.xml', data: '<workbook/>' },
+    { path: 'xl/workbook.xml', data: workbookXml() },
+    {
+      path: 'xl/_rels/workbook.xml.rels',
+      data: workbookRelationshipsXml([
+        { id: 'rSheet1', target: '../custom/parts/../sheet-data.xml' },
+      ]),
+    },
     { path: 'custom/sheet-data.xml', data: worksheet },
   ]);
   let candidateCalls = 0;
@@ -433,7 +464,8 @@ test('counts namespace-prefixed rows in a nonstandard worksheet before candidate
   );
   const input = makeZip([
     { path: '[Content_Types].xml', data: contentTypesXml('/custom/sheet-data.xml') },
-    { path: 'xl/workbook.xml', data: '<workbook/>' },
+    { path: 'xl/workbook.xml', data: workbookXml() },
+    { path: 'xl/_rels/workbook.xml.rels', data: workbookRelationshipsXml() },
     { path: 'custom/sheet-data.xml', data: worksheet },
   ]);
   let candidateCalls = 0;
@@ -452,11 +484,110 @@ test('counts namespace-prefixed rows in a nonstandard worksheet before candidate
   assert.equal(candidateCalls, 0);
 });
 
+test('counts the workbook relationship sheet set instead of Content Types decoys', async () => {
+  const realWorksheet = Buffer.from(
+    `<worksheet><sheetData>${
+      Array.from({ length: 50_001 }, () => '<row/>').join('')
+    }</sheetData></worksheet>`,
+    'utf8',
+  );
+  const input = makeZip([
+    { path: '[Content_Types].xml', data: contentTypesXml('/decoy.xml') },
+    { path: 'xl/workbook.xml', data: workbookXml(['rReal']) },
+    {
+      path: 'xl/_rels/workbook.xml.rels',
+      data: workbookRelationshipsXml([
+        { id: 'rReal', target: '../private/real-sheet.xml' },
+      ]),
+    },
+    { path: 'decoy.xml', data: '<worksheet><row/></worksheet>' },
+    { path: 'private/real-sheet.xml', data: realWorksheet },
+  ]);
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      throw new Error('CANDIDATE_PARSER_ENTERED');
+    },
+  });
+
+  await assert.rejects(
+    guardedRead({ source: input, originalName: 'relationship-authority.xlsx' }),
+    error => error.code === 'SPREADSHEET_ROW_LIMIT_EXCEEDED'
+      && error.details?.rowsSeen === 50_001,
+  );
+  assert.equal(candidateCalls, 0);
+});
+
+test('rejects missing, malformed, and duplicate workbook relationships before candidate parsing', async () => {
+  const baseEntries = [
+    { path: '[Content_Types].xml', data: contentTypesXml('/decoy.xml') },
+    { path: 'xl/workbook.xml', data: workbookXml(['rReal']) },
+    { path: 'decoy.xml', data: '<worksheet><row/></worksheet>' },
+    { path: 'private/real-sheet.xml', data: '<worksheet><row/></worksheet>' },
+  ];
+  const fixtures = [
+    {
+      name: 'missing relationships part',
+      input: makeZip(baseEntries),
+    },
+    {
+      name: 'missing referenced relationship',
+      input: makeZip([
+        ...baseEntries,
+        {
+          path: 'xl/_rels/workbook.xml.rels',
+          data: workbookRelationshipsXml([{ id: 'rOther', target: '../private/real-sheet.xml' }]),
+        },
+      ]),
+    },
+    {
+      name: 'malformed relationships XML',
+      input: makeZip([
+        ...baseEntries,
+        { path: 'xl/_rels/workbook.xml.rels', data: '<Relationships><Relationship' },
+      ]),
+    },
+    {
+      name: 'duplicate relationship ID',
+      input: makeZip([
+        ...baseEntries,
+        {
+          path: 'xl/_rels/workbook.xml.rels',
+          data: workbookRelationshipsXml([
+            { id: 'rReal', target: '../private/real-sheet.xml' },
+            { id: 'rReal', target: '../decoy.xml' },
+          ]),
+        },
+      ]),
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    let candidateCalls = 0;
+    const guardedRead = createSpreadsheetReader({
+      readXlsx: async () => {
+        candidateCalls += 1;
+        throw new Error('CANDIDATE_PARSER_ENTERED');
+      },
+    });
+    await assert.rejects(
+      guardedRead({ source: fixture.input, originalName: 'bad-relationships.xlsx' }),
+      error => error.name === 'SpreadsheetAdapterError'
+        && error.code === 'SPREADSHEET_CORRUPT'
+        && error.statusCode === 400,
+      fixture.name,
+    );
+    assert.equal(candidateCalls, 0, fixture.name);
+  }
+});
+
 test('rejects forged-low ZIP metadata using actual aggregate decompressed bytes', async () => {
   const compressedPayload = await deflateZeroBytes(LIMITS.maxUncompressedBytes + 1);
   const input = makeZip([
     { path: '[Content_Types].xml', data: contentTypesXml() },
-    { path: 'xl/workbook.xml', data: '<workbook/>' },
+    { path: 'xl/workbook.xml', data: workbookXml() },
+    { path: 'xl/_rels/workbook.xml.rels', data: workbookRelationshipsXml() },
     { path: 'custom/sheet-data.xml', data: '<worksheet><row/></worksheet>' },
     {
       path: 'payload.bin',
@@ -496,7 +627,8 @@ test('wraps content-types XML, worksheet XML, and decompression failures as corr
       name: 'worksheet XML',
       input: makeZip([
         { path: '[Content_Types].xml', data: contentTypesXml() },
-        { path: 'xl/workbook.xml', data: '<workbook/>' },
+        { path: 'xl/workbook.xml', data: workbookXml() },
+        { path: 'xl/_rels/workbook.xml.rels', data: workbookRelationshipsXml() },
         { path: 'custom/sheet-data.xml', data: '<worksheet><row>' },
       ]),
     },

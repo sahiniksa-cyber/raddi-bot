@@ -25,9 +25,11 @@ const LIMITS = Object.freeze({
   maxArchiveEntries: 4096,
   maxRows: 50_000,
 });
-const MAX_CONTENT_TYPES_BYTES = 1024 * 1024;
+const MAX_CONTROL_PART_BYTES = 1024 * 1024;
 const CONTENT_TYPES_PART = '[Content_Types].xml';
-const WORKSHEET_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
+const WORKBOOK_PART = 'xl/workbook.xml';
+const WORKBOOK_RELATIONSHIPS_PART = 'xl/_rels/workbook.xml.rels';
+const WORKSHEET_RELATIONSHIP_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet';
 
 let saxenModulePromise;
 
@@ -291,53 +293,104 @@ async function streamArchiveEntries(directory, Parser) {
     entryByPath.set(normalizedPath, entry);
   }
 
-  const contentTypesEntry = entryByPath.get(CONTENT_TYPES_PART);
-  const worksheetPartPaths = new Set();
-  let contentTypesBytes = 0;
-  let actualUncompressedBytes = 0;
-  let contentTypesParser;
-  let contentTypesDecoder;
-  if (contentTypesEntry) {
-    contentTypesDecoder = new StringDecoder('utf8');
-    contentTypesParser = createStreamingXmlParser(Parser, (name, getAttributes) => {
-      if (localXmlName(name).toLowerCase() !== 'override') return;
-      const attributes = getAttributes();
-      const contentType = attributeByLocalName(attributes, 'ContentType');
-      if (String(contentType).toLowerCase() !== WORKSHEET_CONTENT_TYPE) return;
-      worksheetPartPaths.add(normalizeOoxmlPartPath(
-        attributeByLocalName(attributes, 'PartName'),
-      ));
+  const workbookRelationshipIds = [];
+  const workbookRelationshipIdSet = new Set();
+  const relationshipIds = new Set();
+  const worksheetRelationshipTargets = new Map();
+  const controlParts = new Map();
+
+  function addControlPart(partPath, onOpenTag) {
+    if (!entryByPath.has(partPath)) return;
+    controlParts.set(partPath, {
+      bytes: 0,
+      decoder: new StringDecoder('utf8'),
+      parser: createStreamingXmlParser(Parser, onOpenTag),
     });
   }
 
+  addControlPart(CONTENT_TYPES_PART, () => {});
+  addControlPart(WORKBOOK_PART, (name, getAttributes) => {
+    if (localXmlName(name).toLowerCase() !== 'sheet') return;
+    const attributes = getAttributes();
+    if (!attributeByLocalName(attributes, 'name')) return;
+    const relationshipId = attributeByLocalName(attributes, 'id');
+    if (!relationshipId) {
+      throw adapterError(
+        'SPREADSHEET_CORRUPT',
+        'XLSX workbook sheet is missing its relationship ID',
+        400,
+      );
+    }
+    if (workbookRelationshipIdSet.has(relationshipId)) {
+      throw adapterError(
+        'SPREADSHEET_CORRUPT',
+        'XLSX workbook contains duplicate sheet relationship IDs',
+        400,
+      );
+    }
+    workbookRelationshipIdSet.add(relationshipId);
+    workbookRelationshipIds.push(relationshipId);
+  });
+  addControlPart(WORKBOOK_RELATIONSHIPS_PART, (name, getAttributes) => {
+    if (localXmlName(name).toLowerCase() !== 'relationship') return;
+    const attributes = getAttributes();
+    const relationshipId = attributeByLocalName(attributes, 'Id');
+    const relationshipType = attributeByLocalName(attributes, 'Type');
+    const relationshipTarget = attributeByLocalName(attributes, 'Target');
+    if (!relationshipId || !relationshipType || !relationshipTarget) {
+      throw adapterError(
+        'SPREADSHEET_CORRUPT',
+        'XLSX workbook contains a malformed relationship',
+        400,
+      );
+    }
+    if (relationshipIds.has(relationshipId)) {
+      throw adapterError(
+        'SPREADSHEET_CORRUPT',
+        'XLSX workbook contains duplicate relationship IDs',
+        400,
+      );
+    }
+    relationshipIds.add(relationshipId);
+    if (relationshipType === WORKSHEET_RELATIONSHIP_TYPE) {
+      worksheetRelationshipTargets.set(
+        relationshipId,
+        normalizeOoxmlPartPath(relationshipTarget, WORKBOOK_PART),
+      );
+    }
+  });
+
+  let actualUncompressedBytes = 0;
   for (const entry of directory.files) {
     const normalizedPath = normalizeOoxmlPartPath(`/${entry.path}`);
+    const controlPart = controlParts.get(normalizedPath);
     for await (const chunk of entry.stream()) {
       actualUncompressedBytes += chunk.length;
       if (actualUncompressedBytes > LIMITS.maxUncompressedBytes) {
         throw uncompressedLimitError();
       }
-      if (normalizedPath === CONTENT_TYPES_PART) {
-        contentTypesBytes += chunk.length;
-        if (contentTypesBytes > MAX_CONTENT_TYPES_BYTES) {
+      if (controlPart) {
+        controlPart.bytes += chunk.length;
+        if (controlPart.bytes > MAX_CONTROL_PART_BYTES) {
           throw adapterError(
             'SPREADSHEET_CORRUPT',
-            'XLSX content-types part exceeds the safe parsing limit',
+            'XLSX control part exceeds the safe parsing limit',
             400,
           );
         }
-        contentTypesParser.write(contentTypesDecoder.write(chunk));
+        controlPart.parser.write(controlPart.decoder.write(chunk));
       }
     }
-    if (normalizedPath === CONTENT_TYPES_PART) {
-      contentTypesParser.write(contentTypesDecoder.end());
-      contentTypesParser.end();
+    if (controlPart) {
+      controlPart.parser.write(controlPart.decoder.end());
+      controlPart.parser.end();
     }
   }
 
   return {
     entryByPath,
-    worksheetPartPaths,
+    workbookRelationshipIds,
+    worksheetRelationshipTargets,
     actualUncompressedBytes,
   };
 }
@@ -385,14 +438,39 @@ async function preflightXlsxInternal(source, openZipImpl) {
   const Parser = await loadSaxenParser();
   const {
     entryByPath,
-    worksheetPartPaths,
+    workbookRelationshipIds,
+    worksheetRelationshipTargets,
     actualUncompressedBytes,
   } = await streamArchiveEntries(directory, Parser);
-  if (!entryByPath.has(CONTENT_TYPES_PART) || worksheetPartPaths.size === 0) {
+  if (!entryByPath.has(CONTENT_TYPES_PART)) {
     throw adapterError('SPREADSHEET_NOT_XLSX', 'File content is not XLSX', 400);
   }
+  if (
+    !entryByPath.has(WORKBOOK_PART)
+    || !entryByPath.has(WORKBOOK_RELATIONSHIPS_PART)
+    || workbookRelationshipIds.length === 0
+  ) {
+    throw adapterError('SPREADSHEET_CORRUPT', 'XLSX workbook relationships are missing', 400);
+  }
   const worksheetEntries = [];
-  for (const worksheetPartPath of worksheetPartPaths) {
+  const worksheetPartPaths = new Set();
+  for (const relationshipId of workbookRelationshipIds) {
+    const worksheetPartPath = worksheetRelationshipTargets.get(relationshipId);
+    if (!worksheetPartPath) {
+      throw adapterError(
+        'SPREADSHEET_CORRUPT',
+        'XLSX workbook sheet relationship is missing',
+        400,
+      );
+    }
+    if (worksheetPartPaths.has(worksheetPartPath)) {
+      throw adapterError(
+        'SPREADSHEET_CORRUPT',
+        'XLSX workbook contains duplicate worksheet targets',
+        400,
+      );
+    }
+    worksheetPartPaths.add(worksheetPartPath);
     const entry = entryByPath.get(worksheetPartPath);
     if (!entry) {
       throw adapterError('SPREADSHEET_CORRUPT', 'XLSX worksheet part is missing', 400);

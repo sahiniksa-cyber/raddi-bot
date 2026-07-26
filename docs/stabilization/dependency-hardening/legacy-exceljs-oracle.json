@@ -9,7 +9,8 @@
     "semanticWorkbook": {
       "fixture": {
         "fileName": "semantic-audience.xlsx",
-        "byteLength": 7686
+        "nonEmpty": true,
+        "sizeBucket": "up-to-64-kib"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -927,7 +928,8 @@
     "missingPhoneColumn": {
       "fixture": {
         "fileName": "missing-phone-column.xlsx",
-        "byteLength": 6452
+        "nonEmpty": true,
+        "sizeBucket": "up-to-64-kib"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -1065,7 +1067,8 @@
     "largeWorkbook": {
       "fixture": {
         "fileName": "large-workbook.xlsx",
-        "byteLength": 82550
+        "nonEmpty": true,
+        "sizeBucket": "over-64-kib"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -95437,7 +95440,8 @@
     "validCsv": {
       "fixture": {
         "fileName": "contacts.csv",
-        "byteLength": 57
+        "nonEmpty": true,
+        "sizeBucket": "up-to-64-kib"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -95609,7 +95613,8 @@
     "corruptXlsx": {
       "fixture": {
         "fileName": "corrupt.xlsx",
-        "byteLength": 19
+        "nonEmpty": true,
+        "sizeBucket": "up-to-64-kib"
       },
       "sourceWorkbook": null,
       "result": null,
@@ -95628,7 +95633,8 @@
     "emptyXlsx": {
       "fixture": {
         "fileName": "empty.xlsx",
-        "byteLength": 0
+        "nonEmpty": false,
+        "sizeBucket": "empty"
       },
       "sourceWorkbook": null,
       "result": null,
@@ -95647,7 +95653,8 @@
     "spoofedXlsx": {
       "fixture": {
         "fileName": "spreadsheet.xlsx",
-        "byteLength": 34
+        "nonEmpty": true,
+        "sizeBucket": "up-to-64-kib"
       },
       "sourceWorkbook": null,
       "result": null,
@@ -95666,7 +95673,8 @@
     "unsupportedExtension": {
       "fixture": {
         "fileName": "spreadsheet.txt",
-        "byteLength": 7686
+        "nonEmpty": true,
+        "sizeBucket": "up-to-64-kib"
       },
       "sourceWorkbook": {
         "sheetOrder": [

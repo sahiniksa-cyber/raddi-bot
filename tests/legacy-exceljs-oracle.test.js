@@ -4,8 +4,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 
 const { createLegacyOracleEvidence } = require('../scripts/legacy-exceljs-oracle');
+
+const execFileAsync = promisify(execFile);
 
 test('legacy ExcelJS oracle preserves semantic import, export, and ledger behavior', async () => {
   const evidence = await createLegacyOracleEvidence();
@@ -28,7 +32,11 @@ test('legacy ExcelJS oracle preserves semantic import, export, and ledger behavi
   assert.deepEqual(evidence.imports.largeWorkbook.result, {
     added: 1024, duplicates: 0, ordered: 1024, subscriptions: 0, invalid: [], totalRows: 1024,
   });
-  assert.ok(evidence.imports.largeWorkbook.fixture.byteLength > 65536);
+  assert.deepEqual(evidence.imports.largeWorkbook.fixture, {
+    fileName: 'large-workbook.xlsx',
+    nonEmpty: true,
+    sizeBucket: 'over-64-kib',
+  });
   assert.deepEqual(evidence.exports.signalExport.sheetOrder, [
     'مهتمون بلا طلب مؤكد',
     'الطلبات المؤكدة',
@@ -68,4 +76,30 @@ test('legacy ExcelJS oracle preserves semantic import, export, and ledger behavi
     message: 'صيغة الملف غير مدعومة. استخدم CSV أو XLSX',
   });
   assert.deepEqual(evidence, committedEvidence);
+});
+
+test('legacy oracle canonical evidence is deterministic across concurrent subprocesses', async () => {
+  const projectRoot = path.join(__dirname, '..');
+  const generateEvidence = [
+    "const { createLegacyOracleEvidence } = require('./scripts/legacy-exceljs-oracle');",
+    'createLegacyOracleEvidence()',
+    "  .then(evidence => process.stdout.write(JSON.stringify(evidence)))",
+    "  .catch(error => { process.stderr.write(error.stack || error.message); process.exitCode = 1; });",
+  ].join('');
+  const runGenerator = () => execFileAsync(
+    process.execPath,
+    ['-e', generateEvidence],
+    { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024 },
+  );
+
+  const [left, right] = await Promise.all([runGenerator(), runGenerator()]);
+  const leftEvidence = JSON.parse(left.stdout);
+  const rightEvidence = JSON.parse(right.stdout);
+
+  assert.deepEqual(leftEvidence, rightEvidence);
+  for (const importEvidence of Object.values(leftEvidence.imports)) {
+    assert.equal(Object.hasOwn(importEvidence.fixture, 'byteLength'), false);
+    assert.equal(typeof importEvidence.fixture.nonEmpty, 'boolean');
+    assert.match(importEvidence.fixture.sizeBucket, /^(empty|up-to-64-kib|over-64-kib)$/);
+  }
 });

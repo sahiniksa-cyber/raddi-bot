@@ -170,6 +170,19 @@ function visibleError(error) {
   };
 }
 
+function fixtureSemantics(fixture) {
+  const byteLength = fixture.buffer.length;
+  return {
+    fileName: fixture.fileName,
+    nonEmpty: byteLength > 0,
+    sizeBucket: byteLength === 0
+      ? 'empty'
+      : byteLength > 64 * 1024
+        ? 'over-64-kib'
+        : 'up-to-64-kib',
+  };
+}
+
 async function captureImport(fixture) {
   const { database, queries } = makeCaptureDatabase();
   const service = createCampaignService({ database, getUserBot: async () => ({}) });
@@ -183,7 +196,7 @@ async function captureImport(fixture) {
     const result = await service.importContacts('oracle-user', fixture.buffer, fixture.fileName);
     const inserts = queries.filter(item => /INSERT INTO campaign_contacts/.test(item.sql));
     return {
-      fixture: { fileName: fixture.fileName, byteLength: fixture.buffer.length },
+      fixture: fixtureSemantics(fixture),
       sourceWorkbook,
       result,
       acceptedRecipientCount: result.added,
@@ -203,7 +216,7 @@ async function captureImport(fixture) {
     };
   } catch (error) {
     return {
-      fixture: { fileName: fixture.fileName, byteLength: fixture.buffer.length },
+      fixture: fixtureSemantics(fixture),
       sourceWorkbook,
       result: null,
       acceptedRecipientCount: 0,
