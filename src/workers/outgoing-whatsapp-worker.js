@@ -10,6 +10,10 @@ const { checkMessageQuota, decrementMessageQuota } = require('../services/billin
 const { resolveGroupJidByName } = require('../services/whatsapp/group-resolver');
 const { recordThreadMessage } = require('../services/escalation/escalation-bridge');
 const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-review');
+const {
+  finishReplyTrace,
+  isReplyTraceEnabled,
+} = require('../services/ai/reply-trace-repository');
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { prepareEscalation } = require('./escalation-routing');
 const { TIMERS } = require('../../lib/constants');
@@ -554,6 +558,20 @@ async function processOutgoingWhatsapp(job, {
     attempts: job.attemptsMade + 1,
     last_error: null,
   });
+  if (payload.replyOperationId && isReplyTraceEnabled()) {
+    await finishReplyTrace({
+      database: db,
+      tenantId: userId,
+      operationId: payload.replyOperationId,
+      outcome: {
+        status: 'sent',
+        finalReply,
+        reason: 'whatsapp_send_confirmed',
+        validatorVersion: preSend?.audit?.validatorVersion,
+        catalogVersion: preSend?.audit?.catalogVersion,
+      },
+    });
+  }
 
   bot.log(`outgoing reply sent to ${deliverTo}`);
 
@@ -712,6 +730,20 @@ async function handleLidOutgoing({
       attempts: job.attemptsMade + 1,
       last_error: null,
     });
+    if (payload.replyOperationId && isReplyTraceEnabled()) {
+      await finishReplyTrace({
+        database: db,
+        tenantId: userId,
+        operationId: payload.replyOperationId,
+        outcome: {
+          status: 'sent',
+          finalReply,
+          reason: 'whatsapp_lid_send_confirmed',
+          validatorVersion: preSend?.audit?.validatorVersion,
+          catalogVersion: preSend?.audit?.catalogVersion,
+        },
+      });
+    }
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send succeeded jid=${sender}`);
     return { sent: true, replyMessageId, lid: true };
   } catch (err) {
@@ -750,6 +782,17 @@ async function completeSuppressedOutgoing(job, { replyMessageId, lid = false } =
     attempts: job.attemptsMade + 1,
     last_error: message,
   });
+  if (job.data?.replyOperationId && job.data?.userId && isReplyTraceEnabled()) {
+    await finishReplyTrace({
+      database: db,
+      tenantId: job.data.userId,
+      operationId: job.data.replyOperationId,
+      outcome: {
+        status: 'blocked',
+        reason: 'pre_send_duplicate_suppressed',
+      },
+    });
+  }
   return { skipped: true, reason: 'pre_send_suppressed', replyMessageId, lid };
 }
 
@@ -1109,6 +1152,17 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
         failedAt: new Date().toISOString(),
         error: err.message,
       }, messageScope(job.data)).catch(() => {});
+      if (exhausted && job.data?.replyOperationId && job.data?.userId && isReplyTraceEnabled()) {
+        await finishReplyTrace({
+          database: db,
+          tenantId: job.data.userId,
+          operationId: job.data.replyOperationId,
+          outcome: {
+            status: 'failed',
+            reason: `whatsapp_send_failed:${err.message}`,
+          },
+        }).catch(() => {});
+      }
     }
   });
 

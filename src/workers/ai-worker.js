@@ -29,6 +29,18 @@ const { getPlatformSetting } = require('../services/platform/platform-settings')
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const { compactQualityGateAudit } = require('../services/ai/reply-quality-gate');
+const {
+  appendReplyStage,
+  buildReplyOperationId,
+  finishReplyTrace,
+  isReplyTraceEnabled,
+  startReplyTrace,
+} = require('../services/ai/reply-trace-repository');
+const {
+  buildProductFactCatalog,
+  buildScopedProductContext,
+  resolveProductFocus,
+} = require('../services/products/product-facts');
 const { isAutoReplyEnabled } = require('../services/bot/auto-reply-control');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
@@ -485,7 +497,16 @@ async function markConversationMessagesAutoReplyDisabled({ database = db, userId
   return { retired: result.rowCount || 0 };
 }
 
-async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, database = db }) {
+async function storeAssistantMessage({
+  userId,
+  conversationId,
+  sender,
+  reply,
+  jobId,
+  qualityGateAudit,
+  replyOperationId = null,
+  database = db,
+}) {
   // provider_message_id must be unique per reply (the UNIQUE constraint is on
   // (user_id, provider_message_id)). The jobId is shared across all replies for
   // the same conversation (BullMQ uses conversation-${id} as the job key for
@@ -505,6 +526,7 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
       JSON.stringify({
         source: WORKER_NAME,
         jobId,
+        replyOperationId,
         qualityGate: compactQualityGateAudit(qualityGateAudit),
       }),
     ],
@@ -703,6 +725,7 @@ async function sendInstantAutoReply({
 async function processAiReply(job) {
   const payload = job.data || {};
   const logger = createLogger(job.id);
+  let replyOperationId = null;
   // Tracks whether a real customer reply was already enqueued — guards the
   // final-attempt fallback from sending "لحظات من فضلك" ON TOP of a real reply.
   let outgoingEnqueued = false;
@@ -976,6 +999,43 @@ async function processAiReply(job) {
       customerId: conversation.sender,
     });
 
+    const traceScope = {
+      tenantId: userId,
+      channelId: 'whatsapp',
+      conversationId: conversation.id,
+      customerId: conversation.sender,
+    };
+    replyOperationId = buildReplyOperationId({
+      ...traceScope,
+      inboundMessageId: payload.messageId || payload.providerMessageId,
+      jobId: job.id,
+    });
+    if (isReplyTraceEnabled()) {
+      const productCatalog = buildProductFactCatalog(config, {
+        catalogVersion: config.productCatalogVersion || 0,
+      });
+      const productFocus = resolveProductFocus({
+        catalog: productCatalog,
+        history,
+        customerText: text,
+      });
+      const productContext = buildScopedProductContext(productCatalog, productFocus);
+      await startReplyTrace({
+        database: db,
+        scope: traceScope,
+        operationId: replyOperationId,
+        input: {
+          customerMessage: text,
+          inboundMessageId: payload.messageId || payload.providerMessageId || null,
+          selectedProduct: productFocus,
+          productContext: productContext.products,
+          promptVersion: config.promptVersion || 'safe-reply-pipeline-v1',
+          validatorVersion: 'product-tuples-v1',
+          catalogVersion: productCatalog.version,
+        },
+      });
+    }
+
     // Customer profile (best-effort). Never blocks the reply: any failure
     // here is swallowed and we proceed without a profile.
     let customerProfile = null;
@@ -1025,6 +1085,22 @@ async function processAiReply(job) {
       throw aiErr;
     }
     if (!reply) throw new Error('AI returned empty reply');
+    if (isReplyTraceEnabled()) {
+      await appendReplyStage({
+        database: db,
+        tenantId: userId,
+        operationId: replyOperationId,
+        stage: {
+          name: 'generation_and_validation',
+          originalDraft: ai.lastDebug?.rawReply || '',
+          resultingDraft: reply,
+          qualityReview: ai.lastDebug?.qualityGate || null,
+          finalValidation: ai.lastDebug?.finalValidation || null,
+          promptVersion: config.promptVersion || 'safe-reply-pipeline-v1',
+          catalogVersion: config.productCatalogVersion || 0,
+        },
+      });
+    }
     const escalation = prepareEscalation({
       reply,
       config,
@@ -1119,6 +1195,7 @@ async function processAiReply(job) {
       reply: customerReply,
       jobId: job.id,
       qualityGateAudit: ai.lastDebug?.qualityGate,
+      replyOperationId,
     });
     const replyDelayMs = resolveReplyDelayMs(config);
 
@@ -1148,12 +1225,26 @@ async function processAiReply(job) {
       replyDelayPreset: config.replyDelayPreset,
       source: 'ai_reply',
       preSendReviewRequired: true,
+      replyOperationId,
       handoffAcknowledgement: Boolean(escalation.ownerMessage),
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,
     });
     outgoingEnqueued = true;
+    if (isReplyTraceEnabled()) {
+      await appendReplyStage({
+        database: db,
+        tenantId: userId,
+        operationId: replyOperationId,
+        stage: {
+          name: 'queued_for_send',
+          replyMessageId,
+          duplicateReview: 'completed',
+          replyDelayMs,
+        },
+      });
+    }
 
     // The escalation forwarding below is a best-effort SIDE CHANNEL — wrapped so
     // a failure can never throw the job and trigger a customer re-send.
@@ -1291,6 +1382,19 @@ async function processAiReply(job) {
 
     return { replyMessageId, queuedForSend: true };
   } catch (err) {
+    if (replyOperationId && isReplyTraceEnabled()) {
+      await finishReplyTrace({
+        database: db,
+        tenantId: payload.userId,
+        operationId: replyOperationId,
+        outcome: {
+          status: err?.code === 'FINAL_REPLY_VALIDATION_BLOCKED' ? 'blocked' : 'failed',
+          reason: err?.message || String(err),
+          validatorVersion: err?.validation?.audit?.validatorVersion,
+          catalogVersion: err?.validation?.audit?.catalogVersion,
+        },
+      }).catch(() => {});
+    }
     await markInboundMessageFailed({
       userId: payload.userId,
       conversationId: payload.conversationId,

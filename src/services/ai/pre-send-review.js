@@ -6,6 +6,10 @@ const {
   normalizeSessionGapMs,
   trimToCurrentSession,
 } = require('./conversation-context');
+const {
+  appendReplyStage,
+  isReplyTraceEnabled,
+} = require('./reply-trace-repository');
 
 function compactAudit(audit = {}, source = 'ai_reply') {
   const shortList = (value, limit = 10) => Array.isArray(value)
@@ -246,6 +250,20 @@ async function reviewOutgoingReplyBeforeSend({
       reply,
       suppressed,
       audit,
+    });
+  }
+  if (payload.replyOperationId && isReplyTraceEnabled()) {
+    await appendReplyStage({
+      database,
+      tenantId: userId,
+      operationId: payload.replyOperationId,
+      stage: {
+        name: 'pre_send_review',
+        inputDraft: finalDraft,
+        resultingReply: reply,
+        suppressed,
+        audit,
+      },
     });
   }
   return {

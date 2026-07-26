@@ -1102,6 +1102,37 @@ const statements = [
   `CREATE TRIGGER product_catalog_versions_immutable
     BEFORE UPDATE OR DELETE ON product_catalog_versions
     FOR EACH ROW EXECUTE FUNCTION prevent_product_catalog_version_mutation()`,
+
+  `CREATE TABLE IF NOT EXISTS ai_reply_traces (
+    operation_id TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    conversation_id UUID NOT NULL,
+    customer_id TEXT NOT NULL,
+    inbound_message_id TEXT,
+    customer_message_redacted TEXT NOT NULL DEFAULT '',
+    selected_product JSONB,
+    product_context JSONB NOT NULL DEFAULT '[]'::jsonb,
+    stages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    prompt_version TEXT,
+    validator_version TEXT,
+    catalog_version BIGINT NOT NULL DEFAULT 0,
+    outcome_status TEXT NOT NULL DEFAULT 'processing',
+    final_reply_redacted TEXT NOT NULL DEFAULT '',
+    outcome_reason TEXT NOT NULL DEFAULT '',
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    UNIQUE (operation_id, user_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_ai_reply_traces_scope_created
+    ON ai_reply_traces
+      (user_id, channel_id, conversation_id, customer_id, created_at DESC)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_ai_reply_traces_retention
+    ON ai_reply_traces (retention_until)`,
 ];
 
 async function migrate() {
