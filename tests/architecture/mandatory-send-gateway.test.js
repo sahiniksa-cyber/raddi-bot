@@ -76,10 +76,71 @@ function gatewayRequestObjects(source, bindings) {
   return objects;
 }
 
+function readQuotedProperty(source, start) {
+  const quote = source[start];
+  let value = '';
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      value += source[index + 1] || '';
+      index += 1;
+    } else if (source[index] === quote) {
+      return { value, end: index + 1 };
+    } else {
+      value += source[index];
+    }
+  }
+  return { value, end: source.length };
+}
+
+function topLevelObjectProperties(object) {
+  const properties = new Set();
+  let depth = 0;
+  for (let index = 0; index < object.length; index += 1) {
+    const character = object[index];
+    if (character === '/' && object[index + 1] === '/') {
+      index = object.indexOf('\n', index + 2);
+      if (index < 0) break;
+      continue;
+    }
+    if (character === '/' && object[index + 1] === '*') {
+      index = object.indexOf('*/', index + 2);
+      if (index < 0) break;
+      index += 1;
+      continue;
+    }
+    if (character === '{') {
+      depth += 1;
+      continue;
+    }
+    if (character === '}') {
+      depth -= 1;
+      continue;
+    }
+    if (depth !== 1) continue;
+
+    let key = null;
+    let keyEnd = index;
+    if (character === '\'' || character === '"') {
+      ({ value: key, end: keyEnd } = readQuotedProperty(object, index));
+    } else if (/[A-Za-z_$]/.test(character)) {
+      const keyMatch = object.slice(index).match(/^[A-Za-z_$][\w$]*/);
+      key = keyMatch[0];
+      keyEnd = index + key.length;
+    }
+    if (key === null) continue;
+
+    const remainder = object.slice(keyEnd);
+    if (/^\s*:/.test(remainder)) properties.add(key);
+    index = keyEnd - 1;
+  }
+  return properties;
+}
+
 function hasCompleteGatewayRequest(requests) {
-  return requests.some(request => REQUIRED_GATEWAY_FIELDS.every(field => (
-    new RegExp(`\\b${field}\\s*:`).test(request)
-  )));
+  return requests.some(request => {
+    const properties = topLevelObjectProperties(request);
+    return REQUIRED_GATEWAY_FIELDS.every(field => properties.has(field));
+  });
 }
 
 function producerGatewayViolations(producer, source) {
@@ -100,7 +161,17 @@ function preSendReviewAuthorizationUses() {
 }
 
 function isPreSendReviewAuthorizationUse(match) {
-  return !/^\s*:/.test(match.rawText.slice(match.column + 'preSendReviewRequired'.length));
+  const before = match.rawText.slice(0, match.column);
+  const after = match.rawText.slice(match.column + 'preSendReviewRequired'.length);
+  const inControlCondition = /\b(?:if|while|for)\s*\([^{};]*$/.test(before) && /^[^{};]*\)/.test(after);
+  const ternaryDecision = /^\s*(?:={2,3}|!={1,2})?\s*(?:true|false)?\s*\?/.test(after);
+  const logicalDecision = /^\s*(?:(?:={2,3}|!={1,2})\s*(?:true|false)\s*)?(?:&&|\|\|)/.test(after)
+    || /(?:&&|\|\|)\s*$/.test(before);
+  return inControlCondition || ternaryDecision || logicalDecision;
+}
+
+function authorizationUsesInSource(source) {
+  return matchingLines(source, /\bpreSendReviewRequired\b/).filter(isPreSendReviewAuthorizationUse);
 }
 
 test('gateway wiring binds the imported gateway and puts every required field in its send request object', () => {
@@ -131,21 +202,35 @@ test('gateway wiring binds the imported gateway and puts every required field in
     '{ sendClass: \'reply\' }',
     '{ policyVersion: \'v1\', idempotencyKey: \'id-1\', tenantScope: { userId } }',
   ]), false);
+  assert.equal(hasCompleteGatewayRequest([
+    `{
+      metadata: { sendClass: 'reply', policyVersion: 'v1', idempotencyKey: 'id-1', tenantScope: { userId } },
+      note: 'sendClass: policyVersion: idempotencyKey: tenantScope:'
+      /* sendClass: policyVersion: idempotencyKey: tenantScope: */
+    }`,
+  ]), false);
 });
 
-test('authorization-switch scan catches truthy, negated, and coerced preSendReviewRequired reads', () => {
-  const uses = [
+test('authorization-switch scan catches decision uses while allowing inert compatibility reads', () => {
+  const decisions = [
     'if (payload.preSendReviewRequired) allow();',
     'if (!payload.preSendReviewRequired) bypass();',
     'if (Boolean(payload.preSendReviewRequired)) allow();',
     'if (!!payload.preSendReviewRequired) allow();',
+    'const reply = payload.preSendReviewRequired ? approved : held;',
+    'payload.preSendReviewRequired && dispatch();',
+    'payload.preSendReviewRequired || hold();',
+    'if (payload.preSendReviewRequired === true) allow();',
   ];
-  for (const use of uses) {
-    const [match] = matchingLines(use, /\bpreSendReviewRequired\b/);
-    assert.equal(isPreSendReviewAuthorizationUse(match), true, use);
+  for (const decision of decisions) {
+    assert.equal(authorizationUsesInSource(decision).length, 1, decision);
   }
-  const [objectKey] = matchingLines('({ preSendReviewRequired: true })', /\bpreSendReviewRequired\b/);
-  assert.equal(isPreSendReviewAuthorizationUse(objectKey), false);
+  const inertCompatibility = `
+    const { preSendReviewRequired } = payload;
+    const legacyValue = payload.preSendReviewRequired;
+    logger.info({ preSendReviewRequired: payload.preSendReviewRequired });
+  `;
+  assert.equal(authorizationUsesInSource(inertCompatibility).length, 0);
 });
 
 test('WhatsApp producers invoke WhatsAppSendGateway, never authorize with preSendReviewRequired, and construct complete gateway requests', () => {
