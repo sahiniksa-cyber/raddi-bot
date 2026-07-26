@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const {
   ISO_4217_CURRENCY_CODES,
   isIso4217CurrencyCode,
+  minorUnitForCurrency,
 } = require('./iso-4217');
 
 const POLICY_SCHEMA_VERSION = 1;
@@ -348,7 +349,10 @@ function validateMerchantPolicy(input) {
               if (!Object.prototype.hasOwnProperty.call(variant.price, 'currency')) {
                 addError(`${variantBase}.price.currency`, 'required');
               } else if (typeof variant.price.currency !== 'string'
-                         || !isIso4217CurrencyCode(variant.price.currency)) {
+                         || !isIso4217CurrencyCode(variant.price.currency)
+                         || !Number.isInteger(
+                           minorUnitForCurrency(variant.price.currency),
+                         )) {
                 addError(`${variantBase}.price.currency`, 'invalid_currency');
               }
             }

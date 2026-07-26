@@ -400,6 +400,27 @@ test('rejects syntactically plausible but unsupported currencies', () => {
   );
 });
 
+test('rejects ISO special-purpose currencies without minor-unit semantics', () => {
+  const acceptedCurrencies = [];
+
+  for (const currency of ['XXX', 'XTS', 'XAU']) {
+    const policy = validPolicy();
+    policy.catalog.products[0].variants[0].price.currency = currency;
+
+    const result = validateMerchantPolicy(policy);
+    if (result.ok
+        || !hasError(
+          result,
+          'catalog.products[0].variants[0].price.currency',
+          'invalid_currency',
+        )) {
+      acceptedCurrencies.push(currency);
+    }
+  }
+
+  assert.deepEqual(acceptedCurrencies, []);
+});
+
 test('accepts a canonical policy price denominated in EUR', () => {
   const policy = validPolicy();
   policy.catalog.products[0].variants[0].price = {
