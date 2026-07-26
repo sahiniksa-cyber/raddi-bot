@@ -12,8 +12,24 @@ function createResponse() {
   return {
     code: 200,
     body: null,
+    headers: {},
     status(code) {
       this.code = code;
+      return this;
+    },
+    set(name, value) {
+      this.headers[String(name).toLowerCase()] = value;
+      return this;
+    },
+    type(value) {
+      this.headers['content-type'] = value;
+      return this;
+    },
+    send(body) {
+      this.body = body;
+      return this;
+    },
+    end() {
       return this;
     },
     json(body) {
@@ -179,4 +195,36 @@ test('status exposes auto-reply separately from the connected WhatsApp state', (
 
   assert.equal(res.body.status, 'connected');
   assert.equal(res.body.autoReplyEnabled, false);
+});
+
+test('QR polling endpoints prevent stale barcode reuse and expose the QR version', async () => {
+  const controller = createBotController({
+    getUserBot: () => ({
+      config: { autoReplyEnabled: true },
+      appState: {
+        status: 'qr_ready',
+        qrString: 'fresh-qr-payload',
+        qrVersion: 42,
+        logs: [],
+      },
+      totalChatsHandled: 0,
+    }),
+  });
+
+  const statusRes = createResponse();
+  controller.status({ session: { userId: 'user-1' } }, statusRes);
+  assert.equal(statusRes.headers['cache-control'], 'no-store, max-age=0');
+  assert.equal(statusRes.body.qrVersion, 42);
+  assert.equal(statusRes.body.qrString, undefined);
+
+  const qrRes = createResponse();
+  await controller.qr({ session: { userId: 'user-1' } }, qrRes);
+  assert.equal(qrRes.headers['cache-control'], 'no-store, max-age=0');
+  assert.deepEqual(qrRes.body, { qr: 'fresh-qr-payload', qrVersion: 42 });
+
+  const imageRes = createResponse();
+  await controller.qrImage({ session: { userId: 'user-1' } }, imageRes);
+  assert.equal(imageRes.headers['cache-control'], 'no-store, max-age=0');
+  assert.equal(imageRes.headers['content-type'], 'png');
+  assert.ok(Buffer.isBuffer(imageRes.body));
 });

@@ -71,6 +71,12 @@ function describeStartState(state = {}) {
   return 'طلب التشغيل وصل. إذا لم تتغير الحالة خلال لحظات، اضغط تشغيل مرة ثانية.';
 }
 
+function setNoStore(res) {
+  if (typeof res?.set === 'function') {
+    res.set('Cache-Control', 'no-store, max-age=0');
+  }
+}
+
 function createBotController({
   getUserBot,
   database = null,
@@ -88,6 +94,7 @@ function createBotController({
       const state = bot.appState;
       const { qrString, ...rest } = state;
       const logCount = rest.status === 'error' ? 20 : 8;
+      setNoStore(res);
       res.json({
         ...rest,
         autoReplyEnabled: bot.config?.autoReplyEnabled !== false,
@@ -98,13 +105,18 @@ function createBotController({
 
     async qr(req, res) {
       const bot = getUserBot(req.session.userId);
-      res.json({ qr: bot.appState.qrString || null });
+      setNoStore(res);
+      res.json({
+        qr: bot.appState.qrString || null,
+        qrVersion: bot.appState.qrVersion || 0,
+      });
     },
 
     async qrImage(req, res) {
       const QRCode = require('qrcode');
       const bot = getUserBot(req.session.userId);
       const qr = bot.appState.qrString;
+      setNoStore(res);
       if (!qr) return res.status(404).end();
       try {
         const buf = await QRCode.toBuffer(qr, {
