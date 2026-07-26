@@ -40,6 +40,13 @@ function requireDatabase(database) {
   }
 }
 
+function requireRawText(row, field) {
+  if (typeof row[field] !== 'string') {
+    throw new TypeError(`Preserved ${field} must be exact database text`);
+  }
+  return row[field];
+}
+
 async function up(database) {
   requireDatabase(database);
   return database.transaction(async (client) => {
@@ -59,10 +66,21 @@ async function down(database, { preservationSink } = {}) {
     await client.query('LOCK TABLE reply_audit_events IN ACCESS EXCLUSIVE MODE');
     await client.query('LOCK TABLE whatsapp_send_reservations IN ACCESS EXCLUSIVE MODE');
     const audit = await client.query(
-      'SELECT * FROM reply_audit_events ORDER BY correlation_id, sequence_no',
+      `SELECT id, correlation_id, sequence_no, user_id, conversation_id, customer_id,
+              destination, send_class, stage, policy_version, content, content_hash,
+              evidence_refs::text AS evidence_refs,
+              violations::text AS violations,
+              metadata::text AS metadata,
+              created_at::text AS created_at
+       FROM reply_audit_events
+       ORDER BY correlation_id, sequence_no`,
     );
     const reservations = await client.query(
-      `SELECT * FROM whatsapp_send_reservations
+      `SELECT user_id, idempotency_key, correlation_id, destination, policy_version,
+              status, provider_message_id,
+              created_at::text AS created_at,
+              updated_at::text AS updated_at
+       FROM whatsapp_send_reservations
        ORDER BY user_id, idempotency_key`,
     );
 
@@ -93,7 +111,7 @@ async function restore(database, snapshot) {
            evidence_refs, violations, metadata, created_at
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-           $13::jsonb, $14::jsonb, $15::jsonb, $16
+           $13::jsonb, $14::jsonb, $15::jsonb, $16::timestamptz
          )`,
         [
           row.id,
@@ -108,10 +126,10 @@ async function restore(database, snapshot) {
           row.policy_version,
           row.content,
           row.content_hash,
-          JSON.stringify(row.evidence_refs),
-          JSON.stringify(row.violations),
-          JSON.stringify(row.metadata),
-          row.created_at,
+          requireRawText(row, 'evidence_refs'),
+          requireRawText(row, 'violations'),
+          requireRawText(row, 'metadata'),
+          requireRawText(row, 'created_at'),
         ],
       );
     }
@@ -121,7 +139,9 @@ async function restore(database, snapshot) {
         `INSERT INTO whatsapp_send_reservations (
            user_id, idempotency_key, correlation_id, destination, policy_version,
            status, provider_message_id, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::timestamptz
+         )`,
         [
           row.user_id,
           row.idempotency_key,
@@ -130,8 +150,8 @@ async function restore(database, snapshot) {
           row.policy_version,
           row.status,
           row.provider_message_id,
-          row.created_at,
-          row.updated_at,
+          requireRawText(row, 'created_at'),
+          requireRawText(row, 'updated_at'),
         ],
       );
     }

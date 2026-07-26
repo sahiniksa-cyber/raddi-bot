@@ -10,8 +10,34 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function parseJsonParameter(value) {
-  return typeof value === 'string' ? JSON.parse(value) : clone(value);
+function rawJsonParameter(value) {
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function lossyTimestamp(value) {
+  return new Date(value).toISOString();
+}
+
+function lossyAuditRow(row) {
+  return {
+    ...clone(row),
+    evidence_refs: JSON.parse(row.evidence_refs),
+    violations: JSON.parse(row.violations),
+    metadata: JSON.parse(row.metadata),
+    created_at: lossyTimestamp(row.created_at),
+  };
+}
+
+function rawAuditSnapshotRow(row) {
+  return clone(row);
+}
+
+function lossyReservationRow(row) {
+  return {
+    ...clone(row),
+    created_at: lossyTimestamp(row.created_at),
+    updated_at: lossyTimestamp(row.updated_at),
+  };
 }
 
 function makeLocalSqlDatabase() {
@@ -36,16 +62,37 @@ function makeLocalSqlDatabase() {
         state.reservationTable = true;
         return { rows: [], rowCount: 0 };
       }
-      if (/^LOCK TABLE (reply_audit_events|whatsapp_send_reservations)/i.test(normalized)) {
+      if (/^LOCK TABLE (reply_audit_events|whatsapp_send_reservations)\b/i.test(normalized)) {
         return { rows: [], rowCount: 0 };
+      }
+      if (/^SELECT id, correlation_id, sequence_no,[\s\S]+FROM reply_audit_events/i.test(
+        normalized,
+      )) {
+        if (!state.auditTable) throw new Error('reply_audit_events does not exist');
+        return {
+          rows: state.auditRows.map(rawAuditSnapshotRow),
+          rowCount: state.auditRows.length,
+        };
       }
       if (/^SELECT \* FROM reply_audit_events ORDER BY/i.test(normalized)) {
         if (!state.auditTable) throw new Error('reply_audit_events does not exist');
-        return { rows: clone(state.auditRows), rowCount: state.auditRows.length };
+        return {
+          rows: state.auditRows.map(lossyAuditRow),
+          rowCount: state.auditRows.length,
+        };
+      }
+      if (/^SELECT user_id, idempotency_key,[\s\S]+FROM whatsapp_send_reservations/i.test(
+        normalized,
+      )) {
+        if (!state.reservationTable) throw new Error('whatsapp_send_reservations does not exist');
+        return { rows: clone(state.reservationRows), rowCount: state.reservationRows.length };
       }
       if (/^SELECT \* FROM whatsapp_send_reservations ORDER BY/i.test(normalized)) {
         if (!state.reservationTable) throw new Error('whatsapp_send_reservations does not exist');
-        return { rows: clone(state.reservationRows), rowCount: state.reservationRows.length };
+        return {
+          rows: state.reservationRows.map(lossyReservationRow),
+          rowCount: state.reservationRows.length,
+        };
       }
       if (/^DROP TABLE IF EXISTS whatsapp_send_reservations/i.test(normalized)) {
         state.reservationTable = false;
@@ -97,9 +144,9 @@ function makeLocalSqlDatabase() {
           policy_version: policyVersion,
           content,
           content_hash: contentHash,
-          evidence_refs: parseJsonParameter(evidenceRefs),
-          violations: parseJsonParameter(violations),
-          metadata: parseJsonParameter(metadata),
+          evidence_refs: rawJsonParameter(evidenceRefs),
+          violations: rawJsonParameter(violations),
+          metadata: rawJsonParameter(metadata),
           created_at: createdAt,
         };
         state.auditRows.push(row);
@@ -186,10 +233,10 @@ const auditRow = {
   policy_version: 'sha256:policy',
   content: 'answer',
   content_hash: 'sha256:content',
-  evidence_refs: ['product-coffee'],
-  violations: [],
-  metadata: { source: 'test' },
-  created_at: '2026-07-26T10:00:00.000Z',
+  evidence_refs: '["product-coffee"]',
+  violations: '[]',
+  metadata: '{"source":"test","counter":9007199254740993}',
+  created_at: '2026-07-26 10:00:00.123456+00',
 };
 
 const reservationRow = {
@@ -200,8 +247,8 @@ const reservationRow = {
   policy_version: 'sha256:policy',
   status: 'reserved',
   provider_message_id: null,
-  created_at: '2026-07-26T10:00:00.000Z',
-  updated_at: '2026-07-26T10:00:00.000Z',
+  created_at: '2026-07-26 10:00:00.123456+00',
+  updated_at: '2026-07-26 10:00:01.654321+00',
 };
 
 async function insertFixtureRows(database) {
@@ -240,6 +287,53 @@ test('up is idempotent and its statements are safely registered without running 
   }
 });
 
+test('up statements define the complete audit and tenant reservation schema contract', () => {
+  assert.equal(migration.upStatements.length, 2);
+  const [auditDdl, reservationDdl] = migration.upStatements.map(
+    (statement) => statement.replace(/\s+/g, ' ').trim(),
+  );
+  const auditColumns = [
+    'id UUID PRIMARY KEY',
+    'correlation_id UUID NOT NULL',
+    'sequence_no INTEGER NOT NULL',
+    'user_id UUID NOT NULL',
+    'conversation_id UUID',
+    'customer_id TEXT',
+    'destination TEXT NOT NULL',
+    'send_class TEXT NOT NULL',
+    'stage TEXT NOT NULL',
+    'policy_version TEXT NOT NULL',
+    'content TEXT',
+    'content_hash TEXT NOT NULL',
+    'evidence_refs JSONB NOT NULL',
+    'violations JSONB NOT NULL',
+    'metadata JSONB NOT NULL',
+    'created_at TIMESTAMPTZ NOT NULL',
+  ];
+  const reservationColumns = [
+    'user_id UUID NOT NULL',
+    'idempotency_key TEXT NOT NULL',
+    'correlation_id UUID NOT NULL',
+    'destination TEXT NOT NULL',
+    'policy_version TEXT NOT NULL',
+    'status TEXT NOT NULL',
+    'provider_message_id TEXT',
+    'created_at TIMESTAMPTZ NOT NULL',
+    'updated_at TIMESTAMPTZ NOT NULL',
+  ];
+
+  for (const column of auditColumns) assert.match(auditDdl, new RegExp(`\\b${column}\\b`, 'i'));
+  for (const column of reservationColumns) {
+    assert.match(reservationDdl, new RegExp(`\\b${column}\\b`, 'i'));
+  }
+  assert.match(auditDdl, /UNIQUE \(correlation_id, sequence_no\)/i);
+  assert.match(reservationDdl, /PRIMARY KEY \(user_id, idempotency_key\)/i);
+  for (const nullableColumn of ['conversation_id UUID', 'customer_id TEXT', 'content TEXT']) {
+    assert.doesNotMatch(auditDdl, new RegExp(`${nullableColumn} NOT NULL`, 'i'));
+  }
+  assert.doesNotMatch(reservationDdl, /provider_message_id TEXT NOT NULL/i);
+});
+
 test('down exports every row before the first destructive statement', async () => {
   const { database, state, calls } = makeLocalSqlDatabase();
   await migration.up(database);
@@ -262,14 +356,27 @@ test('down exports every row before the first destructive statement', async () =
   const preservationIndex = calls.findIndex((call) => call.sql === 'PRESERVE');
   const firstDropIndex = calls.findIndex((call) => /^DROP TABLE/i.test(call.sql));
   const auditLockIndex = calls.findIndex(
-    (call) => /^LOCK TABLE reply_audit_events/i.test(call.sql),
+    (call) => call.sql === 'LOCK TABLE reply_audit_events IN ACCESS EXCLUSIVE MODE',
   );
   const reservationLockIndex = calls.findIndex(
-    (call) => /^LOCK TABLE whatsapp_send_reservations/i.test(call.sql),
+    (call) => call.sql
+      === 'LOCK TABLE whatsapp_send_reservations IN ACCESS EXCLUSIVE MODE',
   );
   const firstSnapshotRead = calls.findIndex(
-    (call) => /^SELECT \* FROM reply_audit_events ORDER BY/i.test(call.sql),
+    (call) => /FROM reply_audit_events ORDER BY correlation_id, sequence_no/i.test(call.sql),
   );
+  const auditSnapshotSql = calls[firstSnapshotRead].sql;
+  assert.match(auditSnapshotSql, /evidence_refs::text AS evidence_refs/i);
+  assert.match(auditSnapshotSql, /violations::text AS violations/i);
+  assert.match(auditSnapshotSql, /metadata::text AS metadata/i);
+  assert.match(auditSnapshotSql, /created_at::text AS created_at/i);
+  const reservationSnapshotSql = calls.find(
+    (call) => /FROM whatsapp_send_reservations ORDER BY user_id, idempotency_key/i.test(
+      call.sql,
+    ),
+  ).sql;
+  assert.match(reservationSnapshotSql, /created_at::text AS created_at/i);
+  assert.match(reservationSnapshotSql, /updated_at::text AS updated_at/i);
   assert.ok(auditLockIndex >= 0 && auditLockIndex < reservationLockIndex);
   assert.ok(reservationLockIndex < firstSnapshotRead);
   assert.ok(preservationIndex >= 0 && preservationIndex < firstDropIndex);
@@ -318,7 +425,19 @@ test('up insert down up restore preserves audit and reservation content', async 
     .at(-1);
   assert.equal(restoredAuditInsert.params[12], '["product-coffee"]');
   assert.equal(restoredAuditInsert.params[13], '[]');
-  assert.equal(restoredAuditInsert.params[14], '{"source":"test"}');
+  assert.equal(
+    restoredAuditInsert.params[14],
+    '{"source":"test","counter":9007199254740993}',
+  );
+  assert.equal(restoredAuditInsert.params[15], '2026-07-26 10:00:00.123456+00');
+  assert.match(restoredAuditInsert.sql, /\$13::jsonb, \$14::jsonb, \$15::jsonb/);
+  assert.match(restoredAuditInsert.sql, /\$16::timestamptz/i);
+  const restoredReservationInsert = calls
+    .filter((call) => /^INSERT INTO whatsapp_send_reservations/i.test(call.sql))
+    .at(-1);
+  assert.match(restoredReservationInsert.sql, /\$8::timestamptz, \$9::timestamptz/i);
+  assert.equal(restoredReservationInsert.params[7], '2026-07-26 10:00:00.123456+00');
+  assert.equal(restoredReservationInsert.params[8], '2026-07-26 10:00:01.654321+00');
 });
 
 test('restore rejects divergent rows instead of silently discarding preserved content', async () => {

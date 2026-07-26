@@ -5,7 +5,9 @@ const assert = require('node:assert/strict');
 
 const {
   assertLocalDatabaseUrl,
+  createRollbackFileSink,
   parseArgs,
+  restoreMerchantPolicyConfigs,
   runMerchantPolicyMigration,
   summarizeMigrationResult,
 } = require('../../scripts/migrate-merchant-policy');
@@ -18,20 +20,46 @@ function clone(value) {
 }
 
 function makeDatabase(rows) {
-  const state = clone(rows);
+  const state = rows.map((row) => ({
+    user_id: row.user_id,
+    config_raw: row.configRaw ?? JSON.stringify(row.config),
+    merchant_policy_raw: null,
+  }));
   const calls = [];
   const client = {
     async query(sql, params = []) {
       const normalized = sql.replace(/\s+/g, ' ').trim();
       calls.push({ sql: normalized, params: clone(params) });
+      if (
+        /^SELECT user_id, config::text AS config_raw FROM bot_configs ORDER BY user_id(?: FOR UPDATE)?/i
+          .test(
+            normalized,
+          )
+      ) {
+        return { rows: clone(state), rowCount: state.length };
+      }
       if (/^SELECT user_id, config FROM bot_configs ORDER BY user_id(?: FOR UPDATE)?/i.test(
         normalized,
       )) {
-        return { rows: clone(state), rowCount: state.length };
+        return {
+          rows: state.map((row) => ({
+            user_id: row.user_id,
+            config: JSON.parse(row.config_raw),
+          })),
+          rowCount: state.length,
+        };
       }
       if (/^UPDATE bot_configs SET config = \$2::jsonb/i.test(normalized)) {
         const row = state.find((candidate) => candidate.user_id === params[0]);
-        row.config = clone(params[1]);
+        row.config_raw = typeof params[1] === 'string'
+          ? params[1]
+          : JSON.stringify(params[1]);
+        row.merchant_policy_raw = null;
+        return { rows: [], rowCount: 1 };
+      }
+      if (/^UPDATE bot_configs SET config = jsonb_set\(/i.test(normalized)) {
+        const row = state.find((candidate) => candidate.user_id === params[0]);
+        row.merchant_policy_raw = params[1];
         return { rows: [], rowCount: 1 };
       }
       throw new Error(`Unexpected SQL: ${normalized}`);
@@ -84,19 +112,20 @@ test('dry-run preserves legacy fields and emits only merchant IDs needing review
   assert.equal(result.mode, 'dry-run');
   assert.equal(result.applied, 0);
   assert.deepEqual(result.reviewIds, ['merchant-review']);
-  assert.deepEqual(state[0], original);
+  assert.equal(state[0].config_raw, JSON.stringify(original.config));
   assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
   const reviewed = result.merchants.find((merchant) => merchant.userId === 'merchant-review');
   assert.deepEqual(reviewed.migratedConfig.customLegacyField, { keep: true });
   assert.equal(reviewed.migratedConfig.botInstructions, original.config.botInstructions);
   assert.equal(reviewed.reviewItems[0].code, 'untyped_bot_instructions');
-  assert.deepEqual(reviewed.rollbackConfig, original.config);
+  assert.equal(reviewed.rollbackConfigRaw, JSON.stringify(original.config));
 });
 
 test('dry-run needs only an injected query contract and never opens a configured database', async () => {
   const queryOnlyDatabase = {
-    async query() {
-      return { rows: [{ user_id: 'merchant-one', config: { products: [] } }] };
+    async query(sql) {
+      assert.match(sql, /config::text AS config_raw/i);
+      return { rows: [{ user_id: 'merchant-one', config_raw: '{"products":[]}' }] };
     },
   };
 
@@ -128,16 +157,24 @@ test('apply saves rollback payload before updating bot_configs and preserves leg
   assert.equal(result.mode, 'apply');
   assert.equal(result.applied, 1);
   assert.deepEqual(rollbackPayload, {
-    merchantConfigs: [{ userId: 'merchant-apply', config: originalConfig }],
+    merchantConfigs: [{
+      userId: 'merchant-apply',
+      configRaw: JSON.stringify(originalConfig),
+    }],
   });
-  assert.equal(state[0].config.customLegacyField, 'keep-me');
-  assert.ok(state[0].config.merchantPolicy);
+  assert.equal(state[0].config_raw, JSON.stringify(originalConfig));
+  assert.ok(state[0].merchant_policy_raw);
   assert.ok(
     calls.findIndex((call) => call.sql === 'PRESERVE_ROLLBACK')
       < calls.findIndex((call) => /^UPDATE bot_configs/i.test(call.sql)),
   );
   assert.equal(calls[0].sql, 'BEGIN');
-  assert.match(calls[1].sql, /SELECT user_id, config FROM bot_configs ORDER BY user_id FOR UPDATE/i);
+  assert.match(
+    calls[1].sql,
+    /SELECT user_id, config::text AS config_raw FROM bot_configs ORDER BY user_id FOR UPDATE/i,
+  );
+  const update = calls.find((call) => /^UPDATE bot_configs/i.test(call.sql));
+  assert.match(update.sql, /jsonb_set\(config, '\{merchantPolicy\}', \$2::jsonb, true\)/i);
   assert.equal(calls.at(-1).sql, 'COMMIT');
 });
 
@@ -162,9 +199,49 @@ test('rollback payload preserves an existing merchantPolicy byte-for-byte', asyn
   assert.deepEqual(rollbackPayload, {
     merchantConfigs: [{
       userId: 'merchant-existing-policy',
-      config: originalConfig,
+      configRaw: JSON.stringify(originalConfig),
     }],
   });
+});
+
+test('apply and rollback preserve high-precision unrelated JSONB values as raw text', async () => {
+  const originalRaw = '{"products":[],"legacyCounter":9007199254740993}';
+  const { database, state, calls } = makeDatabase([
+    { user_id: 'merchant-high-precision', configRaw: originalRaw },
+  ]);
+  let rollbackPayload;
+
+  await runMerchantPolicyMigration({
+    database,
+    apply: true,
+    rollbackSink: async (payload) => {
+      rollbackPayload = clone(payload);
+    },
+  });
+
+  assert.deepEqual(rollbackPayload, {
+    merchantConfigs: [{
+      userId: 'merchant-high-precision',
+      configRaw: originalRaw,
+    }],
+  });
+  assert.equal(state[0].config_raw, originalRaw);
+  assert.ok(state[0].merchant_policy_raw);
+  const update = calls.find((call) => /^UPDATE bot_configs/i.test(call.sql));
+  assert.match(update.sql, /jsonb_set/i);
+  assert.doesNotMatch(update.params[1], /9007199254740992/);
+
+  state[0].config_raw = '{"changed":true}';
+  await restoreMerchantPolicyConfigs({
+    database,
+    snapshot: rollbackPayload,
+  });
+
+  assert.equal(state[0].config_raw, originalRaw);
+  const restoreUpdate = calls
+    .filter((call) => /^UPDATE bot_configs SET config = \$2::jsonb/i.test(call.sql))
+    .at(-1);
+  assert.equal(restoreUpdate.params[1], originalRaw);
 });
 
 test('apply refuses missing rollback preservation and never falls back to a configured database', async () => {
@@ -199,7 +276,7 @@ test('rollback preservation failure aborts apply before any config update', asyn
     /rollback storage failed/,
   );
 
-  assert.deepEqual(state[0].config, { products: [] });
+  assert.equal(state[0].config_raw, '{"products":[]}');
   assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
   assert.equal(calls.at(-1).sql, 'ROLLBACK');
 });
@@ -225,7 +302,7 @@ test('CLI summary excludes full migrated and rollback configs', () => {
       status: 'needs_review',
       reviewItems: [{ path: 'botInstructions', code: 'untyped_bot_instructions' }],
       migratedConfig: { openaiApiKey: 'secret-migrated' },
-      rollbackConfig: { openaiApiKey: 'secret-rollback' },
+      rollbackConfigRaw: '{"openaiApiKey":"secret-rollback"}',
     }],
   });
 
@@ -240,4 +317,61 @@ test('CLI summary excludes full migrated and rollback configs', () => {
     }],
   });
   assert.doesNotMatch(JSON.stringify(summary), /secret/);
+});
+
+test('rollback file sink uses exclusive durable write order without touching the real filesystem', async () => {
+  const calls = [];
+  const fileHandle = {
+    async writeFile(data, options) {
+      calls.push(['writeFile', data, options]);
+    },
+    async sync() {
+      calls.push(['file.sync']);
+    },
+    async close() {
+      calls.push(['file.close']);
+    },
+  };
+  const directoryHandle = {
+    async sync() {
+      calls.push(['directory.sync']);
+    },
+    async close() {
+      calls.push(['directory.close']);
+    },
+  };
+  const fsPromises = {
+    async open(target, flags, mode) {
+      calls.push(['open', target, flags, mode]);
+      return flags === 'wx' ? fileHandle : directoryHandle;
+    },
+  };
+  const sink = createRollbackFileSink(
+    'C:\\local\\merchant-policy-rollback.json',
+    { fsPromises },
+  );
+  const payload = {
+    merchantConfigs: [{ userId: 'merchant-1', configRaw: '{"products":[]}' }],
+  };
+
+  await sink(payload);
+
+  assert.deepEqual(calls.map((call) => call[0]), [
+    'open',
+    'writeFile',
+    'file.sync',
+    'file.close',
+    'open',
+    'directory.sync',
+    'directory.close',
+  ]);
+  assert.deepEqual(calls[0], [
+    'open',
+    'C:\\local\\merchant-policy-rollback.json',
+    'wx',
+    0o600,
+  ]);
+  assert.equal(calls[1][1], `${JSON.stringify(payload, null, 2)}\n`);
+  assert.equal(calls[1][2], 'utf8');
+  assert.deepEqual(calls[4], ['open', 'C:\\local', 'r', undefined]);
 });

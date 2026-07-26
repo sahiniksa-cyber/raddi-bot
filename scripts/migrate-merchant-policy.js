@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   migrateLegacyConfig,
@@ -55,20 +56,24 @@ function normalizeConfig(config) {
   throw new TypeError('bot_configs.config must be a JSON object');
 }
 
-function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
+function requireConfigRaw(row) {
+  if (typeof row.config_raw !== 'string') {
+    throw new TypeError('bot_configs.config must be selected as exact JSONB text');
+  }
+  return row.config_raw;
 }
 
 function buildMerchantPlans(rows) {
   return rows.map((row) => {
-    const originalConfig = normalizeConfig(row.config);
+    const configRaw = requireConfigRaw(row);
+    const originalConfig = normalizeConfig(configRaw);
     const migrated = migrateLegacyConfig(originalConfig);
     return {
       userId: row.user_id,
       status: migrated.report.status,
       reviewItems: migrated.report.reviewItems,
       migratedConfig: migrated.migratedConfig,
-      rollbackConfig: cloneJson(originalConfig),
+      rollbackConfigRaw: configRaw,
     };
   });
 }
@@ -98,7 +103,9 @@ async function runMerchantPolicyMigration({
 
   if (!apply) {
     const selected = await database.query(
-      'SELECT user_id, config FROM bot_configs ORDER BY user_id',
+      `SELECT user_id, config::text AS config_raw
+       FROM bot_configs
+       ORDER BY user_id`,
     );
     return migrationResult('dry-run', buildMerchantPlans(selected.rows));
   }
@@ -108,21 +115,28 @@ async function runMerchantPolicyMigration({
 
   return database.transaction(async (client) => {
     const selected = await client.query(
-      'SELECT user_id, config FROM bot_configs ORDER BY user_id FOR UPDATE',
+      `SELECT user_id, config::text AS config_raw
+       FROM bot_configs
+       ORDER BY user_id
+       FOR UPDATE`,
     );
     const merchants = buildMerchantPlans(selected.rows);
     await rollbackSink({
       merchantConfigs: merchants.map((merchant) => ({
         userId: merchant.userId,
-        config: merchant.rollbackConfig,
+        configRaw: merchant.rollbackConfigRaw,
       })),
     });
     for (const merchant of merchants) {
       const updated = await client.query(
         `UPDATE bot_configs
-         SET config = $2::jsonb, updated_at = NOW()
+         SET config = jsonb_set(config, '{merchantPolicy}', $2::jsonb, true),
+             updated_at = NOW()
          WHERE user_id = $1`,
-        [merchant.userId, merchant.migratedConfig],
+        [
+          merchant.userId,
+          JSON.stringify(merchant.migratedConfig.merchantPolicy),
+        ],
       );
       if (updated.rowCount !== 1) {
         throw new Error(`Merchant config disappeared during migration: ${merchant.userId}`);
@@ -130,6 +144,69 @@ async function runMerchantPolicyMigration({
     }
     return migrationResult('apply', merchants);
   });
+}
+
+async function restoreMerchantPolicyConfigs({ database, snapshot } = {}) {
+  if (!database || typeof database.transaction !== 'function') {
+    throw new TypeError('An injected database transaction is required');
+  }
+  if (!snapshot || !Array.isArray(snapshot.merchantConfigs)) {
+    throw new TypeError('A preserved merchant config snapshot is required');
+  }
+
+  return database.transaction(async (client) => {
+    for (const preserved of snapshot.merchantConfigs) {
+      if (typeof preserved.userId !== 'string' || typeof preserved.configRaw !== 'string') {
+        throw new TypeError('Rollback entries require userId and exact configRaw text');
+      }
+      const updated = await client.query(
+        `UPDATE bot_configs
+         SET config = $2::jsonb, updated_at = NOW()
+         WHERE user_id = $1`,
+        [preserved.userId, preserved.configRaw],
+      );
+      if (updated.rowCount !== 1) {
+        throw new Error(`Merchant config disappeared during rollback: ${preserved.userId}`);
+      }
+    }
+  });
+}
+
+const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set([
+  'EACCES',
+  'EBADF',
+  'EINVAL',
+  'EISDIR',
+  'ENOTSUP',
+  'EPERM',
+]);
+
+async function syncParentDirectory(filePath, fsPromises) {
+  let directoryHandle;
+  try {
+    directoryHandle = await fsPromises.open(path.dirname(filePath), 'r');
+    await directoryHandle.sync();
+  } catch (error) {
+    if (!UNSUPPORTED_DIRECTORY_SYNC_CODES.has(error?.code)) throw error;
+  } finally {
+    if (directoryHandle) await directoryHandle.close();
+  }
+}
+
+function createRollbackFileSink(filePath, { fsPromises = fs.promises } = {}) {
+  if (typeof filePath !== 'string' || filePath.trim() === '') {
+    throw new TypeError('A rollback file path is required');
+  }
+  return async (payload) => {
+    const handle = await fsPromises.open(filePath, 'wx', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await syncParentDirectory(filePath, fsPromises);
+  };
 }
 
 function summarizeMigrationResult(result) {
@@ -181,13 +258,7 @@ async function main(args = process.argv.slice(2)) {
       database,
       apply: options.apply,
       rollbackSink: options.apply
-        ? async (payload) => {
-          await fs.promises.writeFile(
-            options.rollbackFile,
-            `${JSON.stringify(payload, null, 2)}\n`,
-            { encoding: 'utf8', flag: 'wx', mode: 0o600 },
-          );
-        }
+        ? createRollbackFileSink(options.rollbackFile)
         : undefined,
     });
     process.stdout.write(`${JSON.stringify(summarizeMigrationResult(result), null, 2)}\n`);
@@ -205,8 +276,10 @@ if (require.main === module) {
 
 module.exports = {
   assertLocalDatabaseUrl,
+  createRollbackFileSink,
   main,
   parseArgs,
+  restoreMerchantPolicyConfigs,
   runMerchantPolicyMigration,
   summarizeMigrationResult,
 };
