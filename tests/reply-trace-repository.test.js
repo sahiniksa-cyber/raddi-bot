@@ -76,6 +76,8 @@ test('reply trace writes are always scoped by tenant and retain for 30 days by d
   });
 
   assert.match(database.calls[0].sql, /INTERVAL '30 days'/);
+  assert.match(database.calls[0].sql, /DELETE FROM ai_reply_traces/);
+  assert.match(database.calls[0].sql, /retention_until <= NOW\(\)/);
   assert.ok(database.calls.every(call => call.params.includes('tenant-1')));
   assert.match(database.calls[1].sql, /user_id = \$2/);
   assert.match(database.calls[2].sql, /user_id = \$2/);

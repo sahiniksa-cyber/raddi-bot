@@ -87,7 +87,17 @@ async function startReplyTrace({ database, scope, operationId, input = {} }) {
   const id = requireOperationId(operationId);
   const clean = redactTraceValue(input);
   return database.query(
-    `INSERT INTO ai_reply_traces (
+    `WITH expired AS (
+       DELETE FROM ai_reply_traces
+        WHERE operation_id IN (
+          SELECT operation_id
+            FROM ai_reply_traces
+           WHERE retention_until <= NOW()
+           ORDER BY retention_until ASC
+           LIMIT 1000
+        )
+     )
+     INSERT INTO ai_reply_traces (
        operation_id, user_id, channel_id, conversation_id, customer_id,
        inbound_message_id, customer_message_redacted, selected_product,
        product_context, prompt_version, validator_version, catalog_version,
