@@ -21,7 +21,10 @@ campaign or billing behavior. Work is local-only on
 - Preserve campaign import, export, creation, recipient persistence,
   scheduling, worker execution, retry/idempotency, pause/resume, quota, and
   message-content behavior.
-- Preserve billing-ledger read/write behavior.
+- Preserve billing-ledger cells and ordering, except for the newly proven
+  `EXCELJS_LEDGER_SECOND_APPEND_LOST` defect: the adapter must intentionally
+  fix the silent loss of the second and later payment rows with a regression
+  test and report that single behavior change explicitly.
 - Add explicit upload byte and row limits, reject corrupt/empty/spoofed XLSX
   input, bound memory use, and return clear errors without crashing a worker.
 - All new behavior follows RED -> GREEN -> refactor. Every claimed guard must
@@ -59,7 +62,8 @@ Fixtures must cover:
 - Duplicate, invalid, empty, missing-column, and reordered-column rows.
 - Unicode and symbols.
 - Dates, decimals, and currencies.
-- Multiple sheets according to the current first-sheet behavior.
+- Multiple sheets, preserving the observed behavior of importing every sheet
+  in workbook order.
 - Large, corrupt, empty, extension-spoofed, and non-XLSX files.
 
 Oracle output must record:
@@ -102,7 +106,9 @@ choice is required.
 
 Expose only the capabilities the application uses:
 
-- Read the current campaign import formats with bounded rows/bytes.
+- Read the current campaign import formats with a 25 MiB compressed-file limit
+  and 50,000-row workbook limit. HTTP uploads must spool to an isolated
+  temporary file rather than retaining a large upload buffer in memory.
 - Write campaign templates and exports with stable sheet names, row order,
   headers, values, date/number semantics, and buffer responses.
 - Read and atomically write the billing ledger.
@@ -125,6 +131,10 @@ The comparison gate must stop the task on any unintended difference in:
 - Campaign message bytes, scheduled timestamps, recipient counts/statuses, or
   quota effects.
 - Billing-ledger rows, values, dates, decimals, or currencies.
+
+The only pre-approved intentional difference is repairing
+`EXCELJS_LEDGER_SECOND_APPEND_LOST`, so every valid payment append remains in
+the ledger. No campaign behavior difference is allowed.
 
 Only explicitly documented security-limit errors may differ, and each such
 difference must be marked intentional.
