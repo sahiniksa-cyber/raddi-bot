@@ -489,12 +489,18 @@ async function processCampaignRecipient(job, {
       [recipientId, campaignId],
     );
     const row = result.rows[0];
-    if (!row || ['sent', 'skipped', 'failed', 'canceled'].includes(row.status)) return null;
+    if (!row || ['sent', 'skipped', 'failed', 'canceled', 'sending'].includes(row.status)) return null;
     if (!['approved', 'scheduled', 'sending'].includes(row.campaign_status) || !row.approved_at) {
       await client.query(`UPDATE campaign_recipients SET status = 'pending', updated_at = NOW() WHERE id = $1`, [recipientId]);
       return null;
     }
-    await client.query(`UPDATE campaign_recipients SET status = 'sending', attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [recipientId]);
+    const claimed = await client.query(
+      `UPDATE campaign_recipients SET status = 'sending', attempts = attempts + 1, updated_at = NOW()
+       WHERE id = $1 AND status = 'queued'
+       RETURNING id`,
+      [recipientId],
+    );
+    if (!claimed.rows[0]) return null;
     await client.query(
       `UPDATE campaigns SET status = 'sending', started_at = COALESCE(started_at, NOW()), updated_at = NOW() WHERE id = $1`,
       [campaignId],
@@ -586,10 +592,29 @@ async function processCampaignRecipient(job, {
     );
     const ids = Array.isArray(recipient.provider_message_ids) ? [...recipient.provider_message_ids] : [];
     let cursor = Number(recipient.media_cursor) || 0;
+    let quotaReserved = Boolean(recipient.quota_decremented);
+    const ensureQuotaReserved = async () => {
+      if (quotaReserved) return { success: true };
+      const quotaReservation = await decrementCampaignRecipientQuota({
+        database,
+        userId: campaign.user_id,
+        recipientId,
+      });
+      if (!quotaReservation.success) {
+        await database.query(`UPDATE campaigns SET status = 'paused', last_error = $2, updated_at = NOW() WHERE id = $1`, [campaignId, `quota:${quotaReservation.reason}`]);
+        await database.query(`UPDATE campaign_recipients SET status = 'pending', last_error = $2, updated_at = NOW() WHERE id = $1`, [recipientId, `quota:${quotaReservation.reason}`]);
+        return { success: false, reason: quotaReservation.reason };
+      }
+      quotaReserved = true;
+      recipient.quota_decremented = true;
+      return { success: true };
+    };
     for (; cursor < mediaResult.rows.length; cursor += 1) {
       const prepared = await prepareCampaignMedia(bot, recipient.sender, mediaResult.rows[cursor]);
       const fence = await fenceCampaignRecipientTransport({ database, campaignId, recipientId });
       if (!fence.allowed) return { stopped: true, reason: fence.reason };
+      const quotaReservation = await ensureQuotaReserved();
+      if (!quotaReservation.success) return { paused: true, reason: quotaReservation.reason };
       const idempotencyKey = `campaign:${campaign.id}:${recipient.id}:media:${cursor}`;
       const request = campaignGatewayRequest({
         campaign,
@@ -616,6 +641,8 @@ async function processCampaignRecipient(job, {
       if (String(campaign.message_text || '').trim()) {
         const fence = await fenceCampaignRecipientTransport({ database, campaignId, recipientId });
         if (!fence.allowed) return { stopped: true, reason: fence.reason };
+        const quotaReservation = await ensureQuotaReserved();
+        if (!quotaReservation.success) return { paused: true, reason: quotaReservation.reason };
         const idempotencyKey = `campaign:${campaign.id}:${recipient.id}:text`;
         const request = campaignGatewayRequest({
           campaign,
@@ -640,20 +667,17 @@ async function processCampaignRecipient(job, {
       );
     }
 
-    if (!recipient.quota_decremented) {
-      const decremented = await decrementCampaignRecipientQuota({
-        database,
-        userId: campaign.user_id,
-        recipientId,
-      });
-      if (!decremented.success) throw new Error('Quota changed before campaign completion');
-    }
+    const quotaReservation = await ensureQuotaReserved();
+    if (!quotaReservation.success) return { paused: true, reason: quotaReservation.reason };
     await recordOutbound(database, campaign, recipient, ids);
     await database.transaction(async client => {
-      await client.query(
-        `UPDATE campaign_recipients SET status = 'sent', sent_at = NOW(), last_error = NULL, updated_at = NOW() WHERE id = $1`,
+      const markedSent = await client.query(
+        `UPDATE campaign_recipients SET status = 'sent', sent_at = NOW(), last_error = NULL, updated_at = NOW()
+         WHERE id = $1 AND status = 'sending'
+         RETURNING id`,
         [recipientId],
       );
+      if (!markedSent.rows[0]) return;
       await client.query(`UPDATE campaigns SET sent_count = sent_count + 1, updated_at = NOW() WHERE id = $1`, [campaignId]);
     });
     await scheduleNextRecipient(campaignId, { database, delay: randomDelayMs(campaign) });

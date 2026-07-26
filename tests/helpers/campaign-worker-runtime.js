@@ -8,6 +8,7 @@ class CampaignWorkerRepository {
   constructor({
     campaigns = {},
     media = {},
+    now = Date.now(),
     policies = {},
     quotas = {},
     recipients = {},
@@ -25,6 +26,10 @@ class CampaignWorkerRepository {
     this.failOnMediaCursorOnce = false;
     this.failOnTextMarkerOnce = false;
     this.queries = [];
+    this.now = Number(now);
+    this.transactionWaiters = 0;
+    this.transactionActive = false;
+    this.transactionTail = Promise.resolve();
   }
 
   async query(sql, params = []) {
@@ -32,13 +37,27 @@ class CampaignWorkerRepository {
   }
 
   async transaction(callback) {
-    const transactionState = clone(this.state);
-    const client = {
-      query: (sql, params = []) => this.#query(transactionState, sql, params),
-    };
-    const result = await callback(client);
-    this.state = transactionState;
-    return result;
+    this.transactionWaiters += 1;
+    const previous = this.transactionTail;
+    let release;
+    this.transactionTail = new Promise(resolve => {
+      release = resolve;
+    });
+    await previous;
+    this.transactionWaiters -= 1;
+    this.transactionActive = true;
+    try {
+      const transactionState = clone(this.state);
+      const client = {
+        query: (sql, params = []) => this.#query(transactionState, sql, params),
+      };
+      const result = await callback(client);
+      this.state = transactionState;
+      return result;
+    } finally {
+      this.transactionActive = false;
+      release();
+    }
   }
 
   async #query(state, sql, params) {
@@ -66,10 +85,16 @@ class CampaignWorkerRepository {
     }
 
     if (normalized.startsWith('UPDATE campaign_recipients r SET status = \'pending\'')) {
+      const [staleMs] = params;
+      const cutoff = this.now - Number(staleMs);
       const recovered = [];
       for (const recipient of Object.values(state.recipients)) {
         const campaign = state.campaigns[recipient.campaign_id];
-        if (campaign && ['scheduled', 'sending'].includes(campaign.status) && recipient.status === 'sending') {
+        const updatedAt = new Date(recipient.updated_at || 0).getTime();
+        if (campaign
+            && ['scheduled', 'sending'].includes(campaign.status)
+            && recipient.status === 'sending'
+            && updatedAt < cutoff) {
           recipient.status = 'pending';
           recipient.last_error = 'recovered_stale_sending';
           recovered.push({ id: recipient.id });
@@ -127,9 +152,10 @@ class CampaignWorkerRepository {
     if (normalized.startsWith("UPDATE campaign_recipients SET status = 'sending'")) {
       const [recipientId] = params;
       const recipient = state.recipients[recipientId];
+      if (!recipient || recipient.status !== 'queued') return { rows: [], rowCount: 0 };
       recipient.status = 'sending';
       recipient.attempts += 1;
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ id: recipientId }], rowCount: 1 };
     }
 
     if (normalized.startsWith("UPDATE campaigns SET status = 'sending'")) {
@@ -144,6 +170,14 @@ class CampaignWorkerRepository {
       campaign.status = 'paused';
       campaign.last_error = lastError;
       return { rows: [], rowCount: 1 };
+    }
+
+    if (normalized.startsWith('UPDATE campaigns SET status = $3')) {
+      const [campaignId, userId, status] = params;
+      const campaign = state.campaigns[campaignId];
+      if (!campaign || campaign.user_id !== userId) return { rows: [], rowCount: 0 };
+      campaign.status = status;
+      return { rows: [clone(campaign)], rowCount: 1 };
     }
 
     if (normalized.startsWith("UPDATE campaign_recipients SET status = 'pending', last_error = $2")) {
@@ -290,15 +324,24 @@ class CampaignWorkerRepository {
     if (normalized.startsWith("UPDATE campaign_recipients SET status = 'sent'")) {
       const [recipientId] = params;
       const recipient = state.recipients[recipientId];
+      if (!recipient || recipient.status !== 'sending') return { rows: [], rowCount: 0 };
       recipient.status = 'sent';
       recipient.last_error = null;
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ id: recipientId }], rowCount: 1 };
     }
 
     if (normalized.startsWith('UPDATE campaigns SET sent_count = sent_count + 1')) {
       const [campaignId] = params;
       const campaign = state.campaigns[campaignId];
       campaign.sent_count = Number(campaign.sent_count || 0) + 1;
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (normalized.startsWith('UPDATE campaigns SET failed_count = failed_count + 1')) {
+      const [campaignId, lastError] = params;
+      const campaign = state.campaigns[campaignId];
+      campaign.failed_count = Number(campaign.failed_count || 0) + 1;
+      campaign.last_error = lastError;
       return { rows: [], rowCount: 1 };
     }
 
