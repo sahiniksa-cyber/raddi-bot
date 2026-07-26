@@ -50,32 +50,12 @@ function sendReceivers(source, bindings) {
 }
 
 function balancedObjectAt(source, openBrace) {
-  let depth = 0;
-  for (let index = openBrace; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === '/' && source[index + 1] === '/') {
-      index = skipLineComment(source, index) - 1;
-      continue;
-    }
-    if (character === '/' && source[index + 1] === '*') {
-      index = skipBlockComment(source, index) - 1;
-      continue;
-    }
-    if (character === '\'' || character === '"') {
-      index = readQuotedProperty(source, index).end - 1;
-      continue;
-    }
-    if (character === '`') {
-      index = readTemplateLiteral(source, index) - 1;
-      continue;
-    }
-    if (character === '{') depth += 1;
-    if (character === '}') {
-      depth -= 1;
-      if (depth === 0) return source.slice(openBrace, index + 1);
-    }
-  }
-  return null;
+  const remainder = source.slice(openBrace);
+  const tokens = javascriptTokens(remainder, { includeTemplateExpressions: false });
+  if (tokens[0]?.value !== '{') return null;
+  const closingIndex = tokenGroupPairs(tokens).get(0);
+  if (closingIndex === undefined) return null;
+  return source.slice(openBrace, openBrace + tokens[closingIndex].end);
 }
 
 function gatewayRequestObjects(source, bindings) {
@@ -118,10 +98,86 @@ function skipBlockComment(source, start) {
   return closing < 0 ? source.length : closing + 2;
 }
 
+const REGEX_PREFIX_KEYWORDS = new Set([
+  'await', 'case', 'delete', 'do', 'else', 'in', 'instanceof', 'new', 'of',
+  'return', 'throw', 'typeof', 'void', 'yield',
+]);
+const REGEX_PREFIX_TOKENS = new Set([
+  '(', '[', '{', ',', ';', ':', '?', '=', '==', '===', '!=', '!==', '=>',
+  '!', '~', '+', '-', '*', '/', '%', '&', '|', '^', '&&', '||', '??', '<',
+  '>', '<=', '>=', '<<', '>>', '>>>', '**', '+=', '-=', '*=', '/=', '%=',
+  '&=', '|=', '^=', '&&=', '||=', '??=', '<<=', '>>=', '>>>=', '**=',
+]);
+
+function canStartRegex(previousToken) {
+  if (!previousToken) return true;
+  if (previousToken.kind === 'identifier') {
+    return REGEX_PREFIX_KEYWORDS.has(previousToken.value);
+  }
+  if (previousToken.kind !== 'punctuator') return false;
+  return REGEX_PREFIX_TOKENS.has(previousToken.value);
+}
+
+function readRegexLiteral(source, start) {
+  let inCharacterClass = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === '[') {
+      inCharacterClass = true;
+      continue;
+    }
+    if (character === ']' && inCharacterClass) {
+      inCharacterClass = false;
+      continue;
+    }
+    if ((character === '\n' || character === '\r') && !inCharacterClass) {
+      return start + 1;
+    }
+    if (character === '/' && !inCharacterClass) {
+      let end = index + 1;
+      while (/[A-Za-z]/.test(source[end] || '')) end += 1;
+      return end;
+    }
+  }
+  return source.length;
+}
+
+function readNumberLiteral(source, start) {
+  const match = source.slice(start).match(
+    /^(?:0[xX][\dA-Fa-f](?:_?[\dA-Fa-f])*n?|0[bB][01](?:_?[01])*n?|0[oO][0-7](?:_?[0-7])*n?|(?:\d(?:_?\d)*)?\.?\d(?:_?\d)*(?:[eE][+-]?\d(?:_?\d)*)?n?)/,
+  );
+  return match ? start + match[0].length : start + 1;
+}
+
+function simpleTokenAt(source, index) {
+  const character = source[index];
+  if (/[A-Za-z_$]/.test(character)) {
+    const value = source.slice(index).match(/^[A-Za-z_$][\w$]*/)[0];
+    return { value, end: index + value.length, kind: 'identifier' };
+  }
+  if (/\d/.test(character) || (character === '.' && /\d/.test(source[index + 1] || ''))) {
+    const end = readNumberLiteral(source, index);
+    return {
+      value: source.slice(index, end),
+      end,
+      kind: 'number',
+    };
+  }
+  const multiCharacter = MULTI_CHARACTER_TOKENS.find(token => source.startsWith(token, index));
+  const value = multiCharacter || character;
+  return { value, end: index + value.length, kind: 'punctuator' };
+}
+
 function readTemplateInterpolation(source, openBrace) {
   let depth = 1;
+  let previousToken = null;
   for (let index = openBrace + 1; index < source.length; index += 1) {
     const character = source[index];
+    if (/\s/.test(character)) continue;
     if (character === '/' && source[index + 1] === '/') {
       index = skipLineComment(source, index) - 1;
       continue;
@@ -132,20 +188,33 @@ function readTemplateInterpolation(source, openBrace) {
     }
     if (character === '\'' || character === '"') {
       index = readQuotedProperty(source, index).end - 1;
+      previousToken = { kind: 'string' };
       continue;
     }
     if (character === '`') {
       index = readTemplateLiteral(source, index) - 1;
+      previousToken = { kind: 'template' };
+      continue;
+    }
+    if (character === '/' && canStartRegex(previousToken)) {
+      index = readRegexLiteral(source, index) - 1;
+      previousToken = { kind: 'regex' };
       continue;
     }
     if (character === '{') {
       depth += 1;
+      previousToken = { value: '{', kind: 'punctuator' };
       continue;
     }
     if (character === '}') {
       depth -= 1;
       if (depth === 0) return index + 1;
+      previousToken = { value: '}', kind: 'punctuator' };
+      continue;
     }
+    const token = simpleTokenAt(source, index);
+    previousToken = token;
+    index = token.end - 1;
   }
   return source.length;
 }
@@ -165,49 +234,20 @@ function readTemplateLiteral(source, start) {
 
 function topLevelObjectProperties(object) {
   const properties = new Set();
-  let depth = 0;
-  for (let index = 0; index < object.length; index += 1) {
-    const character = object[index];
-    if (character === '/' && object[index + 1] === '/') {
-      index = skipLineComment(object, index) - 1;
-      continue;
+  const tokens = javascriptTokens(object, {
+    includeStrings: true,
+    includeTemplateExpressions: false,
+  });
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (
+      token.depth === 1
+      && ['identifier', 'string'].includes(token.kind)
+      && tokens[index + 1]?.value === ':'
+      && !isConditionalColon(tokens, index + 1)
+    ) {
+      properties.add(token.value);
     }
-    if (character === '/' && object[index + 1] === '*') {
-      index = skipBlockComment(object, index) - 1;
-      continue;
-    }
-    if (character === '`') {
-      index = readTemplateLiteral(object, index) - 1;
-      continue;
-    }
-    if (character === '\'' || character === '"') {
-      const quoted = readQuotedProperty(object, index);
-      if (depth === 1 && /^\s*:/.test(object.slice(quoted.end))) properties.add(quoted.value);
-      index = quoted.end - 1;
-      continue;
-    }
-    if (character === '{') {
-      depth += 1;
-      continue;
-    }
-    if (character === '}') {
-      depth -= 1;
-      continue;
-    }
-    if (depth !== 1) continue;
-
-    let key = null;
-    let keyEnd = index;
-    if (/[A-Za-z_$]/.test(character)) {
-      const keyMatch = object.slice(index).match(/^[A-Za-z_$][\w$]*/);
-      key = keyMatch[0];
-      keyEnd = index + key.length;
-    }
-    if (key === null) continue;
-
-    const remainder = object.slice(keyEnd);
-    if (/^\s*:/.test(remainder)) properties.add(key);
-    index = keyEnd - 1;
   }
   return properties;
 }
@@ -245,10 +285,34 @@ const CONDITIONAL_EXPRESSION_SEPARATORS = new Set(
   [...EXPRESSION_SEPARATORS].filter(token => token !== ':'),
 );
 
-function javascriptTokens(source) {
-  const tokens = [];
-  let depth = 0;
-  for (let index = 0; index < source.length; index += 1) {
+function tokenizeTemplateExpressions(source, start, tokens, depth, options) {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (source[index] === '$' && source[index + 1] === '{') {
+      const interpolationEnd = readTemplateInterpolation(source, index + 1);
+      tokenizeJavascriptRange(
+        source,
+        index + 2,
+        Math.max(index + 2, interpolationEnd - 1),
+        tokens,
+        depth,
+        options,
+      );
+      index = interpolationEnd - 1;
+      continue;
+    }
+    if (source[index] === '`') return index + 1;
+  }
+  return source.length;
+}
+
+function tokenizeJavascriptRange(source, start, end, tokens, initialDepth, options) {
+  let depth = initialDepth;
+  let previousToken = null;
+  for (let index = start; index < end; index += 1) {
     const character = source[index];
     if (/\s/.test(character)) continue;
     if (character === '/' && source[index + 1] === '/') {
@@ -260,29 +324,77 @@ function javascriptTokens(source) {
       continue;
     }
     if (character === '\'' || character === '"') {
-      index = readQuotedProperty(source, index).end - 1;
+      const quoted = readQuotedProperty(source, index);
+      const token = {
+        value: quoted.value,
+        start: index,
+        end: quoted.end,
+        depth,
+        kind: 'string',
+      };
+      if (options.includeStrings) tokens.push(token);
+      previousToken = token;
+      index = quoted.end - 1;
       continue;
     }
     if (character === '`') {
-      index = readTemplateLiteral(source, index) - 1;
+      const templateEnd = options.includeTemplateExpressions
+        ? tokenizeTemplateExpressions(source, index, tokens, depth, options)
+        : readTemplateLiteral(source, index);
+      previousToken = {
+        value: '<template>',
+        start: index,
+        end: templateEnd,
+        depth,
+        kind: 'template',
+      };
+      index = templateEnd - 1;
       continue;
     }
-    if (/[A-Za-z_$]/.test(character)) {
-      const identifier = source.slice(index).match(/^[A-Za-z_$][\w$]*/)[0];
-      tokens.push({ value: identifier, start: index, end: index + identifier.length, depth });
-      index += identifier.length - 1;
+    if (character === '/' && canStartRegex(previousToken)) {
+      const regexEnd = readRegexLiteral(source, index);
+      previousToken = {
+        value: '<regex>',
+        start: index,
+        end: regexEnd,
+        depth,
+        kind: 'regex',
+      };
+      index = regexEnd - 1;
       continue;
     }
 
     if (character === ')' || character === ']' || character === '}') {
       depth = Math.max(0, depth - 1);
     }
-    const multiCharacter = MULTI_CHARACTER_TOKENS.find(token => source.startsWith(token, index));
-    const value = multiCharacter || character;
-    tokens.push({ value, start: index, end: index + value.length, depth });
+    const simple = simpleTokenAt(source, index);
+    const token = {
+      value: simple.value,
+      start: index,
+      end: simple.end,
+      depth,
+      kind: simple.kind,
+    };
+    tokens.push(token);
+    previousToken = token;
     if (character === '(' || character === '[' || character === '{') depth += 1;
-    index += value.length - 1;
+    index = simple.end - 1;
   }
+}
+
+function javascriptTokens(source, {
+  includeStrings = false,
+  includeTemplateExpressions = true,
+} = {}) {
+  const tokens = [];
+  tokenizeJavascriptRange(
+    source,
+    0,
+    source.length,
+    tokens,
+    0,
+    { includeStrings, includeTemplateExpressions },
+  );
   return tokens;
 }
 
@@ -538,6 +650,28 @@ test('gateway wiring binds the imported gateway and puts every required field in
       tenantScope: { userId },
     });
   `, ['WhatsAppSendGateway'])), true);
+  assert.equal(hasCompleteGatewayRequest(gatewayRequestObjects(`
+    const { WhatsAppSendGateway } = require('./whatsapp-send-gateway');
+    WhatsAppSendGateway.send({
+      pattern: /sendClass:policyVersion:idempotencyKey:tenantScope:/,
+    });
+  `, ['WhatsAppSendGateway'])), false);
+  assert.equal(hasCompleteGatewayRequest(gatewayRequestObjects(`
+    const { WhatsAppSendGateway } = require('./whatsapp-send-gateway');
+    WhatsAppSendGateway.send({
+      pattern: /[/]sendClass:\\/policyVersion:idempotencyKey:tenantScope:/,
+    });
+  `, ['WhatsAppSendGateway'])), false);
+  assert.equal(hasCompleteGatewayRequest(gatewayRequestObjects(`
+    const { WhatsAppSendGateway } = require('./whatsapp-send-gateway');
+    WhatsAppSendGateway.send({
+      pattern: /[}]/,
+      sendClass: numerator / divisor,
+      policyVersion: 'v1',
+      idempotencyKey: 'id-1',
+      tenantScope: { userId },
+    });
+  `, ['WhatsAppSendGateway'])), true);
 });
 
 test('authorization-switch scan catches decision uses while allowing inert compatibility reads', () => {
@@ -558,6 +692,9 @@ test('authorization-switch scan catches decision uses while allowing inert compa
     'const maySend = enabled && (trusted || payload.preSendReviewRequired);',
     'const maySend = enabled ? payload.preSendReviewRequired : false;',
     'const decision = { maySend: enabled ? payload.preSendReviewRequired : false };',
+    "if (`${payload.preSendReviewRequired}` === 'true') allow();",
+    "if (`outer ${`inner ${payload.preSendReviewRequired}`}` === 'true') allow();",
+    'const maySend = numerator / divisor && payload.preSendReviewRequired;',
   ];
   for (const decision of decisions) {
     assert.equal(authorizationUsesInSource(decision).length, 1, decision);
@@ -570,6 +707,16 @@ test('authorization-switch scan catches decision uses while allowing inert compa
     logger.info((payload.preSendReviewRequired));
     logger.info(Boolean(enabled && payload.preSendReviewRequired));
     const legacyAlongsideDecision = payload.preSendReviewRequired, maySend = enabled && trusted;
+    const regexText = /preSendReviewRequired &&/;
+    const regexWithEscapes = /[/]preSendReviewRequired \\/&&/;
+    const conditionalRegex = enabled ? /preSendReviewRequired &&/ : fallback;
+    const arrowRegex = () => /preSendReviewRequired &&/;
+    function returnedRegex() { return /preSendReviewRequired &&/; }
+    const templateText = \`preSendReviewRequired &&\`;
+    const interpolationString = \`\${"preSendReviewRequired &&"}\`;
+    const interpolationRegex = \`\${/preSendReviewRequired &&/}\`;
+    const interpolationTemplate = \`\${\`preSendReviewRequired &&\`}\`;
+    const interpolationCompatibilityValue = \`\${payload.preSendReviewRequired}\`;
   `;
   assert.equal(authorizationUsesInSource(inertCompatibility).length, 0);
 });
