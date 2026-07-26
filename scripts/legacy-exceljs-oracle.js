@@ -171,15 +171,8 @@ function visibleError(error) {
 }
 
 function fixtureSemantics(fixture) {
-  const byteLength = fixture.buffer.length;
   return {
     fileName: fixture.fileName,
-    nonEmpty: byteLength > 0,
-    sizeBucket: byteLength === 0
-      ? 'empty'
-      : byteLength > 64 * 1024
-        ? 'over-64-kib'
-        : 'up-to-64-kib',
   };
 }
 

@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
-const { createLegacyOracleEvidence } = require('../scripts/legacy-exceljs-oracle');
+const { buildFixtureCorpus, createLegacyOracleEvidence } = require('../scripts/legacy-exceljs-oracle');
 
 const execFileAsync = promisify(execFile);
 
@@ -34,8 +34,6 @@ test('legacy ExcelJS oracle preserves semantic import, export, and ledger behavi
   });
   assert.deepEqual(evidence.imports.largeWorkbook.fixture, {
     fileName: 'large-workbook.xlsx',
-    nonEmpty: true,
-    sizeBucket: 'over-64-kib',
   });
   assert.deepEqual(evidence.exports.signalExport.sheetOrder, [
     'مهتمون بلا طلب مؤكد',
@@ -78,6 +76,12 @@ test('legacy ExcelJS oracle preserves semantic import, export, and ledger behavi
   assert.deepEqual(evidence, committedEvidence);
 });
 
+test('large workbook corpus fixture exceeds 64 KiB outside canonical evidence', async () => {
+  const fixtures = await buildFixtureCorpus();
+
+  assert.ok(fixtures.largeWorkbook.buffer.length > 64 * 1024);
+});
+
 test('legacy oracle canonical evidence is deterministic across concurrent subprocesses', async () => {
   const projectRoot = path.join(__dirname, '..');
   const generateEvidence = [
@@ -98,8 +102,10 @@ test('legacy oracle canonical evidence is deterministic across concurrent subpro
 
   assert.deepEqual(leftEvidence, rightEvidence);
   for (const importEvidence of Object.values(leftEvidence.imports)) {
-    assert.equal(Object.hasOwn(importEvidence.fixture, 'byteLength'), false);
-    assert.equal(typeof importEvidence.fixture.nonEmpty, 'boolean');
-    assert.match(importEvidence.fixture.sizeBucket, /^(empty|up-to-64-kib|over-64-kib)$/);
+    assert.deepEqual(
+      Object.keys(importEvidence.fixture),
+      ['fileName'],
+      'canonical fixture evidence must contain semantic identity only',
+    );
   }
 });

@@ -8,9 +8,7 @@
   "imports": {
     "semanticWorkbook": {
       "fixture": {
-        "fileName": "semantic-audience.xlsx",
-        "nonEmpty": true,
-        "sizeBucket": "up-to-64-kib"
+        "fileName": "semantic-audience.xlsx"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -927,9 +925,7 @@
     },
     "missingPhoneColumn": {
       "fixture": {
-        "fileName": "missing-phone-column.xlsx",
-        "nonEmpty": true,
-        "sizeBucket": "up-to-64-kib"
+        "fileName": "missing-phone-column.xlsx"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -1066,9 +1062,7 @@
     },
     "largeWorkbook": {
       "fixture": {
-        "fileName": "large-workbook.xlsx",
-        "nonEmpty": true,
-        "sizeBucket": "over-64-kib"
+        "fileName": "large-workbook.xlsx"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -95439,9 +95433,7 @@
     },
     "validCsv": {
       "fixture": {
-        "fileName": "contacts.csv",
-        "nonEmpty": true,
-        "sizeBucket": "up-to-64-kib"
+        "fileName": "contacts.csv"
       },
       "sourceWorkbook": {
         "sheetOrder": [
@@ -95612,9 +95604,7 @@
     },
     "corruptXlsx": {
       "fixture": {
-        "fileName": "corrupt.xlsx",
-        "nonEmpty": true,
-        "sizeBucket": "up-to-64-kib"
+        "fileName": "corrupt.xlsx"
       },
       "sourceWorkbook": null,
       "result": null,
@@ -95632,9 +95622,7 @@
     },
     "emptyXlsx": {
       "fixture": {
-        "fileName": "empty.xlsx",
-        "nonEmpty": false,
-        "sizeBucket": "empty"
+        "fileName": "empty.xlsx"
       },
       "sourceWorkbook": null,
       "result": null,
@@ -95652,9 +95640,7 @@
     },
     "spoofedXlsx": {
       "fixture": {
-        "fileName": "spreadsheet.xlsx",
-        "nonEmpty": true,
-        "sizeBucket": "up-to-64-kib"
+        "fileName": "spreadsheet.xlsx"
       },
       "sourceWorkbook": null,
       "result": null,
@@ -95672,9 +95658,7 @@
     },
     "unsupportedExtension": {
       "fixture": {
-        "fileName": "spreadsheet.txt",
-        "nonEmpty": true,
-        "sizeBucket": "up-to-64-kib"
+        "fileName": "spreadsheet.txt"
       },
       "sourceWorkbook": {
         "sheetOrder": [
