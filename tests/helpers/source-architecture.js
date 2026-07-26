@@ -80,5 +80,6 @@ module.exports = {
   formatOccurrences,
   matchingLines,
   readSource,
+  sourceFiles,
   sourceExists,
 };

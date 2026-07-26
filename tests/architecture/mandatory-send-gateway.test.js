@@ -3,10 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  findOccurrences,
   formatOccurrences,
-  matchingLines,
   readSource,
+  sourceFiles,
   sourceExists,
 } = require('../helpers/source-architecture');
 
@@ -53,8 +52,25 @@ function sendReceivers(source, bindings) {
 function balancedObjectAt(source, openBrace) {
   let depth = 0;
   for (let index = openBrace; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1;
-    if (source[index] === '}') {
+    const character = source[index];
+    if (character === '/' && source[index + 1] === '/') {
+      index = skipLineComment(source, index) - 1;
+      continue;
+    }
+    if (character === '/' && source[index + 1] === '*') {
+      index = skipBlockComment(source, index) - 1;
+      continue;
+    }
+    if (character === '\'' || character === '"') {
+      index = readQuotedProperty(source, index).end - 1;
+      continue;
+    }
+    if (character === '`') {
+      index = readTemplateLiteral(source, index) - 1;
+      continue;
+    }
+    if (character === '{') depth += 1;
+    if (character === '}') {
       depth -= 1;
       if (depth === 0) return source.slice(openBrace, index + 1);
     }
@@ -92,10 +108,54 @@ function readQuotedProperty(source, start) {
   return { value, end: source.length };
 }
 
+function skipLineComment(source, start) {
+  const newline = source.indexOf('\n', start + 2);
+  return newline < 0 ? source.length : newline;
+}
+
+function skipBlockComment(source, start) {
+  const closing = source.indexOf('*/', start + 2);
+  return closing < 0 ? source.length : closing + 2;
+}
+
+function readTemplateInterpolation(source, openBrace) {
+  let depth = 1;
+  for (let index = openBrace + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '/' && source[index + 1] === '/') {
+      index = skipLineComment(source, index) - 1;
+      continue;
+    }
+    if (character === '/' && source[index + 1] === '*') {
+      index = skipBlockComment(source, index) - 1;
+      continue;
+    }
+    if (character === '\'' || character === '"') {
+      index = readQuotedProperty(source, index).end - 1;
+      continue;
+    }
+    if (character === '`') {
+      index = readTemplateLiteral(source, index) - 1;
+      continue;
+    }
+    if (character === '{') {
+      depth += 1;
+      continue;
+    }
+    if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return source.length;
+}
+
 function readTemplateLiteral(source, start) {
   for (let index = start + 1; index < source.length; index += 1) {
     if (source[index] === '\\') {
       index += 1;
+    } else if (source[index] === '$' && source[index + 1] === '{') {
+      index = readTemplateInterpolation(source, index + 1) - 1;
     } else if (source[index] === '`') {
       return index + 1;
     }
@@ -109,14 +169,11 @@ function topLevelObjectProperties(object) {
   for (let index = 0; index < object.length; index += 1) {
     const character = object[index];
     if (character === '/' && object[index + 1] === '/') {
-      index = object.indexOf('\n', index + 2);
-      if (index < 0) break;
+      index = skipLineComment(object, index) - 1;
       continue;
     }
     if (character === '/' && object[index + 1] === '*') {
-      index = object.indexOf('*/', index + 2);
-      if (index < 0) break;
-      index += 1;
+      index = skipBlockComment(object, index) - 1;
       continue;
     }
     if (character === '`') {
@@ -175,25 +232,243 @@ function producerGatewayViolations(producer, source) {
   return [];
 }
 
-function preSendReviewAuthorizationUses() {
-  return findOccurrences(/\bpreSendReviewRequired\b/).filter(isPreSendReviewAuthorizationUse);
+const MULTI_CHARACTER_TOKENS = [
+  '>>>=', '===', '!==', '>>>', '**=', '&&=', '||=', '??=', '=>', '==', '!=',
+  '<=', '>=', '&&', '||', '??', '?.', '++', '--', '+=', '-=', '*=', '/=',
+  '%=', '&=', '|=', '^=', '<<', '>>', '**', '...',
+];
+const EXPRESSION_SEPARATORS = new Set([
+  ',', ';', ':', '=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '&&=',
+  '||=', '??=', '=>',
+]);
+const CONDITIONAL_EXPRESSION_SEPARATORS = new Set(
+  [...EXPRESSION_SEPARATORS].filter(token => token !== ':'),
+);
+
+function javascriptTokens(source) {
+  const tokens = [];
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (/\s/.test(character)) continue;
+    if (character === '/' && source[index + 1] === '/') {
+      index = skipLineComment(source, index) - 1;
+      continue;
+    }
+    if (character === '/' && source[index + 1] === '*') {
+      index = skipBlockComment(source, index) - 1;
+      continue;
+    }
+    if (character === '\'' || character === '"') {
+      index = readQuotedProperty(source, index).end - 1;
+      continue;
+    }
+    if (character === '`') {
+      index = readTemplateLiteral(source, index) - 1;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(character)) {
+      const identifier = source.slice(index).match(/^[A-Za-z_$][\w$]*/)[0];
+      tokens.push({ value: identifier, start: index, end: index + identifier.length, depth });
+      index += identifier.length - 1;
+      continue;
+    }
+
+    if (character === ')' || character === ']' || character === '}') {
+      depth = Math.max(0, depth - 1);
+    }
+    const multiCharacter = MULTI_CHARACTER_TOKENS.find(token => source.startsWith(token, index));
+    const value = multiCharacter || character;
+    tokens.push({ value, start: index, end: index + value.length, depth });
+    if (character === '(' || character === '[' || character === '{') depth += 1;
+    index += value.length - 1;
+  }
+  return tokens;
 }
 
-function isPreSendReviewAuthorizationUse(match) {
-  const before = match.rawText.slice(0, match.column);
-  const after = match.rawText.slice(match.column + 'preSendReviewRequired'.length);
-  const afterDecisionOperand = after
-    .replace(/^\s*(?:(?:={2,3}|!={1,2})\s*(?:true|false)?\s*)?/, '')
-    .replace(/^\)+\s*/, '');
-  const inControlCondition = /\b(?:if|while|for)\s*\([^{};]*$/.test(before) && /^[^{};]*\)/.test(after);
-  const ternaryDecision = /^\?/.test(afterDecisionOperand);
-  const logicalDecision = /^(?:&&|\|\|)/.test(afterDecisionOperand)
-    || /(?:&&|\|\|)\s*$/.test(before);
-  return inControlCondition || ternaryDecision || logicalDecision;
+function tokenGroupPairs(tokens) {
+  const pairs = new Map();
+  const stack = [];
+  const closingFor = { '(': ')', '[': ']', '{': '}' };
+  for (let index = 0; index < tokens.length; index += 1) {
+    const value = tokens[index].value;
+    if (closingFor[value]) {
+      stack.push({ index, closing: closingFor[value] });
+      continue;
+    }
+    if (![')', ']', '}'].includes(value)) continue;
+    const opening = stack.pop();
+    if (opening?.closing === value) {
+      pairs.set(opening.index, index);
+      pairs.set(index, opening.index);
+    }
+  }
+  return pairs;
+}
+
+function isConditionalColon(tokens, colonIndex) {
+  const depth = tokens[colonIndex].depth;
+  let nestedConditionals = 0;
+  for (let index = colonIndex - 1; index >= 0; index -= 1) {
+    if (tokens[index].depth < depth) break;
+    if (tokens[index].depth !== depth) continue;
+    if (tokens[index].value === ':') {
+      nestedConditionals += 1;
+      continue;
+    }
+    if (tokens[index].value === '?') {
+      if (nestedConditionals === 0) return true;
+      nestedConditionals -= 1;
+      continue;
+    }
+    if ([',', ';', '='].includes(tokens[index].value)) break;
+  }
+  return false;
+}
+
+function isStaticPropertyKey(tokens, targetIndex, pairs) {
+  if (tokens[targetIndex + 1]?.value !== ':') return false;
+  if (isConditionalColon(tokens, targetIndex + 1)) return false;
+  for (let opening = targetIndex - 1; opening >= 0; opening -= 1) {
+    if (tokens[opening].value !== '{') continue;
+    const closing = pairs.get(opening);
+    if (closing !== undefined && targetIndex < closing) return true;
+  }
+  return false;
+}
+
+function isDestructuringBinding(tokens, targetIndex, pairs) {
+  for (let opening = targetIndex - 1; opening >= 0; opening -= 1) {
+    if (tokens[opening].value !== '{') continue;
+    const closing = pairs.get(opening);
+    if (closing === undefined || closing < targetIndex) continue;
+    if (
+      ['const', 'let', 'var'].includes(tokens[opening - 1]?.value)
+      && tokens[closing + 1]?.value === '='
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isInControlCondition(tokens, targetIndex, pairs) {
+  for (let index = 0; index < targetIndex; index += 1) {
+    if (!['if', 'while', 'for'].includes(tokens[index].value)) continue;
+    const opening = index + 1;
+    if (tokens[opening]?.value !== '(') continue;
+    const closing = pairs.get(opening);
+    if (closing !== undefined && opening < targetIndex && targetIndex < closing) return true;
+  }
+  return false;
+}
+
+function expressionRangeAtOperator(tokens, operatorIndex, separators) {
+  const operatorDepth = tokens[operatorIndex].depth;
+  let start = 0;
+  let end = tokens.length - 1;
+
+  for (let index = operatorIndex - 1; index >= 0; index -= 1) {
+    if (
+      tokens[index].depth < operatorDepth
+      || (tokens[index].depth === operatorDepth && separators.has(tokens[index].value))
+    ) {
+      start = index + 1;
+      break;
+    }
+  }
+  for (let index = operatorIndex + 1; index < tokens.length; index += 1) {
+    if (
+      tokens[index].depth < operatorDepth
+      || (tokens[index].depth === operatorDepth && separators.has(tokens[index].value))
+    ) {
+      end = index - 1;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function isInLoggerArgument(tokens, targetIndex, operatorIndex, pairs) {
+  for (let opening = Math.min(targetIndex, operatorIndex) - 1; opening >= 0; opening -= 1) {
+    if (tokens[opening].value !== '(') continue;
+    const closing = pairs.get(opening);
+    if (
+      closing === undefined
+      || closing < targetIndex
+      || closing < operatorIndex
+      || opening > targetIndex
+      || opening > operatorIndex
+    ) {
+      continue;
+    }
+    const method = tokens[opening - 1];
+    const member = tokens[opening - 2];
+    const receiver = tokens[opening - 3];
+    if (
+      /^[A-Za-z_$][\w$]*$/.test(method?.value || '')
+      && ['.', '?.'].includes(member?.value)
+      && ['logger', 'console'].includes(receiver?.value)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sourceMatchAt(source, token) {
+  const lineStart = source.lastIndexOf('\n', token.start - 1) + 1;
+  const lineEndIndex = source.indexOf('\n', token.end);
+  const lineEnd = lineEndIndex < 0 ? source.length : lineEndIndex;
+  const line = source.slice(0, token.start).split('\n').length;
+  const rawText = source.slice(lineStart, lineEnd).replace(/\r$/, '');
+  return {
+    line,
+    column: token.start - lineStart,
+    absoluteIndex: token.start,
+    rawText,
+    text: rawText.trim(),
+    source,
+  };
+}
+
+function preSendReviewAuthorizationUses() {
+  return sourceFiles().flatMap(file => (
+    authorizationUsesInSource(file.source)
+      .map(match => ({ file: file.relativePath, ...match }))
+  ));
+}
+
+function isPreSendReviewAuthorizationUse(match, analysis = {}) {
+  const tokens = analysis.tokens || javascriptTokens(match.source);
+  const targetIndex = tokens.findIndex(token => (
+    token.start === match.absoluteIndex && token.value === 'preSendReviewRequired'
+  ));
+  if (targetIndex < 0) return false;
+
+  const pairs = analysis.pairs || tokenGroupPairs(tokens);
+  if (isStaticPropertyKey(tokens, targetIndex, pairs) || isDestructuringBinding(tokens, targetIndex, pairs)) {
+    return false;
+  }
+  if (isInControlCondition(tokens, targetIndex, pairs)) return true;
+
+  return tokens.some((token, operatorIndex) => {
+    let separators = null;
+    if (token.value === '&&' || token.value === '||') separators = EXPRESSION_SEPARATORS;
+    if (token.value === '?') separators = CONDITIONAL_EXPRESSION_SEPARATORS;
+    if (separators === null || isInLoggerArgument(tokens, targetIndex, operatorIndex, pairs)) return false;
+    const range = expressionRangeAtOperator(tokens, operatorIndex, separators);
+    return range.start <= targetIndex && targetIndex <= range.end;
+  });
 }
 
 function authorizationUsesInSource(source) {
-  return matchingLines(source, /\bpreSendReviewRequired\b/).filter(isPreSendReviewAuthorizationUse);
+  const tokens = javascriptTokens(source);
+  const analysis = { tokens, pairs: tokenGroupPairs(tokens) };
+  return tokens
+    .filter(token => token.value === 'preSendReviewRequired')
+    .map(token => sourceMatchAt(source, token))
+    .filter(match => isPreSendReviewAuthorizationUse(match, analysis));
 }
 
 test('gateway wiring binds the imported gateway and puts every required field in its send request object', () => {
@@ -246,6 +521,23 @@ test('gateway wiring binds the imported gateway and puts every required field in
       '}',
     ].join('\n'),
   ]), true);
+  assert.equal(hasCompleteGatewayRequest([
+    [
+      '{',
+      '  note: `outer ${`sendClass: shadow, policyVersion: shadow, idempotencyKey: shadow, tenantScope: shadow`}`,',
+      '}',
+    ].join('\n'),
+  ]), false);
+  assert.equal(hasCompleteGatewayRequest(gatewayRequestObjects(`
+    const { WhatsAppSendGateway } = require('./whatsapp-send-gateway');
+    WhatsAppSendGateway.send({
+      note: \`outer brace } interpolation \${{ nested: \`inner } brace\` }}\`,
+      sendClass: 'reply',
+      policyVersion: 'v1',
+      idempotencyKey: 'id-1',
+      tenantScope: { userId },
+    });
+  `, ['WhatsAppSendGateway'])), true);
 });
 
 test('authorization-switch scan catches decision uses while allowing inert compatibility reads', () => {
@@ -261,6 +553,11 @@ test('authorization-switch scan catches decision uses while allowing inert compa
     'payload.preSendReviewRequired || hold();',
     '(((payload.preSendReviewRequired))) || hold();',
     'if (payload.preSendReviewRequired === true) allow();',
+    'const maySend = enabled && payload.preSendReviewRequired;',
+    'const maySend = (enabled && payload.preSendReviewRequired);',
+    'const maySend = enabled && (trusted || payload.preSendReviewRequired);',
+    'const maySend = enabled ? payload.preSendReviewRequired : false;',
+    'const decision = { maySend: enabled ? payload.preSendReviewRequired : false };',
   ];
   for (const decision of decisions) {
     assert.equal(authorizationUsesInSource(decision).length, 1, decision);
@@ -271,6 +568,8 @@ test('authorization-switch scan catches decision uses while allowing inert compa
     const groupedLegacyValue = (payload.preSendReviewRequired);
     logger.info({ preSendReviewRequired: payload.preSendReviewRequired });
     logger.info((payload.preSendReviewRequired));
+    logger.info(Boolean(enabled && payload.preSendReviewRequired));
+    const legacyAlongsideDecision = payload.preSendReviewRequired, maySend = enabled && trusted;
   `;
   assert.equal(authorizationUsesInSource(inertCompatibility).length, 0);
 });
