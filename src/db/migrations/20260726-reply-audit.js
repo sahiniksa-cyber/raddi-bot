@@ -56,6 +56,8 @@ async function down(database, { preservationSink } = {}) {
   }
 
   return database.transaction(async (client) => {
+    await client.query('LOCK TABLE reply_audit_events IN ACCESS EXCLUSIVE MODE');
+    await client.query('LOCK TABLE whatsapp_send_reservations IN ACCESS EXCLUSIVE MODE');
     const audit = await client.query(
       'SELECT * FROM reply_audit_events ORDER BY correlation_id, sequence_no',
     );
@@ -92,8 +94,7 @@ async function restore(database, snapshot) {
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
            $13::jsonb, $14::jsonb, $15::jsonb, $16
-         )
-         ON CONFLICT (correlation_id, sequence_no) DO NOTHING`,
+         )`,
         [
           row.id,
           row.correlation_id,
@@ -120,8 +121,7 @@ async function restore(database, snapshot) {
         `INSERT INTO whatsapp_send_reservations (
            user_id, idempotency_key, correlation_id, destination, policy_version,
            status, provider_message_id, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (user_id, idempotency_key) DO NOTHING`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           row.user_id,
           row.idempotency_key,

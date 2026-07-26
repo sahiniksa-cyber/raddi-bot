@@ -55,54 +55,68 @@ function normalizeConfig(config) {
   throw new TypeError('bot_configs.config must be a JSON object');
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function buildMerchantPlans(rows) {
+  return rows.map((row) => {
+    const originalConfig = normalizeConfig(row.config);
+    const migrated = migrateLegacyConfig(originalConfig);
+    return {
+      userId: row.user_id,
+      status: migrated.report.status,
+      reviewItems: migrated.report.reviewItems,
+      migratedConfig: migrated.migratedConfig,
+      rollbackConfig: cloneJson(originalConfig),
+    };
+  });
+}
+
+function migrationResult(mode, merchants) {
+  return {
+    mode,
+    applied: mode === 'apply' ? merchants.length : 0,
+    reviewIds: merchants
+      .filter((merchant) => merchant.reviewItems.length > 0)
+      .map((merchant) => merchant.userId),
+    merchants,
+  };
+}
+
 async function runMerchantPolicyMigration({
   database,
   apply = false,
   rollbackSink,
 } = {}) {
-  if (!database
-      || typeof database.query !== 'function'
-      || typeof database.transaction !== 'function') {
+  if (!database || typeof database.query !== 'function') {
     throw new TypeError('An injected database is required');
   }
   if (apply && typeof rollbackSink !== 'function') {
     throw new TypeError('apply requires a rollbackSink');
   }
 
-  const selected = await database.query(
-    'SELECT user_id, config FROM bot_configs ORDER BY user_id',
-  );
-  const merchants = selected.rows.map((row) => {
-    const migrated = migrateLegacyConfig(normalizeConfig(row.config));
-    return {
-      userId: row.user_id,
-      status: migrated.report.status,
-      reviewItems: migrated.report.reviewItems,
-      migratedConfig: migrated.migratedConfig,
-      rollbackConfig: migrated.rollbackConfig,
-    };
-  });
-  const reviewIds = merchants
-    .filter((merchant) => merchant.reviewItems.length > 0)
-    .map((merchant) => merchant.userId);
-
   if (!apply) {
-    return {
-      mode: 'dry-run',
-      applied: 0,
-      reviewIds,
-      merchants,
-    };
+    const selected = await database.query(
+      'SELECT user_id, config FROM bot_configs ORDER BY user_id',
+    );
+    return migrationResult('dry-run', buildMerchantPlans(selected.rows));
+  }
+  if (typeof database.transaction !== 'function') {
+    throw new TypeError('apply requires an injected database transaction');
   }
 
-  await rollbackSink({
-    merchantConfigs: merchants.map((merchant) => ({
-      userId: merchant.userId,
-      config: merchant.rollbackConfig,
-    })),
-  });
-
-  await database.transaction(async (client) => {
+  return database.transaction(async (client) => {
+    const selected = await client.query(
+      'SELECT user_id, config FROM bot_configs ORDER BY user_id FOR UPDATE',
+    );
+    const merchants = buildMerchantPlans(selected.rows);
+    await rollbackSink({
+      merchantConfigs: merchants.map((merchant) => ({
+        userId: merchant.userId,
+        config: merchant.rollbackConfig,
+      })),
+    });
     for (const merchant of merchants) {
       const updated = await client.query(
         `UPDATE bot_configs
@@ -114,13 +128,20 @@ async function runMerchantPolicyMigration({
         throw new Error(`Merchant config disappeared during migration: ${merchant.userId}`);
       }
     }
+    return migrationResult('apply', merchants);
   });
+}
 
+function summarizeMigrationResult(result) {
   return {
-    mode: 'apply',
-    applied: merchants.length,
-    reviewIds,
-    merchants,
+    mode: result.mode,
+    applied: result.applied,
+    reviewIds: result.reviewIds,
+    merchants: result.merchants.map((merchant) => ({
+      userId: merchant.userId,
+      status: merchant.status,
+      reviewItems: merchant.reviewItems,
+    })),
   };
 }
 
@@ -164,12 +185,12 @@ async function main(args = process.argv.slice(2)) {
           await fs.promises.writeFile(
             options.rollbackFile,
             `${JSON.stringify(payload, null, 2)}\n`,
-            { encoding: 'utf8', flag: 'wx' },
+            { encoding: 'utf8', flag: 'wx', mode: 0o600 },
           );
         }
         : undefined,
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(summarizeMigrationResult(result), null, 2)}\n`);
   } finally {
     await pool.end();
   }
@@ -187,4 +208,5 @@ module.exports = {
   main,
   parseArgs,
   runMerchantPolicyMigration,
+  summarizeMigrationResult,
 };

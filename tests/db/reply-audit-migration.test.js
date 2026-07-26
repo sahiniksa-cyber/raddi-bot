@@ -36,6 +36,9 @@ function makeLocalSqlDatabase() {
         state.reservationTable = true;
         return { rows: [], rowCount: 0 };
       }
+      if (/^LOCK TABLE (reply_audit_events|whatsapp_send_reservations)/i.test(normalized)) {
+        return { rows: [], rowCount: 0 };
+      }
       if (/^SELECT \* FROM reply_audit_events ORDER BY/i.test(normalized)) {
         if (!state.auditTable) throw new Error('reply_audit_events does not exist');
         return { rows: clone(state.auditRows), rowCount: state.auditRows.length };
@@ -76,6 +79,7 @@ function makeLocalSqlDatabase() {
         if (state.auditRows.some(
           (row) => row.correlation_id === correlationId && row.sequence_no === sequenceNo,
         )) {
+          if (/DO NOTHING/i.test(normalized)) return { rows: [], rowCount: 0 };
           const error = new Error('duplicate audit sequence');
           error.code = '23505';
           throw error;
@@ -257,6 +261,17 @@ test('down exports every row before the first destructive statement', async () =
   assert.equal(state.reservationTable, false);
   const preservationIndex = calls.findIndex((call) => call.sql === 'PRESERVE');
   const firstDropIndex = calls.findIndex((call) => /^DROP TABLE/i.test(call.sql));
+  const auditLockIndex = calls.findIndex(
+    (call) => /^LOCK TABLE reply_audit_events/i.test(call.sql),
+  );
+  const reservationLockIndex = calls.findIndex(
+    (call) => /^LOCK TABLE whatsapp_send_reservations/i.test(call.sql),
+  );
+  const firstSnapshotRead = calls.findIndex(
+    (call) => /^SELECT \* FROM reply_audit_events ORDER BY/i.test(call.sql),
+  );
+  assert.ok(auditLockIndex >= 0 && auditLockIndex < reservationLockIndex);
+  assert.ok(reservationLockIndex < firstSnapshotRead);
   assert.ok(preservationIndex >= 0 && preservationIndex < firstDropIndex);
 });
 
@@ -304,6 +319,27 @@ test('up insert down up restore preserves audit and reservation content', async 
   assert.equal(restoredAuditInsert.params[12], '["product-coffee"]');
   assert.equal(restoredAuditInsert.params[13], '[]');
   assert.equal(restoredAuditInsert.params[14], '{"source":"test"}');
+});
+
+test('restore rejects divergent rows instead of silently discarding preserved content', async () => {
+  const { database, state } = makeLocalSqlDatabase();
+  await migration.up(database);
+  await insertFixtureRows(database);
+  const divergent = {
+    replyAuditEvents: [{
+      ...auditRow,
+      id: '10000000-0000-4000-8000-000000000099',
+      content: 'preserved but different',
+      content_hash: 'sha256:different',
+    }],
+    whatsappSendReservations: [],
+  };
+
+  await assert.rejects(
+    migration.restore(database, divergent),
+    /duplicate audit sequence/,
+  );
+  assert.deepEqual(state.auditRows, [auditRow]);
 });
 
 test('reservations are tenant scoped and same-tenant duplicates return the original row', async () => {

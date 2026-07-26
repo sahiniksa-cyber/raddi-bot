@@ -7,7 +7,11 @@ const {
   assertLocalDatabaseUrl,
   parseArgs,
   runMerchantPolicyMigration,
+  summarizeMigrationResult,
 } = require('../../scripts/migrate-merchant-policy');
+const {
+  migrateLegacyConfig,
+} = require('../../src/policy/merchant-policy-migrator');
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -20,7 +24,9 @@ function makeDatabase(rows) {
     async query(sql, params = []) {
       const normalized = sql.replace(/\s+/g, ' ').trim();
       calls.push({ sql: normalized, params: clone(params) });
-      if (/^SELECT user_id, config FROM bot_configs ORDER BY user_id/i.test(normalized)) {
+      if (/^SELECT user_id, config FROM bot_configs ORDER BY user_id(?: FOR UPDATE)?/i.test(
+        normalized,
+      )) {
         return { rows: clone(state), rowCount: state.length };
       }
       if (/^UPDATE bot_configs SET config = \$2::jsonb/i.test(normalized)) {
@@ -87,6 +93,19 @@ test('dry-run preserves legacy fields and emits only merchant IDs needing review
   assert.deepEqual(reviewed.rollbackConfig, original.config);
 });
 
+test('dry-run needs only an injected query contract and never opens a configured database', async () => {
+  const queryOnlyDatabase = {
+    async query() {
+      return { rows: [{ user_id: 'merchant-one', config: { products: [] } }] };
+    },
+  };
+
+  const result = await runMerchantPolicyMigration({ database: queryOnlyDatabase });
+
+  assert.equal(result.mode, 'dry-run');
+  assert.equal(result.applied, 0);
+});
+
 test('apply saves rollback payload before updating bot_configs and preserves legacy fields', async () => {
   const originalConfig = {
     customLegacyField: 'keep-me',
@@ -117,6 +136,35 @@ test('apply saves rollback payload before updating bot_configs and preserves leg
     calls.findIndex((call) => call.sql === 'PRESERVE_ROLLBACK')
       < calls.findIndex((call) => /^UPDATE bot_configs/i.test(call.sql)),
   );
+  assert.equal(calls[0].sql, 'BEGIN');
+  assert.match(calls[1].sql, /SELECT user_id, config FROM bot_configs ORDER BY user_id FOR UPDATE/i);
+  assert.equal(calls.at(-1).sql, 'COMMIT');
+});
+
+test('rollback payload preserves an existing merchantPolicy byte-for-byte', async () => {
+  const originalConfig = migrateLegacyConfig({
+    customLegacyField: 'keep-me',
+    products: [],
+  }).migratedConfig;
+  const { database } = makeDatabase([
+    { user_id: 'merchant-existing-policy', config: originalConfig },
+  ]);
+  let rollbackPayload;
+
+  await runMerchantPolicyMigration({
+    database,
+    apply: true,
+    rollbackSink: async (payload) => {
+      rollbackPayload = clone(payload);
+    },
+  });
+
+  assert.deepEqual(rollbackPayload, {
+    merchantConfigs: [{
+      userId: 'merchant-existing-policy',
+      config: originalConfig,
+    }],
+  });
 });
 
 test('apply refuses missing rollback preservation and never falls back to a configured database', async () => {
@@ -153,6 +201,7 @@ test('rollback preservation failure aborts apply before any config update', asyn
 
   assert.deepEqual(state[0].config, { products: [] });
   assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
+  assert.equal(calls.at(-1).sql, 'ROLLBACK');
 });
 
 test('CLI database guard accepts loopback only and rejects hosted connection strings', () => {
@@ -164,4 +213,31 @@ test('CLI database guard accepts loopback only and rejects hosted connection str
     () => assertLocalDatabaseUrl('postgres://user:pass@prod.railway.app:5432/main'),
     /local PostgreSQL/,
   );
+});
+
+test('CLI summary excludes full migrated and rollback configs', () => {
+  const summary = summarizeMigrationResult({
+    mode: 'dry-run',
+    applied: 0,
+    reviewIds: ['merchant-review'],
+    merchants: [{
+      userId: 'merchant-review',
+      status: 'needs_review',
+      reviewItems: [{ path: 'botInstructions', code: 'untyped_bot_instructions' }],
+      migratedConfig: { openaiApiKey: 'secret-migrated' },
+      rollbackConfig: { openaiApiKey: 'secret-rollback' },
+    }],
+  });
+
+  assert.deepEqual(summary, {
+    mode: 'dry-run',
+    applied: 0,
+    reviewIds: ['merchant-review'],
+    merchants: [{
+      userId: 'merchant-review',
+      status: 'needs_review',
+      reviewItems: [{ path: 'botInstructions', code: 'untyped_bot_instructions' }],
+    }],
+  });
+  assert.doesNotMatch(JSON.stringify(summary), /secret/);
 });
