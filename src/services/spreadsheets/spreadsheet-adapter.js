@@ -25,6 +25,11 @@ const LIMITS = Object.freeze({
   maxArchiveEntries: 4096,
   maxRows: 50_000,
 });
+const MAX_CONTENT_TYPES_BYTES = 1024 * 1024;
+const CONTENT_TYPES_PART = '[Content_Types].xml';
+const WORKSHEET_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
+
+let saxenModulePromise;
 
 class SpreadsheetAdapterError extends Error {
   constructor(code, message, statusCode = 400, details) {
@@ -105,6 +110,7 @@ async function parseCsv(source) {
   let field = '';
   let quoted = false;
   let pendingQuote = false;
+  let pendingCarriageReturn = false;
   let firstCharacter = true;
   const decoder = new StringDecoder('utf8');
 
@@ -121,6 +127,13 @@ async function parseCsv(source) {
     let index = 0;
     while (index < input.length) {
       let character = input[index];
+      if (pendingCarriageReturn) {
+        pendingCarriageReturn = false;
+        if (character === '\n') {
+          index += 1;
+          continue;
+        }
+      }
       if (firstCharacter) {
         firstCharacter = false;
         if (character === '\uFEFF') {
@@ -170,7 +183,7 @@ async function parseCsv(source) {
       }
       if (character === '\n' || character === '\r') {
         pushRow();
-        if (character === '\r' && input[index + 1] === '\n') index += 1;
+        pendingCarriageReturn = character === '\r';
         index += 1;
         continue;
       }
@@ -194,57 +207,161 @@ async function parseCsv(source) {
   return rows;
 }
 
-function countRowElements(text, beforeIndex = text.length) {
-  let count = 0;
-  const matcher = /<row(?=[\s>])/g;
-  let match;
-  while ((match = matcher.exec(text))) {
-    if (match.index >= beforeIndex) break;
-    count += 1;
-  }
-  return count;
+async function loadSaxenParser() {
+  saxenModulePromise ||= import('saxen');
+  const { Parser } = await saxenModulePromise;
+  return Parser;
 }
 
-async function countWorksheetRows(worksheetEntries) {
+function localXmlName(name) {
+  const separator = String(name).lastIndexOf(':');
+  return separator === -1 ? String(name) : String(name).slice(separator + 1);
+}
+
+function attributeByLocalName(attributes, expectedName) {
+  const match = Object.entries(attributes).find(
+    ([name]) => localXmlName(name).toLowerCase() === expectedName.toLowerCase(),
+  );
+  return match?.[1];
+}
+
+function normalizeOoxmlPartPath(partName, relationshipSourcePath = '') {
+  const rawPartName = String(partName || '').replaceAll('\\', '/');
+  const sourcePath = String(relationshipSourcePath || '').replaceAll('\\', '/');
+  const combined = rawPartName.startsWith('/')
+    ? rawPartName.slice(1)
+    : path.posix.join(path.posix.dirname(sourcePath), rawPartName);
+  const normalized = path.posix.normalize(combined);
+  if (
+    !normalized
+    || normalized === '.'
+    || normalized === '..'
+    || normalized.startsWith('../')
+    || path.posix.isAbsolute(normalized)
+  ) {
+    throw adapterError('SPREADSHEET_CORRUPT', 'XLSX archive contains an invalid part path', 400);
+  }
+  return normalized;
+}
+
+function createStreamingXmlParser(Parser, onOpenTag) {
+  const parser = new Parser();
+  let parseError;
+  const rememberError = error => {
+    parseError ||= error;
+  };
+  parser.on('error', rememberError);
+  parser.on('warn', rememberError);
+  parser.on('openTag', onOpenTag);
+  return {
+    write(text) {
+      parser.write(text);
+      if (parseError) throw parseError;
+    },
+    end() {
+      const endError = parser.end();
+      if (parseError || endError) throw parseError || endError;
+    },
+  };
+}
+
+function uncompressedLimitError() {
+  return adapterError(
+    'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED',
+    'Spreadsheet archive exceeds the 256 MiB uncompressed-size limit',
+    413,
+    { maxUncompressedBytes: LIMITS.maxUncompressedBytes },
+  );
+}
+
+function corruptSpreadsheetError(error) {
+  if (error instanceof SpreadsheetAdapterError) return error;
+  return adapterError('SPREADSHEET_CORRUPT', 'XLSX file is corrupt or unreadable', 400, {
+    cause: error?.message || String(error),
+  });
+}
+
+async function streamArchiveEntries(directory, Parser) {
+  const entryByPath = new Map();
+  for (const entry of directory.files) {
+    const normalizedPath = normalizeOoxmlPartPath(`/${entry.path}`);
+    if (entryByPath.has(normalizedPath)) {
+      throw adapterError('SPREADSHEET_CORRUPT', 'XLSX archive contains duplicate part paths', 400);
+    }
+    entryByPath.set(normalizedPath, entry);
+  }
+
+  const contentTypesEntry = entryByPath.get(CONTENT_TYPES_PART);
+  const worksheetPartPaths = new Set();
+  let contentTypesBytes = 0;
+  let actualUncompressedBytes = 0;
+  let contentTypesParser;
+  let contentTypesDecoder;
+  if (contentTypesEntry) {
+    contentTypesDecoder = new StringDecoder('utf8');
+    contentTypesParser = createStreamingXmlParser(Parser, (name, getAttributes) => {
+      if (localXmlName(name).toLowerCase() !== 'override') return;
+      const attributes = getAttributes();
+      const contentType = attributeByLocalName(attributes, 'ContentType');
+      if (String(contentType).toLowerCase() !== WORKSHEET_CONTENT_TYPE) return;
+      worksheetPartPaths.add(normalizeOoxmlPartPath(
+        attributeByLocalName(attributes, 'PartName'),
+      ));
+    });
+  }
+
+  for (const entry of directory.files) {
+    const normalizedPath = normalizeOoxmlPartPath(`/${entry.path}`);
+    for await (const chunk of entry.stream()) {
+      actualUncompressedBytes += chunk.length;
+      if (actualUncompressedBytes > LIMITS.maxUncompressedBytes) {
+        throw uncompressedLimitError();
+      }
+      if (normalizedPath === CONTENT_TYPES_PART) {
+        contentTypesBytes += chunk.length;
+        if (contentTypesBytes > MAX_CONTENT_TYPES_BYTES) {
+          throw adapterError(
+            'SPREADSHEET_CORRUPT',
+            'XLSX content-types part exceeds the safe parsing limit',
+            400,
+          );
+        }
+        contentTypesParser.write(contentTypesDecoder.write(chunk));
+      }
+    }
+    if (normalizedPath === CONTENT_TYPES_PART) {
+      contentTypesParser.write(contentTypesDecoder.end());
+      contentTypesParser.end();
+    }
+  }
+
+  return {
+    entryByPath,
+    worksheetPartPaths,
+    actualUncompressedBytes,
+  };
+}
+
+async function countWorksheetRows(worksheetEntries, Parser) {
   let rowsSeen = 0;
-  let streamedBytes = 0;
   for (const entry of worksheetEntries) {
     const decoder = new StringDecoder('utf8');
-    let carry = '';
-    for await (const chunk of entry.stream()) {
-      streamedBytes += chunk.length;
-      if (streamedBytes > LIMITS.maxUncompressedBytes) {
-        throw adapterError(
-          'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED',
-          'Spreadsheet archive exceeds the 256 MiB uncompressed-size limit',
-          413,
-          { maxUncompressedBytes: LIMITS.maxUncompressedBytes },
-        );
-      }
-      carry += decoder.write(chunk);
-      const safeLength = Math.max(0, carry.length - 5);
-      rowsSeen += countRowElements(carry, safeLength);
+    const parser = createStreamingXmlParser(Parser, name => {
+      if (localXmlName(name).toLowerCase() !== 'row') return;
+      rowsSeen += 1;
       if (rowsSeen > LIMITS.maxRows) throw rowLimitError(rowsSeen);
-      carry = carry.slice(safeLength);
-    }
-    carry += decoder.end();
-    rowsSeen += countRowElements(carry);
-    if (rowsSeen > LIMITS.maxRows) throw rowLimitError(rowsSeen);
+    });
+    for await (const chunk of entry.stream()) parser.write(decoder.write(chunk));
+    parser.write(decoder.end());
+    parser.end();
   }
   return rowsSeen;
 }
 
-async function preflightXlsx(source, openZipImpl = openZip) {
-  let directory;
-  try {
-    directory = Buffer.isBuffer(source)
-      ? await openZipImpl.buffer(source)
-      : await openZipImpl.file(source);
-  } catch (error) {
-    throw adapterError('SPREADSHEET_CORRUPT', 'XLSX file is corrupt or unreadable', 400, {
-      cause: error.message,
-    });
-  }
+async function preflightXlsxInternal(source, openZipImpl) {
+  const directory = Buffer.isBuffer(source)
+    ? await openZipImpl.buffer(source)
+    : await openZipImpl.file(source);
   if (directory.files.length > LIMITS.maxArchiveEntries) {
     throw adapterError(
       'SPREADSHEET_ARCHIVE_ENTRY_LIMIT_EXCEEDED',
@@ -261,26 +378,41 @@ async function preflightXlsx(source, openZipImpl = openZip) {
     }
     declaredUncompressedBytes += entrySize;
     if (declaredUncompressedBytes > LIMITS.maxUncompressedBytes) {
-      throw adapterError(
-        'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED',
-        'Spreadsheet archive exceeds the 256 MiB uncompressed-size limit',
-        413,
-        { maxUncompressedBytes: LIMITS.maxUncompressedBytes },
-      );
+      throw uncompressedLimitError();
     }
   }
-  const paths = new Set(directory.files.map(entry => entry.path));
-  const worksheetEntries = directory.files.filter(entry => (
-    /^xl\/worksheets\/sheet[^/]*\.xml$/i.test(entry.path)
-  ));
-  if (!paths.has('[Content_Types].xml') || !paths.has('xl/workbook.xml') || worksheetEntries.length === 0) {
+
+  const Parser = await loadSaxenParser();
+  const {
+    entryByPath,
+    worksheetPartPaths,
+    actualUncompressedBytes,
+  } = await streamArchiveEntries(directory, Parser);
+  if (!entryByPath.has(CONTENT_TYPES_PART) || worksheetPartPaths.size === 0) {
     throw adapterError('SPREADSHEET_NOT_XLSX', 'File content is not XLSX', 400);
   }
+  const worksheetEntries = [];
+  for (const worksheetPartPath of worksheetPartPaths) {
+    const entry = entryByPath.get(worksheetPartPath);
+    if (!entry) {
+      throw adapterError('SPREADSHEET_CORRUPT', 'XLSX worksheet part is missing', 400);
+    }
+    worksheetEntries.push(entry);
+  }
   return {
-    rowCount: await countWorksheetRows(worksheetEntries),
+    rowCount: await countWorksheetRows(worksheetEntries, Parser),
     archiveEntryCount: directory.files.length,
     declaredUncompressedBytes,
+    actualUncompressedBytes,
   };
+}
+
+async function preflightXlsx(source, openZipImpl = openZip) {
+  try {
+    return await preflightXlsxInternal(source, openZipImpl);
+  } catch (error) {
+    throw corruptSpreadsheetError(error);
+  }
 }
 
 function createSpreadsheetReader({ readXlsx = readExcelFile, openZipImpl = openZip } = {}) {

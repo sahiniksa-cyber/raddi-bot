@@ -6,6 +6,8 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { Readable } = require('node:stream');
+const { once } = require('node:events');
+const { createDeflateRaw } = require('node:zlib');
 const ExcelJS = require('exceljs');
 
 const {
@@ -38,35 +40,76 @@ async function captureWorkbook(buffer) {
   return workbook;
 }
 
-function makeEmptyStoredZip(paths) {
+function makeZip(entries) {
   const localParts = [];
   const centralParts = [];
   let localOffset = 0;
-  for (const entryPath of paths) {
-    const name = Buffer.from(entryPath, 'utf8');
+  for (const fixture of entries) {
+    const entry = typeof fixture === 'string' ? { path: fixture } : fixture;
+    const name = Buffer.from(entry.path, 'utf8');
+    const data = Buffer.from(entry.data || Buffer.alloc(0));
+    const compressedData = Buffer.from(entry.compressedData || data);
+    const compressionMethod = entry.compressionMethod || 0;
+    const declaredUncompressedSize = entry.declaredUncompressedSize ?? data.length;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034B50, 0);
     local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(compressionMethod, 8);
+    local.writeUInt32LE(compressedData.length, 18);
+    local.writeUInt32LE(declaredUncompressedSize, 22);
     local.writeUInt16LE(name.length, 26);
-    localParts.push(local, name);
+    localParts.push(local, name, compressedData);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014B50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(compressionMethod, 10);
+    central.writeUInt32LE(compressedData.length, 20);
+    central.writeUInt32LE(declaredUncompressedSize, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(localOffset, 42);
     centralParts.push(central, name);
-    localOffset += local.length + name.length;
+    localOffset += local.length + name.length + compressedData.length;
   }
   const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054B50, 0);
-  end.writeUInt16LE(paths.length, 8);
-  end.writeUInt16LE(paths.length, 10);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
   end.writeUInt32LE(centralSize, 12);
   end.writeUInt32LE(localOffset, 16);
   return Buffer.concat([...localParts, ...centralParts, end]);
+}
+
+function makeEmptyStoredZip(paths) {
+  return makeZip(paths);
+}
+
+function contentTypesXml(worksheetPart = '/custom/sheet-data.xml') {
+  return Buffer.from(
+    `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
+      + `<Override PartName="${worksheetPart}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
+      + '</Types>',
+    'utf8',
+  );
+}
+
+async function deflateZeroBytes(byteCount) {
+  const deflater = createDeflateRaw({ level: 9 });
+  const chunks = [];
+  deflater.on('data', chunk => chunks.push(chunk));
+  const finished = once(deflater, 'end');
+  const zeroChunk = Buffer.alloc(1024 * 1024);
+  let remaining = byteCount;
+  while (remaining > 0) {
+    const chunk = zeroChunk.subarray(0, Math.min(zeroChunk.length, remaining));
+    if (!deflater.write(chunk)) await once(deflater, 'drain');
+    remaining -= chunk.length;
+  }
+  deflater.end();
+  await finished;
+  return Buffer.concat(chunks);
 }
 
 function zipWithDeclaredUncompressedSize(size) {
@@ -152,6 +195,19 @@ test('keeps CSV parsing behavior including quoted commas, escaped quotes, Unicod
       ['0551234571', 'ليان, Layan', 'قالت "نعم" ✨', ''],
     ],
   }]);
+});
+
+test('treats CRLF split across file-stream chunks as one row delimiter', async t => {
+  const directory = await makeTempDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, 'split-crlf.csv');
+  const firstField = 'a'.repeat((64 * 1024) - 1);
+  await fs.writeFile(filePath, Buffer.from(`${firstField}\r\nb,c\r\n`, 'utf8'));
+
+  const result = await readSpreadsheet({ source: filePath, originalName: 'split-crlf.csv' });
+
+  assert.equal(result.rowCount, 2);
+  assert.deepEqual(result.sheets[0].rows, [[firstField], ['b', 'c']]);
 });
 
 test('spools an HTTP upload stream to an isolated temporary file and cleans it up', async () => {
@@ -338,6 +394,172 @@ test('rejects excessive declared XLSX expansion before candidate parsing', async
   );
   assert.equal(candidateCalls, 0);
   assert.ok(input.length < 2048);
+});
+
+test('discovers normalized nonstandard worksheet parts and ignores row markup in comments', async () => {
+  const rows = Array.from({ length: 50_000 }, () => '<x:row/>').join('');
+  const worksheet = Buffer.from(
+    `<worksheet xmlns:x="urn:test"><!-- <row/> --><sheetData>${rows}</sheetData></worksheet>`,
+    'utf8',
+  );
+  const input = makeZip([
+    { path: '[Content_Types].xml', data: contentTypesXml('/custom/parts/../sheet-data.xml') },
+    { path: 'xl/workbook.xml', data: '<workbook/>' },
+    { path: 'custom/sheet-data.xml', data: worksheet },
+  ]);
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      return [{ sheet: 'Custom', data: [['ok']] }];
+    },
+  });
+
+  const result = await guardedRead({ source: input, originalName: 'custom-parts.xlsx' });
+
+  assert.equal(candidateCalls, 1);
+  assert.deepEqual(result, {
+    sheets: [{ name: 'Custom', rows: [['ok']] }],
+    rowCount: 1,
+  });
+});
+
+test('counts namespace-prefixed rows in a nonstandard worksheet before candidate parsing', async () => {
+  const worksheet = Buffer.from(
+    `<worksheet xmlns:x="urn:test"><sheetData>${
+      Array.from({ length: 50_001 }, () => '<x:row/>').join('')
+    }</sheetData></worksheet>`,
+    'utf8',
+  );
+  const input = makeZip([
+    { path: '[Content_Types].xml', data: contentTypesXml('/custom/sheet-data.xml') },
+    { path: 'xl/workbook.xml', data: '<workbook/>' },
+    { path: 'custom/sheet-data.xml', data: worksheet },
+  ]);
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      throw new Error('CANDIDATE_PARSER_ENTERED');
+    },
+  });
+
+  await assert.rejects(
+    guardedRead({ source: input, originalName: 'prefixed-rows.xlsx' }),
+    error => error.code === 'SPREADSHEET_ROW_LIMIT_EXCEEDED'
+      && error.details?.rowsSeen === 50_001,
+  );
+  assert.equal(candidateCalls, 0);
+});
+
+test('rejects forged-low ZIP metadata using actual aggregate decompressed bytes', async () => {
+  const compressedPayload = await deflateZeroBytes(LIMITS.maxUncompressedBytes + 1);
+  const input = makeZip([
+    { path: '[Content_Types].xml', data: contentTypesXml() },
+    { path: 'xl/workbook.xml', data: '<workbook/>' },
+    { path: 'custom/sheet-data.xml', data: '<worksheet><row/></worksheet>' },
+    {
+      path: 'payload.bin',
+      data: Buffer.alloc(0),
+      compressedData: compressedPayload,
+      compressionMethod: 8,
+      declaredUncompressedSize: 1,
+    },
+  ]);
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      throw new Error('CANDIDATE_PARSER_ENTERED');
+    },
+  });
+
+  await assert.rejects(
+    guardedRead({ source: input, originalName: 'forged-expansion.xlsx' }),
+    error => error.code === 'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED'
+      && error.statusCode === 413,
+  );
+  assert.equal(candidateCalls, 0);
+  assert.ok(input.length < 1024 * 1024);
+});
+
+test('wraps content-types XML, worksheet XML, and decompression failures as corrupt', async () => {
+  const fixtures = [
+    {
+      name: 'content-types XML',
+      input: makeZip([
+        { path: '[Content_Types].xml', data: '<Types><Override' },
+        { path: 'xl/workbook.xml', data: '<workbook/>' },
+      ]),
+    },
+    {
+      name: 'worksheet XML',
+      input: makeZip([
+        { path: '[Content_Types].xml', data: contentTypesXml() },
+        { path: 'xl/workbook.xml', data: '<workbook/>' },
+        { path: 'custom/sheet-data.xml', data: '<worksheet><row>' },
+      ]),
+    },
+    {
+      name: 'entry decompression',
+      input: makeZip([
+        { path: '[Content_Types].xml', data: contentTypesXml() },
+        { path: 'xl/workbook.xml', data: '<workbook/>' },
+        { path: 'custom/sheet-data.xml', data: '<worksheet><row/></worksheet>' },
+        {
+          path: 'invalid-deflate.bin',
+          compressedData: Buffer.from('not-deflate-data'),
+          compressionMethod: 8,
+          declaredUncompressedSize: 1,
+        },
+      ]),
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    let candidateCalls = 0;
+    const guardedRead = createSpreadsheetReader({
+      readXlsx: async () => {
+        candidateCalls += 1;
+        throw new Error('CANDIDATE_PARSER_ENTERED');
+      },
+    });
+    await assert.rejects(
+      guardedRead({ source: fixture.input, originalName: 'corrupt.xlsx' }),
+      error => error.name === 'SpreadsheetAdapterError'
+        && error.code === 'SPREADSHEET_CORRUPT'
+        && error.statusCode === 400,
+      fixture.name,
+    );
+    assert.equal(candidateCalls, 0, fixture.name);
+  }
+});
+
+test('bounds content-types parsing before candidate parsing', async () => {
+  const oversizedContentTypes = Buffer.from(
+    `<Types>${' '.repeat(1024 * 1024)}`
+      + '<Override PartName="/custom/sheet-data.xml" '
+      + `ContentType="${'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'}"/>`
+      + '</Types>',
+    'utf8',
+  );
+  const input = makeZip([
+    { path: '[Content_Types].xml', data: oversizedContentTypes },
+    { path: 'custom/sheet-data.xml', data: '<worksheet><row/></worksheet>' },
+  ]);
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      throw new Error('CANDIDATE_PARSER_ENTERED');
+    },
+  });
+
+  await assert.rejects(
+    guardedRead({ source: input, originalName: 'oversized-content-types.xlsx' }),
+    error => error.code === 'SPREADSHEET_CORRUPT' && error.statusCode === 400,
+  );
+  assert.equal(candidateCalls, 0);
 });
 
 test('rejects excessive XLSX archive entry count before candidate parsing', async () => {
