@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { isDeepStrictEqual } = require('node:util');
 
 const {
   assertLocalDatabaseUrl,
@@ -22,6 +23,11 @@ const NULL_POLICY_VERSION =
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function jsonbEqual(leftRaw, rightRaw) {
+  if (typeof leftRaw !== 'string' || typeof rightRaw !== 'string') return false;
+  return isDeepStrictEqual(JSON.parse(leftRaw), JSON.parse(rightRaw));
 }
 
 function originalMerchantPolicy(raw) {
@@ -93,7 +99,23 @@ function makeDatabase(rows) {
           : null;
         const enforcesAppliedVersion =
           /config->'merchantPolicy'->>'policyVersion' = \$4/i.test(normalized);
-        if (!row || (enforcesAppliedVersion && currentPolicy?.policyVersion !== params[3])) {
+        const enforcesExactAppliedPolicy =
+          /config->'merchantPolicy' = \$4::jsonb/i.test(normalized);
+        const recognizesExactOriginal =
+          /NOT \(config \? 'merchantPolicy'\)/i.test(normalized)
+          && /config->'merchantPolicy' = \$3::jsonb/i.test(normalized);
+        const matchesApplied = enforcesExactAppliedPolicy
+          && row.merchant_policy_present
+          && jsonbEqual(row.merchant_policy_raw, params[3]);
+        const matchesOriginal = recognizesExactOriginal && (
+          params[1]
+            ? row.merchant_policy_present
+              && jsonbEqual(row.merchant_policy_raw, params[2])
+            : !row.merchant_policy_present
+        );
+        if (!row
+            || (enforcesAppliedVersion && currentPolicy?.policyVersion !== params[3])
+            || (enforcesExactAppliedPolicy && !matchesApplied && !matchesOriginal)) {
           return { rows: [], rowCount: 0 };
         }
         row.merchant_policy_present = params[1];
@@ -181,11 +203,58 @@ test('dry-run needs only an injected query contract and never opens a configured
   assert.equal(result.applied, 0);
 });
 
+test('dry-run marks an unusable migrated merchantPolicy for review', async () => {
+  const { database, calls } = makeDatabase([{
+    user_id: 'merchant-invalid-policy',
+    configRaw: '{"products":[],"merchantPolicy":{}}',
+  }]);
+
+  const result = await runMerchantPolicyMigration({ database });
+  const [merchant] = result.merchants;
+
+  assert.equal(merchant.status, 'invalid');
+  assert.equal(
+    merchant.reviewItems.some((item) => item.code === 'invalid_applied_policy'),
+    true,
+  );
+  assert.equal(merchant.appliedPolicyVersion, null);
+  assert.equal(merchant.appliedMerchantPolicyRaw, null);
+  assert.deepEqual(result.reviewIds, ['merchant-invalid-policy']);
+  assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
+});
+
+test('apply rejects an unusable migrated merchantPolicy before preservation or update', async () => {
+  const { database, calls } = makeDatabase([{
+    user_id: 'merchant-invalid-policy',
+    configRaw: '{"products":[],"merchantPolicy":{}}',
+  }]);
+  let preserved = false;
+
+  await assert.rejects(
+    runMerchantPolicyMigration({
+      database,
+      apply: true,
+      rollbackSink: async () => {
+        preserved = true;
+      },
+    }),
+    (error) => error.code === 'INVALID_MERCHANT_POLICY'
+      && isDeepStrictEqual(error.reviewIds, ['merchant-invalid-policy']),
+  );
+
+  assert.equal(preserved, false);
+  assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
+  assert.equal(calls.at(-1).sql, 'ROLLBACK');
+});
+
 test('apply saves rollback payload before updating bot_configs and preserves legacy fields', async () => {
   const originalConfig = {
     customLegacyField: 'keep-me',
     products: [],
   };
+  const expectedAppliedPolicyRaw = JSON.stringify(
+    migrateLegacyConfig(originalConfig).migratedConfig.merchantPolicy,
+  );
   const { database, state, calls } = makeDatabase([
     { user_id: 'merchant-apply', config: originalConfig },
   ]);
@@ -211,6 +280,7 @@ test('apply saves rollback payload before updating bot_configs and preserves leg
         raw: null,
       },
       appliedPolicyVersion: EMPTY_POLICY_VERSION,
+      appliedMerchantPolicyRaw: expectedAppliedPolicyRaw,
     }],
   });
   assert.equal(state[0].config_raw, JSON.stringify(originalConfig));
@@ -226,6 +296,10 @@ test('apply saves rollback payload before updating bot_configs and preserves leg
   );
   const update = calls.find((call) => /^UPDATE bot_configs/i.test(call.sql));
   assert.match(update.sql, /jsonb_set\(config, '\{merchantPolicy\}', \$2::jsonb, true\)/i);
+  assert.equal(
+    update.params[1],
+    rollbackPayload.merchantConfigs[0].appliedMerchantPolicyRaw,
+  );
   assert.equal(calls.at(-1).sql, 'COMMIT');
 });
 
@@ -256,6 +330,7 @@ test('rollback payload preserves an existing merchantPolicy byte-for-byte', asyn
         raw: JSON.stringify(originalConfig.merchantPolicy),
       },
       appliedPolicyVersion: EMPTY_POLICY_VERSION,
+      appliedMerchantPolicyRaw: JSON.stringify(originalConfig.merchantPolicy),
     }],
   });
   assert.equal(
@@ -324,11 +399,38 @@ test('rollback restores only merchantPolicy for absent, null, and present origin
   assert.match(restoreUpdate.sql, /config - 'merchantPolicy'/i);
   assert.match(
     restoreUpdate.sql,
-    /config->'merchantPolicy'->>'policyVersion' = \$4/i,
+    /config->'merchantPolicy' = \$4::jsonb/i,
   );
 });
 
-test('rollback conflicts atomically when any current merchantPolicy version changed', async () => {
+test('rollback retry succeeds for exact absent, null, and present original states', async () => {
+  const presentConfig = migrateLegacyConfig({ products: [] }).migratedConfig;
+  const { database, state, calls } = makeDatabase([
+    { user_id: 'merchant-absent', configRaw: '{"products":[]}' },
+    { user_id: 'merchant-null', configRaw: '{"products":[],"merchantPolicy":null}' },
+    { user_id: 'merchant-present', configRaw: JSON.stringify(presentConfig) },
+  ]);
+  let rollbackPayload;
+  await runMerchantPolicyMigration({
+    database,
+    apply: true,
+    rollbackSink: async (payload) => {
+      rollbackPayload = clone(payload);
+    },
+  });
+
+  await restoreMerchantPolicyConfigs({ database, snapshot: rollbackPayload });
+  const onceRestored = clone(state);
+  await restoreMerchantPolicyConfigs({ database, snapshot: rollbackPayload });
+
+  assert.deepEqual(state, onceRestored);
+  assert.equal(
+    calls.filter((call) => call.sql === 'COMMIT').length,
+    3,
+  );
+});
+
+test('rollback conflicts atomically on a same-version merchantPolicy content edit', async () => {
   const { database, state, calls } = makeDatabase([
     { user_id: 'merchant-first', config: { products: [] } },
     { user_id: 'merchant-conflict', config: { products: [] } },
@@ -342,7 +444,11 @@ test('rollback conflicts atomically when any current merchantPolicy version chan
     },
   });
   state[0].unrelated_edit = 'must-survive';
-  state[1].merchant_policy_raw = '{"policyVersion":"sha256:changed"}';
+  const sameVersionEdit = JSON.parse(state[1].merchant_policy_raw);
+  sameVersionEdit.status = sameVersionEdit.status === 'active'
+    ? 'needs_review'
+    : 'active';
+  state[1].merchant_policy_raw = JSON.stringify(sameVersionEdit);
   const beforeRollback = clone(state);
 
   await assert.rejects(
@@ -433,11 +539,13 @@ test('apply fails closed on unsafe raw numbers before rollback preservation or U
 });
 
 test('raw numeric safety accepts exactly round-trippable decimals and exponents', async () => {
+  const numericText =
+    `9007199254740993 \\" 0.1 \\\\ 1e-${'9'.repeat(100)} ${'9'.repeat(1100)}`;
   const { database } = makeDatabase([
     {
       user_id: 'merchant-safe-numbers',
       configRaw:
-        '{"products":[],"legacyRatio":1.25,"legacyExponent":1e3,"legacyNumericText":"9007199254740993 \\" 0.1 \\\\ 1e-323"}',
+        `{"products":[],"legacyRatio":1.25,"legacyExponent":1e3,"legacyNumericText":"${numericText}"}`,
     },
   ]);
 
@@ -445,6 +553,110 @@ test('raw numeric safety accepts exactly round-trippable decimals and exponents'
 
   assert.equal(result.merchants[0].status, 'active');
   assert.deepEqual(result.merchants[0].numericSafetyIssues, []);
+});
+
+test('raw numeric safety rejects excessive exponent magnitude before BigInt powers', async () => {
+  const raw = `{"products":[],"legacyDecimal":1e-${'9'.repeat(100)}}`;
+  const { database } = makeDatabase([
+    { user_id: 'merchant-huge-exponent', configRaw: raw },
+  ]);
+
+  const result = await runMerchantPolicyMigration({ database });
+  const [issue] = result.merchants[0].numericSafetyIssues;
+
+  assert.equal(result.merchants[0].status, 'invalid');
+  assert.equal(issue.reason, 'exponent_magnitude_limit');
+  assert.equal(issue.lexeme.length, 103);
+});
+
+test('raw numeric safety bounds digit count and token preview length', async () => {
+  const tooManyDigits = '9'.repeat(513);
+  const tooLongToken = `1e${'0'.repeat(1024)}1`;
+  const { database } = makeDatabase([
+    {
+      user_id: 'merchant-too-many-digits',
+      configRaw: `{"products":[],"legacyNumber":${tooManyDigits}}`,
+    },
+    {
+      user_id: 'merchant-token-too-long',
+      configRaw: `{"products":[],"legacyNumber":${tooLongToken}}`,
+    },
+  ]);
+
+  const result = await runMerchantPolicyMigration({ database });
+  const issues = result.merchants.map(
+    (merchant) => merchant.numericSafetyIssues[0],
+  );
+
+  assert.equal(issues[0].reason, 'digit_count_limit');
+  assert.equal(issues[0].digitCount, 513);
+  assert.equal(issues[1].reason, 'token_length_limit');
+  assert.equal(issues[1].tokenLength, 1027);
+  assert.ok(issues[1].lexeme.length <= 65);
+});
+
+test('raw numeric safety caps the number of reported issues', async () => {
+  const unsafeFields = Array.from(
+    { length: 100 },
+    (_, index) => `"unsafe${index}":0.1`,
+  ).join(',');
+  const { database } = makeDatabase([{
+    user_id: 'merchant-many-issues',
+    configRaw: `{"products":[],${unsafeFields}}`,
+  }]);
+
+  const result = await runMerchantPolicyMigration({ database });
+
+  assert.equal(result.merchants[0].status, 'invalid');
+  assert.equal(result.merchants[0].numericSafetyIssues.length, 32);
+});
+
+test('oversized raw config is review-only and apply fails before preservation or update', async () => {
+  const oversizedRaw =
+    `{"products":[],"padding":"${'x'.repeat(1_048_577)}"}`;
+  const dryRunDatabase = makeDatabase([{
+    user_id: 'merchant-oversized',
+    configRaw: oversizedRaw,
+  }]);
+
+  const result = await runMerchantPolicyMigration({
+    database: dryRunDatabase.database,
+  });
+
+  assert.equal(result.merchants[0].status, 'invalid');
+  assert.equal(result.merchants[0].reviewItems[0].code, 'raw_config_limit');
+  assert.equal(
+    result.merchants[0].rawSafetyIssues[0].reason,
+    'config_size_limit',
+  );
+  assert.deepEqual(result.reviewIds, ['merchant-oversized']);
+  assert.equal(
+    dryRunDatabase.calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)),
+    false,
+  );
+
+  const applyDatabase = makeDatabase([{
+    user_id: 'merchant-oversized',
+    configRaw: oversizedRaw,
+  }]);
+  let preserved = false;
+  await assert.rejects(
+    runMerchantPolicyMigration({
+      database: applyDatabase.database,
+      apply: true,
+      rollbackSink: async () => {
+        preserved = true;
+      },
+    }),
+    (error) => error.code === 'RAW_CONFIG_LIMIT'
+      && isDeepStrictEqual(error.reviewIds, ['merchant-oversized']),
+  );
+  assert.equal(preserved, false);
+  assert.equal(
+    applyDatabase.calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)),
+    false,
+  );
+  assert.equal(applyDatabase.calls.at(-1).sql, 'ROLLBACK');
 });
 
 test('apply refuses missing rollback preservation and never falls back to a configured database', async () => {

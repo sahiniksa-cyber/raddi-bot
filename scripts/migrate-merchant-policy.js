@@ -6,6 +6,18 @@ const path = require('node:path');
 const {
   migrateLegacyConfig,
 } = require('../src/policy/merchant-policy-migrator');
+const {
+  validateMerchantPolicy,
+} = require('../src/policy/merchant-policy-schema');
+
+const RAW_CONFIG_LIMITS = Object.freeze({
+  maxBytes: 1_048_576,
+  maxNumberTokenLength: 1024,
+  maxNumberDigits: 512,
+  maxExponentMagnitude: 1024,
+  maxIssues: 32,
+  maxTokenPreviewLength: 64,
+});
 
 function parseArgs(args) {
   let apply = false;
@@ -130,6 +142,79 @@ function isExactlyRepresentableAsDouble(lexeme, parsed) {
     === binary.numerator * decimal.denominator;
 }
 
+function isDigit(character) {
+  return character >= '0' && character <= '9';
+}
+
+function readJsonNumberToken(raw, start) {
+  let cursor = start;
+  if (raw[cursor] === '-') cursor += 1;
+
+  const integerStart = cursor;
+  if (raw[cursor] === '0') {
+    cursor += 1;
+  } else {
+    while (isDigit(raw[cursor])) cursor += 1;
+  }
+  let digitCount = cursor - integerStart;
+
+  if (raw[cursor] === '.') {
+    cursor += 1;
+    const fractionStart = cursor;
+    while (isDigit(raw[cursor])) cursor += 1;
+    digitCount += cursor - fractionStart;
+  }
+
+  let exponentDigitsStart = null;
+  if (raw[cursor] === 'e' || raw[cursor] === 'E') {
+    cursor += 1;
+    if (raw[cursor] === '+' || raw[cursor] === '-') cursor += 1;
+    exponentDigitsStart = cursor;
+    while (isDigit(raw[cursor])) cursor += 1;
+  }
+
+  return {
+    start,
+    end: cursor,
+    digitCount,
+    exponentDigitsStart,
+  };
+}
+
+function exponentMagnitudeExceeds(raw, token, limit) {
+  if (token.exponentDigitsStart === null) return false;
+  let cursor = token.exponentDigitsStart;
+  while (cursor < token.end && raw[cursor] === '0') cursor += 1;
+  const significantLength = token.end - cursor;
+  const limitText = String(limit);
+  if (significantLength !== limitText.length) {
+    return significantLength > limitText.length;
+  }
+  for (let index = 0; index < limitText.length; index += 1) {
+    if (raw[cursor + index] === limitText[index]) continue;
+    return raw[cursor + index] > limitText[index];
+  }
+  return false;
+}
+
+function numericIssue(raw, token, reason) {
+  const tokenLength = token.end - token.start;
+  const lexeme = tokenLength <= RAW_CONFIG_LIMITS.maxNumberTokenLength
+    ? raw.substring(token.start, token.end)
+    : `${raw.substring(
+      token.start,
+      token.start + RAW_CONFIG_LIMITS.maxTokenPreviewLength,
+    )}…`;
+  return {
+    lexeme,
+    offset: token.start,
+    reason,
+    tokenLength,
+    digitCount: token.digitCount,
+    code: 'unsafe_json_number',
+  };
+}
+
 function findUnsafeJsonNumbers(raw) {
   const issues = [];
   let inString = false;
@@ -151,13 +236,31 @@ function findUnsafeJsonNumbers(raw) {
       inString = true;
       continue;
     }
-    if (character !== '-' && !/\d/.test(character)) continue;
+    if (character !== '-' && !isDigit(character)) continue;
 
-    const match = raw.slice(index).match(
-      /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/,
-    );
-    if (!match) continue;
-    const lexeme = match[0];
+    const token = readJsonNumberToken(raw, index);
+    const tokenLength = token.end - token.start;
+    let issue = null;
+    if (tokenLength > RAW_CONFIG_LIMITS.maxNumberTokenLength) {
+      issue = numericIssue(raw, token, 'token_length_limit');
+    } else if (token.digitCount > RAW_CONFIG_LIMITS.maxNumberDigits) {
+      issue = numericIssue(raw, token, 'digit_count_limit');
+    } else if (exponentMagnitudeExceeds(
+      raw,
+      token,
+      RAW_CONFIG_LIMITS.maxExponentMagnitude,
+    )) {
+      issue = numericIssue(raw, token, 'exponent_magnitude_limit');
+    }
+    const lexeme = issue
+      ? null
+      : raw.substring(token.start, token.end);
+    if (issue) {
+      issues.push(issue);
+      if (issues.length >= RAW_CONFIG_LIMITS.maxIssues) return issues;
+      index = token.end - 1;
+      continue;
+    }
     const parsed = Number(lexeme);
     let reason = null;
     if (!Number.isFinite(parsed)) {
@@ -167,10 +270,27 @@ function findUnsafeJsonNumbers(raw) {
     } else if (!isExactlyRepresentableAsDouble(lexeme, parsed)) {
       reason = 'precision_loss';
     }
-    if (reason) issues.push({ lexeme, offset: index, reason });
-    index += lexeme.length - 1;
+    if (reason) {
+      issues.push(numericIssue(raw, token, reason));
+      if (issues.length >= RAW_CONFIG_LIMITS.maxIssues) return issues;
+    }
+    index = token.end - 1;
   }
   return issues;
+}
+
+function inspectRawConfig(raw) {
+  const byteLength = Buffer.byteLength(raw, 'utf8');
+  if (byteLength > RAW_CONFIG_LIMITS.maxBytes) {
+    return [{
+      code: 'raw_config_limit',
+      reason: 'config_size_limit',
+      offset: 0,
+      byteLength,
+      limit: RAW_CONFIG_LIMITS.maxBytes,
+    }];
+  }
+  return findUnsafeJsonNumbers(raw);
 }
 
 function originalMerchantPolicyFromRow(row) {
@@ -189,34 +309,63 @@ function originalMerchantPolicyFromRow(row) {
 function buildMerchantPlans(rows) {
   return rows.map((row) => {
     const configRaw = requireConfigRaw(row);
-    const numericSafetyIssues = findUnsafeJsonNumbers(configRaw);
+    const rawSafetyIssues = inspectRawConfig(configRaw);
+    const numericSafetyIssues = rawSafetyIssues.filter(
+      (issue) => issue.code === 'unsafe_json_number',
+    );
     const originalMerchantPolicy = originalMerchantPolicyFromRow(row);
-    if (numericSafetyIssues.length > 0) {
+    if (rawSafetyIssues.length > 0) {
       return {
         userId: row.user_id,
         status: 'invalid',
-        reviewItems: numericSafetyIssues.map((issue) => ({
+        reviewItems: rawSafetyIssues.map((issue) => ({
           path: `$raw[${issue.offset}]`,
-          code: 'unsafe_json_number',
+          code: issue.code,
         })),
+        rawSafetyIssues,
         numericSafetyIssues,
         migratedConfig: null,
         rollbackConfigRaw: configRaw,
         originalMerchantPolicy,
         appliedPolicyVersion: null,
+        appliedMerchantPolicyRaw: null,
       };
     }
     const originalConfig = normalizeConfig(configRaw);
     const migrated = migrateLegacyConfig(originalConfig);
+    const migratedPolicy = migrated.migratedConfig?.merchantPolicy;
+    const validation = validateMerchantPolicy(migratedPolicy);
+    const hasDerivedVersion = validation.ok
+      && typeof migratedPolicy?.policyVersion === 'string'
+      && migratedPolicy.policyVersion.trim() !== ''
+      && migratedPolicy.policyVersion === validation.policyVersion;
+    let appliedMerchantPolicyRaw = null;
+    if (hasDerivedVersion) {
+      try {
+        appliedMerchantPolicyRaw = JSON.stringify(migratedPolicy);
+      } catch {
+        appliedMerchantPolicyRaw = null;
+      }
+    }
+    const canApplyPolicy = typeof appliedMerchantPolicyRaw === 'string'
+      && appliedMerchantPolicyRaw.length > 0;
+    const reviewItems = canApplyPolicy
+      ? migrated.report.reviewItems
+      : [
+        ...migrated.report.reviewItems,
+        { path: 'merchantPolicy', code: 'invalid_applied_policy' },
+      ];
     return {
       userId: row.user_id,
-      status: migrated.report.status,
-      reviewItems: migrated.report.reviewItems,
+      status: canApplyPolicy ? migrated.report.status : 'invalid',
+      reviewItems,
+      rawSafetyIssues: [],
       numericSafetyIssues: [],
       migratedConfig: migrated.migratedConfig,
       rollbackConfigRaw: configRaw,
       originalMerchantPolicy,
-      appliedPolicyVersion: migrated.migratedConfig.merchantPolicy.policyVersion,
+      appliedPolicyVersion: canApplyPolicy ? validation.policyVersion : null,
+      appliedMerchantPolicyRaw,
     };
   });
 }
@@ -230,6 +379,24 @@ function migrationResult(mode, merchants) {
       .map((merchant) => merchant.userId),
     merchants,
   };
+}
+
+function isValidAppliedPolicySnapshot(preserved) {
+  if (typeof preserved.appliedPolicyVersion !== 'string'
+      || preserved.appliedPolicyVersion.trim() === ''
+      || typeof preserved.appliedMerchantPolicyRaw !== 'string'
+      || preserved.appliedMerchantPolicyRaw.trim() === '') {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(preserved.appliedMerchantPolicyRaw);
+    const validation = validateMerchantPolicy(parsed);
+    return validation.ok
+      && validation.policyVersion === preserved.appliedPolicyVersion
+      && parsed.policyVersion === preserved.appliedPolicyVersion;
+  } catch {
+    return false;
+  }
 }
 
 async function runMerchantPolicyMigration({
@@ -279,22 +446,47 @@ async function runMerchantPolicyMigration({
     );
     const merchants = buildMerchantPlans(selected.rows);
     const unsafeMerchants = merchants.filter(
-      (merchant) => merchant.numericSafetyIssues.length > 0,
+      (merchant) => merchant.rawSafetyIssues.length > 0,
     );
     if (unsafeMerchants.length > 0) {
+      const hasRawConfigLimit = unsafeMerchants.some((merchant) => (
+        merchant.rawSafetyIssues.some(
+          (issue) => issue.code === 'raw_config_limit',
+        )
+      ));
       const error = new Error(
-        `Unsafe JSON numbers require review: ${unsafeMerchants
+        `Unsafe raw merchant configs require review: ${unsafeMerchants
           .map((merchant) => merchant.userId)
           .join(', ')}`,
       );
-      error.code = 'UNSAFE_JSON_NUMBER';
+      error.code = hasRawConfigLimit
+        ? 'RAW_CONFIG_LIMIT'
+        : 'UNSAFE_JSON_NUMBER';
       error.reviewIds = unsafeMerchants.map((merchant) => merchant.userId);
       error.issues = unsafeMerchants.flatMap((merchant) => (
-        merchant.numericSafetyIssues.map((issue) => ({
+        merchant.rawSafetyIssues.map((issue) => ({
           userId: merchant.userId,
           ...issue,
         }))
       ));
+      throw error;
+    }
+    const invalidPolicyMerchants = merchants.filter(
+      (merchant) => typeof merchant.appliedMerchantPolicyRaw !== 'string'
+        || merchant.appliedMerchantPolicyRaw.length === 0
+        || typeof merchant.appliedPolicyVersion !== 'string'
+        || merchant.appliedPolicyVersion.trim() === '',
+    );
+    if (invalidPolicyMerchants.length > 0) {
+      const error = new Error(
+        `Invalid migrated merchant policies require review: ${invalidPolicyMerchants
+          .map((merchant) => merchant.userId)
+          .join(', ')}`,
+      );
+      error.code = 'INVALID_MERCHANT_POLICY';
+      error.reviewIds = invalidPolicyMerchants.map(
+        (merchant) => merchant.userId,
+      );
       throw error;
     }
     await rollbackSink({
@@ -303,6 +495,7 @@ async function runMerchantPolicyMigration({
         configRaw: merchant.rollbackConfigRaw,
         originalMerchantPolicy: merchant.originalMerchantPolicy,
         appliedPolicyVersion: merchant.appliedPolicyVersion,
+        appliedMerchantPolicyRaw: merchant.appliedMerchantPolicyRaw,
       })),
     });
     for (const merchant of merchants) {
@@ -313,7 +506,7 @@ async function runMerchantPolicyMigration({
          WHERE user_id = $1`,
         [
           merchant.userId,
-          JSON.stringify(merchant.migratedConfig.merchantPolicy),
+          merchant.appliedMerchantPolicyRaw,
         ],
       );
       if (updated.rowCount !== 1) {
@@ -339,9 +532,9 @@ async function restoreMerchantPolicyConfigs({ database, snapshot } = {}) {
           || typeof preserved.originalMerchantPolicy?.present !== 'boolean'
           || (preserved.originalMerchantPolicy.present
             && typeof preserved.originalMerchantPolicy.raw !== 'string')
-          || typeof preserved.appliedPolicyVersion !== 'string') {
+          || !isValidAppliedPolicySnapshot(preserved)) {
         throw new TypeError(
-          'Rollback entries require raw original policy state and appliedPolicyVersion',
+          'Rollback entries require exact original and applied policy state',
         );
       }
       const updated = await client.query(
@@ -353,12 +546,20 @@ async function restoreMerchantPolicyConfigs({ database, snapshot } = {}) {
              END,
              updated_at = NOW()
          WHERE user_id = $1
-           AND config->'merchantPolicy'->>'policyVersion' = $4`,
+           AND (
+             config->'merchantPolicy' = $4::jsonb
+             OR CASE
+                  WHEN $2::boolean
+                    THEN config ? 'merchantPolicy'
+                      AND config->'merchantPolicy' = $3::jsonb
+                  ELSE NOT (config ? 'merchantPolicy')
+                END
+           )`,
         [
           preserved.userId,
           preserved.originalMerchantPolicy.present,
           preserved.originalMerchantPolicy.raw ?? 'null',
-          preserved.appliedPolicyVersion,
+          preserved.appliedMerchantPolicyRaw,
         ],
       );
       if (updated.rowCount !== 1) {
