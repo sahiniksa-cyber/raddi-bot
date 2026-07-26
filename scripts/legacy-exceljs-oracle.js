@@ -6,11 +6,12 @@
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { Readable } = require('stream');
 const ExcelJS = require('exceljs');
 
 const { createCampaignService } = require('../src/services/campaigns/campaign-service');
-const { appendLedgerRow } = require('../src/services/billing/excel-ledger');
+const { appendLedgerRow, buildLedgerRow } = require('../src/services/billing/excel-ledger');
 
 function semanticValue(value) {
   if (value instanceof Date) return { type: 'date', value: value.toISOString() };
@@ -22,6 +23,24 @@ function semanticValue(value) {
   return value;
 }
 
+function semanticCellText(cell) {
+  // ExcelJS renders Date.text with locale-sensitive formatting. The instant is
+  // the semantic contract, so record a canonical representation instead.
+  if (cell.value instanceof Date) return `date:${cell.value.toISOString()}`;
+  return cell.text;
+}
+
+function dataValidationSemantics(sheet) {
+  const entries = Object.entries(sheet.dataValidations?.model || {}).sort(([left], [right]) => {
+    const [, leftColumn, leftRow] = left.match(/^([A-Z]+)(\d+)$/) || [];
+    const [, rightColumn, rightRow] = right.match(/^([A-Z]+)(\d+)$/) || [];
+    if (Number(leftRow) !== Number(rightRow)) return Number(leftRow) - Number(rightRow);
+    return String(leftColumn) < String(rightColumn) ? -1 : String(leftColumn) > String(rightColumn) ? 1 : 0;
+  });
+  const capture = ([address, validation]) => ({ address, validation });
+  return entries.length ? { count: entries.length, first: capture(entries[0]), last: capture(entries.at(-1)) } : null;
+}
+
 function worksheetSemantics(sheet) {
   const rows = [];
   sheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
@@ -31,12 +50,24 @@ function worksheetSemantics(sheet) {
         address: cell.address,
         column: columnNumber,
         value: semanticValue(cell.value),
-        text: cell.text,
+        text: semanticCellText(cell),
       });
     });
     rows.push({ row: rowNumber, cells });
   });
-  return { name: sheet.name, rows };
+  const headerBold = [];
+  sheet.getRow(1).eachCell({ includeEmpty: true }, cell => { headerBold.push(Boolean(cell.font?.bold)); });
+  return {
+    name: sheet.name,
+    presentation: {
+      rightToLeft: Boolean(sheet.views?.[0]?.rightToLeft),
+      columnWidths: sheet.columns.map(column => column.width ?? null),
+      autoFilter: sheet.autoFilter || null,
+      headerBold,
+      dataValidation: dataValidationSemantics(sheet),
+    },
+    rows,
+  };
 }
 
 function workbookSemantics(workbook) {
@@ -91,9 +122,19 @@ async function buildFixtureCorpus() {
   const missingPhoneColumn = await buildWorkbook([
     { name: 'No phone header', rows: [['Name', 'Product'], ['No number', 'Service']] },
   ]);
-  const largeWorkbook = await buildWorkbook([
-    { name: 'Large value', rows: [['Phone', 'Customer Name'], ['0551234570', `large-${'x'.repeat(65536)}`]] },
-  ]);
+  const largeRows = [['Phone', 'Customer Name', 'Product', 'Order Date', 'Currency', 'Amount']];
+  for (let index = 0; index < 1024; index += 1) {
+    const token = crypto.createHash('sha512').update(`legacy-large-row-${index}`).digest('hex');
+    largeRows.push([
+      `05${String(51300000 + index).padStart(8, '0')}`,
+      `Customer ${String(index).padStart(4, '0')} ${token.slice(0, 32)}`,
+      `Plan ${token.slice(32, 64)} ✨`,
+      `2026-07-${String((index % 28) + 1).padStart(2, '0')}`,
+      index % 2 ? 'SAR' : 'USD',
+      Number(`${index % 100}.${String(index % 100).padStart(2, '0')}`),
+    ]);
+  }
+  const largeWorkbook = await buildWorkbook([{ name: 'Large audience', rows: largeRows }]);
   const validCsv = Buffer.from('phone,name,product\n0551234571,CSV User,CSV & Unicode ✓\n', 'utf8');
   return {
     semanticWorkbook: { fileName: 'semantic-audience.xlsx', buffer: semanticWorkbook },
@@ -209,20 +250,32 @@ async function captureExports() {
 async function captureBillingLedger() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'legacy-exceljs-oracle-'));
   try {
-    await appendLedgerRow({
+    const firstRecord = {
       date: new Date('2026-07-26T10:00:00.000Z'), user: { name: 'ليان Al-Harbi', email: 'LAYAN@EXAMPLE.COM' },
       amountHalalas: 175000, currency: 'SAR', method: 'manual', providerPaymentId: 'manual-1',
       status: 'paid', activationType: 'paid', note: 'فاتورة ✨',
-    }, { dataDir });
-    await appendLedgerRow({
+    };
+    const secondRecord = {
       date: new Date('2026-07-27T10:00:00.000Z'), user: { name: 'John Smith', email: 'John@example.com' },
       amountHalalas: 1999, currency: 'USD', method: 'card', providerPaymentId: 'pay-2',
       status: 'paid', activationType: 'trial', note: '19.99 USD',
-    }, { dataDir });
+    };
+    await appendLedgerRow(firstRecord, { dataDir });
+    await appendLedgerRow(secondRecord, { dataDir });
     const file = path.join(dataDir, 'billing', 'payments-ledger.xlsx');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(file);
-    return { workbook: workbookSemantics(workbook) };
+    return {
+      appendAttempts: [firstRecord, secondRecord].map((record, index) => ({
+        appendOrder: index + 1,
+        row: Object.fromEntries(Object.entries(buildLedgerRow(record)).map(([key, value]) => [key, semanticValue(value)])),
+      })),
+      persistedWorkbook: workbookSemantics(workbook),
+      knownLegacyBehavior: {
+        category: 'EXCELJS_LEDGER_SECOND_APPEND_LOST',
+        message: 'After readFile, ExcelJS does not restore worksheet column keys; the object-form second addRow is empty and is not persisted.',
+      },
+    };
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
