@@ -178,9 +178,6 @@ async function reviewOutgoingReplyBeforeSend({
   replyMessageId,
   draft,
 } = {}) {
-  if (payload.preSendReviewRequired !== true) {
-    return { reply: String(draft || '').trim(), suppressed: false, bypassed: true };
-  }
   if (!database?.isConfigured?.()) throw new Error('pre-send review requires the database');
   if (!userId || !conversationId) {
     throw new Error('pre-send review requires userId and conversationId');

@@ -15,11 +15,11 @@ test('outgoing worker imports decrementMessageQuota', () => {
   assert.match(workerSource, /require\(['"]\.\.\/services\/billing\/message-quota['"]\)/);
 });
 
-test('decrementMessageQuota is called after sendWhatsappReply', () => {
-  const sendIdx = workerSource.indexOf('await sendWhatsappReply');
+test('decrementMessageQuota is called after the unified gateway', () => {
+  const sendIdx = workerSource.indexOf('await gateway.send');
   const decIdx = workerSource.lastIndexOf('decrementMessageQuota');
   assert.ok(sendIdx > 0);
-  assert.ok(decIdx > sendIdx, 'decrementMessageQuota must run AFTER sendWhatsappReply');
+  assert.ok(decIdx > sendIdx, 'decrementMessageQuota must run AFTER the gateway send');
 });
 
 test('quotaRemainingAfter is recorded in markReplyMessage payload', () => {

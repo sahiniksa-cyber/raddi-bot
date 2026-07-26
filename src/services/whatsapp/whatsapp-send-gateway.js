@@ -67,6 +67,16 @@ function snapshotRequest(request) {
   });
 }
 
+class WhatsAppSendGateway {
+  constructor(dependencies) {
+    this.delegate = createWhatsAppSendGateway(dependencies);
+  }
+
+  send(request) {
+    return this.delegate.send(request);
+  }
+}
+
 function createWhatsAppSendGateway({
   auditStore,
   policyStore,
@@ -174,6 +184,7 @@ function createWhatsAppSendGateway({
       destination: envelope.destination,
       content: envelope.content,
       media: envelope.media,
+      providerMessageId: envelope.providerMessageId,
       correlationId: envelope.correlationId,
     });
     await append(envelope, 'sent', {
@@ -188,6 +199,7 @@ function createWhatsAppSendGateway({
 module.exports = {
   MERCHANT_CLASSES,
   SEND_CLASSES,
+  WhatsAppSendGateway,
   createWhatsAppSendGateway,
   snapshotRequest,
   validateRequest,

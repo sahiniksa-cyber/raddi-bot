@@ -1,5 +1,10 @@
 'use strict';
 
+const {
+  formatMinorAmount,
+  requireActiveMerchantPolicy,
+} = require('../ai/canonical-prompt-context');
+
 const PRODUCT_SECTION_RE = /(?:^|\n)#{1,3}\s*(?:المنتجات|المنتجات والأسعار|قائمة المنتجات)[^\n]*\n([\s\S]*?)(?=\n#{1,3}\s|$)/i;
 
 const KNOWN_ALIASES = [
@@ -131,10 +136,29 @@ function mergeProducts(products) {
 }
 
 function buildProductCatalog(config = {}) {
-  return mergeProducts([
-    ...structuredProducts(config.products),
-    ...parsePromptProducts(config.botInstructions),
-  ]);
+  const compiled = requireActiveMerchantPolicy(config);
+  return compiled.policy.catalog.products.map(product => ({
+    id: product.id,
+    name: product.name,
+    aliases: product.aliases,
+    description: product.description,
+    longDescription: '',
+    price: product.variants.length === 1
+      ? formatMinorAmount(product.variants[0].price)
+      : '',
+    url: product.links[0] || '',
+    links: product.links,
+    attributes: product.attributes,
+    source: 'merchantPolicy',
+    variants: product.variants.map(variant => ({
+      id: variant.id,
+      label: variant.name,
+      price: formatMinorAmount(variant.price),
+      duration: variant.duration,
+      availability: variant.availability,
+      attributes: variant.attributes,
+    })),
+  }));
 }
 
 function scoreProduct(product, customerText) {

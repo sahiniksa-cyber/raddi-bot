@@ -9,6 +9,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { gatewayFactory } = require('./helpers/outgoing-gateway-double');
 const path = require('path');
 
 // ── Stub helpers ─────────────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ test('escalation message is sent but quota is NOT decremented', async () => {
   try {
     const result = await processOutgoingWhatsapp(
       makeJob({ escalation: true, customerSender: '966500000001@s.whatsapp.net', conversationId: 'conv-1' }),
-      { getUserBot: async () => makeConnectedBot(), scopeValidator: validateScope },
+      { getUserBot: async () => makeConnectedBot(), scopeValidator: validateScope, gatewayFactory },
     );
     assert.equal(result.sent, true, 'escalation message must be sent');
     assert.equal(decrementCalls, 0, 'quota must NOT be decremented for escalation');
@@ -125,7 +126,7 @@ test('escalation message is sent even when quota is 0 (never blocked)', async ()
   try {
     const result = await processOutgoingWhatsapp(
       makeJob({ escalation: true, customerSender: '966500000001@s.whatsapp.net', conversationId: 'conv-1' }),
-      { getUserBot: async () => makeConnectedBot(), scopeValidator: validateScope },
+      { getUserBot: async () => makeConnectedBot(), scopeValidator: validateScope, gatewayFactory },
     );
     assert.equal(result.sent, true, 'escalation must be sent even at zero quota');
     assert.equal(decrementCalls, 0, 'quota must NOT be decremented for escalation at zero');
@@ -145,7 +146,7 @@ test('normal customer reply still decrements quota exactly once on success (cont
   try {
     const result = await processOutgoingWhatsapp(
       makeJob(), // no escalation flag
-      { getUserBot: async () => makeConnectedBot() },
+      { getUserBot: async () => makeConnectedBot(), gatewayFactory },
     );
     assert.equal(result.sent, true);
     assert.equal(decrementCalls, 1, 'normal reply must decrement quota exactly once');

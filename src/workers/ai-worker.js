@@ -15,13 +15,18 @@ const { createRedisConnection } = require('../queues/redis');
 const { QUEUE_NAMES, enqueueOutgoingWhatsapp, enqueueAiReply, resolveDebounceMs } = require('../queues/message-queue');
 const { buildEscalationJobKey } = require('../queues/outgoing-job-key');
 const AIClient = require('../../lib/ai-client');
+const {
+  collectCanonicalInstantReplies,
+  requireActiveMerchantPolicy,
+} = require('../services/ai/canonical-prompt-context');
+const { PLATFORM_REPLY_POLICY } = require('../policy/platform-reply-policy');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
-const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('../services/bot/platform-features');
+const { findAutoReply, combineCannedAndAi } = require('../services/bot/platform-features');
 const { resolveConfigForAI } = require('../services/bot/runtime-bot');
 const { loadActiveLearnedReplies } = require('../services/learning/owner-reply-learner');
 const { checkMessageQuota } = require('../services/billing/message-quota');
@@ -649,6 +654,7 @@ async function sendInstantAutoReply({
   userId,
   instantReply,
   enrichedMessages = [],
+  policyVersion,
   store = storeAssistantMessage,
   enqueueOutgoing = enqueueOutgoingWhatsapp,
   markAnswered = markInboundMessagesAnswered,
@@ -676,7 +682,8 @@ async function sendInstantAutoReply({
     replyDelayMs: 0,
     replyDelayPreset: 'instant-keyword',
     source: 'auto_reply_keyword',
-    preSendReviewRequired: true,
+    policyVersion,
+    customerText: String(payload.text || ''),
   }, {
     jobKey: String(replyMessageId),
     delay: 0,
@@ -936,6 +943,7 @@ async function processAiReply(job) {
                 // billable reply). Owner-pause still applies.
                 systemNotice: true,
                 kind: 'quota_stop',
+                policyVersion: PLATFORM_REPLY_POLICY.policyVersion,
               }, {
                 jobKey: String(noticeId),
               });
@@ -951,11 +959,19 @@ async function processAiReply(job) {
       return { skipped: true, reason: quota.reason };
     }
 
+    // Only an active, structurally valid canonical policy may enter an
+    // automated drafting path. Disabled and quota-stop paths above do not
+    // draft merchant replies and therefore do not require merchant authority.
+    const compiledPolicy = requireActiveMerchantPolicy(config);
+
     // Instant replies: when the message is ONLY a trigger (no extra question)
     // and it's a single message, send the canned reply directly (fast path).
     // When there's an extra question, prepend the canned reply verbatim and let
     // the AI answer the rest (combine mode).
-    const { matched: instantMatched, hasExtraQuestion } = collectInstantReplies(config, text);
+    const { matched: instantMatched, hasExtraQuestion } = collectCanonicalInstantReplies(
+      compiledPolicy,
+      text,
+    );
     const cannedPrefix = instantMatched.map(m => m.reply).join('\n');
 
     if (instantMatched.length && !hasExtraQuestion && enrichedMessages.length <= 1) {
@@ -963,6 +979,7 @@ async function processAiReply(job) {
         job, payload, conversation, userId,
         instantReply: cannedPrefix,
         enrichedMessages,
+        policyVersion: compiledPolicy.policyVersion,
       });
     }
     const combinePrefix = instantMatched.length ? cannedPrefix : '';
@@ -1020,6 +1037,7 @@ async function processAiReply(job) {
           job, payload, conversation, userId,
           instantReply: combinePrefix,
           enrichedMessages: messagesCoveredByTriggers(enrichedMessages, instantMatched),
+          policyVersion: compiledPolicy.policyVersion,
         });
       }
       throw aiErr;
@@ -1160,7 +1178,8 @@ async function processAiReply(job) {
       replyDelayMs,
       replyDelayPreset: config.replyDelayPreset,
       source: 'ai_reply',
-      preSendReviewRequired: true,
+      policyVersion: compiledPolicy.policyVersion,
+      customerText: text,
       handoffAcknowledgement: Boolean(escalation.ownerMessage),
     }, {
       jobKey: String(replyMessageId),
@@ -1311,73 +1330,16 @@ async function processAiReply(job) {
       error: err,
     }).catch(() => {});
 
-    // Final-attempt fallback: when BullMQ has exhausted its retries we send a
-    // brief reassurance message so the customer isn't left in silence. We
-    // mark the job completed (return instead of throw) so BullMQ does not
-    // retry — and the deterministic jobKey makes the enqueue idempotent.
+    // Fail closed after retries. A generic reassurance can contain an
+    // unauthorized promise or commercial implication, and there may be no
+    // active policy available to validate it. No automatic message is queued.
     const attempts = Number(job?.attemptsMade) || 0;
     const isFinalAttempt = attempts >= 2;
-    // Anti-duplicate (Path 3): never send the fallback ON TOP of a real reply
-    // that was already enqueued this run — that produced "real reply + لحظات من فضلك".
     if (isFinalAttempt && !outgoingEnqueued) {
-      try {
-        const config = await resolveConfigForAI(payload.userId).catch(() => ({}));
-        const fallbackText =
-          (config && config.fallbackMessage) ||
-          'لحظات من فضلك، نراجع طلبك ونرجعلك بأقرب وقت 🌷';
-        const sender = payload.sender || null;
-        const fallbackKey = `fallback:${payload.messageId || job?.id || crypto.randomUUID()}`;
-
-        await enqueueOutgoingWhatsapp({
-          userId: payload.userId,
-          tenantId: payload.userId,
-          channelId: payload.channelId || 'whatsapp',
-          customerId: payload.customerId || payload.sender,
-          conversationId: payload.conversationId,
-          messageId: payload.messageId,
-          providerMessageId: payload.providerMessageId,
-          sender,
-          reply: fallbackText,
-          source: 'ai_failure_fallback',
-          preSendReviewRequired: true,
-        }, {
-          jobKey: fallbackKey,
-        });
-
-        logger.warn('fallback', 'AI exhausted retries — sent ai_failure_fallback', {
-          attempts,
-          error: err?.message,
-        });
-
-        // Best-effort owner notification. The notify service exposes only an
-        // SMTP mailer today; if SMTP isn't configured we silently no-op.
-        try {
-          const { createMailer } = require('../services/notify/mailer');
-          const mailer = createMailer();
-          const ownerEmail = process.env.OWNER_ALERT_EMAIL || process.env.ADMIN_ALERT_EMAIL;
-          if (mailer && ownerEmail) {
-            await mailer.sendMail({
-              to: ownerEmail,
-              subject: 'AI worker exhausted retries — fallback sent',
-              text: `userId=${payload.userId}\nconversationId=${payload.conversationId}\nmessageId=${payload.messageId}\nerror=${err?.message || err}`,
-            }).catch(() => {});
-          }
-        } catch (_notifyErr) {
-          // notify is best-effort
-        }
-
-        await updateJobStatus(QUEUE_NAMES.aiReplies, job.id, {
-          status: 'completed_with_fallback',
-          finished_at: new Date(),
-          attempts: attempts + 1,
-          last_error: err?.message || String(err),
-        }).catch(() => {});
-
-        return { fallbackSent: true, source: 'ai_failure_fallback' };
-      } catch (fallbackErr) {
-        logger.error('fallback', `fallback send failed: ${fallbackErr.message}`);
-        // fall through to throw so BullMQ records the failure
-      }
+      logger.error('fallback', 'AI exhausted retries; automatic reply blocked fail-closed', {
+        attempts,
+        error: err?.message,
+      });
     }
 
     throw err;

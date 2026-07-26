@@ -13,6 +13,14 @@ const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-revie
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { prepareEscalation } = require('./escalation-routing');
 const { TIMERS } = require('../../lib/constants');
+const { createReplyAuditStore } = require('../services/audit/reply-audit-store');
+const {
+  WhatsAppSendGateway,
+} = require('../services/whatsapp/whatsapp-send-gateway');
+const {
+  createWhatsAppTransportAdapter,
+} = require('../services/whatsapp/whatsapp-transport-adapter');
+const { stableCorrelationId } = require('../services/whatsapp/runtime-send-gateway');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
 
@@ -110,6 +118,49 @@ async function validateOutgoingScope({
     throw error;
   }
   return result.rows[0];
+}
+
+function createWorkerSendGateway({ bot, scopeValidator = validateOutgoingScope }) {
+  const gateway = new WhatsAppSendGateway({
+    auditStore: createReplyAuditStore({ database: db }),
+    policyStore: {
+      async loadMerchantPolicy(userId) {
+        const result = await db.query(
+          `SELECT config->'merchantPolicy' AS merchant_policy
+             FROM bot_configs
+            WHERE user_id = $1
+            LIMIT 1`,
+          [userId],
+        );
+        return result.rows[0]?.merchant_policy || null;
+      },
+    },
+    scopeStore: {
+      async assertSendScope(request) {
+        if (request.sendClass === 'platform_alert') return true;
+        const customer = request.customerId || request.tenantScope.customerId;
+        if (request.sendClass === 'automated_customer_reply'
+            && request.destination !== customer) {
+          const error = new Error('automated destination differs from scoped customer');
+          error.code = 'OUTGOING_SCOPE_MISMATCH';
+          throw error;
+        }
+        return scopeValidator({
+          database: db,
+          userId: request.userId,
+          channelId: request.channelId,
+          conversationId: request.conversationId,
+          sender: customer,
+          replyMessageId: request.messageId || null,
+        });
+      },
+    },
+    transport: createWhatsAppTransportAdapter({
+      client: bot.client,
+      timeoutMs: TIMERS.SEND_MESSAGE_TIMEOUT_MS,
+    }),
+  });
+  return gateway;
 }
 
 async function routePreSendEscalation({
@@ -275,6 +326,7 @@ async function processOutgoingWhatsapp(job, {
   getAutoReplyEnabled = loadAutoReplyEnabled,
   scopeValidator = validateOutgoingScope,
   enqueueOutgoing = enqueueOutgoingWhatsapp,
+  gatewayFactory = createWorkerSendGateway,
 }) {
   const payload = job.data || {};
   const userId = payload.userId;
@@ -503,7 +555,41 @@ async function processOutgoingWhatsapp(job, {
 
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
-  const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
+  const sendClass = payload.escalation
+    ? 'handoff_notification'
+    : (payload.systemNotice ? 'platform_alert' : 'automated_customer_reply');
+  const idempotencyKey = payload.idempotencyKey
+    || `${sendClass}:${replyMessageId || job.id}`;
+  const gateway = gatewayFactory({ bot, scopeValidator });
+  const gatewayResult = await gateway.send({
+    sendClass: sendClass,
+    userId,
+    channelId: 'whatsapp',
+    destination: deliverTo,
+    conversationId: payload.conversationId,
+    customerId: authoritativeCustomer,
+    messageId: replyMessageId || null,
+    idempotencyKey,
+    correlationId: payload.correlationId || stableCorrelationId(`${userId}:${idempotencyKey}`),
+    content: finalReply,
+    contentOrigin: payload.source || 'unknown',
+    policyVersion: payload.policyVersion,
+    providerMessageId,
+    customerText: payload.customerText || payload.text || '',
+    conversationFocus: payload.conversationFocus || {},
+    tenantScope: {
+      userId,
+      customerId: authoritativeCustomer,
+      conversationId: payload.conversationId,
+    },
+  });
+  if (gatewayResult.decision !== 'sent') {
+    if (gatewayResult.decision === 'block') {
+      return completeSuppressedOutgoing(job, { replyMessageId, lid: false });
+    }
+    return { skipped: true, reason: gatewayResult.decision, replyMessageId };
+  }
+  const sendResult = gatewayResult.provider?.raw;
   await recordWhatsappMessageId({
     userId,
     conversationId: payload.conversationId,

@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+const { policy } = require('./helpers/send-gateway-harness');
 
 // Wiring test: when this conversation has an UNRESOLVED escalation thread,
 // processAiReply must fetch that state and pass `escalationPending: true` into
@@ -58,7 +59,11 @@ const dbMock = {
 
 stub(path.resolve(__dirname, '..', 'src', 'db', 'client.js'), dbMock);
 stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'runtime-bot.js'), {
-  resolveConfigForAI: async () => ({ learningEnabled: false, memoryMessages: 50 }),
+  resolveConfigForAI: async () => ({
+    learningEnabled: false,
+    memoryMessages: 50,
+    merchantPolicy: policy().policy,
+  }),
 });
 stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'platform-features.js'), {
   findAutoReply: () => null,

@@ -30,8 +30,9 @@ test('worker records whatsapp_message_id after a successful send (with userId fo
   // Static check: the success path captures sendResult and records key.id
   // scoped by userId. The userId filter is load-bearing — without it the
   // retry-receipt lookup could return content from a different tenant's row.
-  assert.match(WORKER_SRC, /const\s+sendResult\s*=\s*await\s+sendWhatsappReply/,
-    'main path must capture the send result');
+  assert.match(WORKER_SRC, /const\s+gatewayResult\s*=\s*await\s+gateway\.send/);
+  assert.match(WORKER_SRC, /const\s+sendResult\s*=\s*gatewayResult\.provider\?\.raw/,
+    'main path must capture the gateway provider result');
   assert.match(WORKER_SRC, /recordWhatsappMessageId\(\{[\s\S]*whatsappMessageId:\s*sendResult\?\.key\?\.id/,
     'main path must record the full scope and key.id');
 });

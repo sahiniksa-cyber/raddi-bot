@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { gatewayFactory } = require('./helpers/outgoing-gateway-double');
 const path = require('path');
 
 const dbModulePath = path.resolve(__dirname, '..', 'src', 'db', 'client');
@@ -75,6 +76,7 @@ test('normal WhatsApp path sends only the final reviewed text', async () => {
       getUserBot: async () => makeBot(sent),
       scopeValidator: validateScope,
       reviewBeforeSend: async () => ({ reply: 'النص النهائي المراجع', suppressed: false }),
+      gatewayFactory,
     });
     assert.equal(result.sent, true);
     assert.deepEqual(sent.map(item => item.text), ['النص النهائي المراجع']);
@@ -90,6 +92,7 @@ test('suppressed duplicate completes without any WhatsApp send', async () => {
     getUserBot: async () => makeBot(sent),
     scopeValidator: validateScope,
     reviewBeforeSend: async () => ({ reply: '', suppressed: true }),
+    gatewayFactory,
   });
   assert.equal(result.reason, 'pre_send_suppressed');
   assert.equal(sent.length, 0);
@@ -102,6 +105,7 @@ test('review failure is fail-closed on the normal path', async () => {
       getUserBot: async () => makeBot(sent),
       scopeValidator: validateScope,
       reviewBeforeSend: async () => { throw new Error('review timeout'); },
+      gatewayFactory,
     }),
     /review timeout/,
   );

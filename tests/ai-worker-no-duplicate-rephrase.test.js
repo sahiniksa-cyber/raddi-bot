@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+const { policy } = require('./helpers/send-gateway-harness');
 
 // Reproduction for Issue 1 (duplicate reply). Mirrors the stub-via-require.cache
 // harness used by tests/ai-failure-fallback.test.js. We drive processAiReply all
@@ -99,7 +100,11 @@ stub(path.resolve(__dirname, '..', 'src', 'db', 'client.js'), dbMock);
 
 // runtime-bot — minimal config, no instant replies, learning off.
 stub(path.resolve(__dirname, '..', 'src', 'services', 'bot', 'runtime-bot.js'), {
-  resolveConfigForAI: async () => ({ learningEnabled: false, memoryMessages: 50 }),
+  resolveConfigForAI: async () => ({
+    learningEnabled: false,
+    memoryMessages: 50,
+    merchantPolicy: policy().policy,
+  }),
 });
 
 // platform-features — no auto/instant replies so we go through the AI path.

@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { gatewayFactory } = require('./helpers/outgoing-gateway-double');
 const path = require('path');
 
 // Stub db before loading the worker.
@@ -71,7 +72,7 @@ test('quota is NOT decremented when sendWhatsappReply throws', async () => {
   });
 
   await assert.rejects(
-    processOutgoingWhatsapp(makeJob(), { getUserBot }),
+    processOutgoingWhatsapp(makeJob(), { getUserBot, gatewayFactory }),
     /simulated_send_failure/,
   );
   assert.equal(decrementCalls, 0, 'quota must not be decremented when the send fails');
@@ -93,7 +94,7 @@ test('quota is NOT decremented when socket is not open', async () => {
   });
 
   await assert.rejects(
-    processOutgoingWhatsapp(makeJob(), { getUserBot }),
+    processOutgoingWhatsapp(makeJob(), { getUserBot, gatewayFactory }),
     /socket_not_open/,
   );
   assert.equal(decrementCalls, 0);
@@ -117,7 +118,7 @@ test('quota IS decremented exactly once on a successful send', async () => {
       log: () => {},
     });
 
-    const result = await processOutgoingWhatsapp(makeJob(), { getUserBot });
+    const result = await processOutgoingWhatsapp(makeJob(), { getUserBot, gatewayFactory });
     assert.equal(result.sent, true);
     assert.equal(decrementCalls, 1);
   } finally {

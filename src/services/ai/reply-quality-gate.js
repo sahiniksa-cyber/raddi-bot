@@ -1,10 +1,15 @@
 'use strict';
 
+const {
+  formatMinorAmount,
+  requireActiveMerchantPolicy,
+} = require('./canonical-prompt-context');
+
 const { normalizeArabic } = require('../../../lib/post-process-reply');
 
 const DECISIONS = new Set(['pass', 'repair', 'clarify', 'escalate']);
 const FINAL_DECISIONS = new Set(['pass', 'repair', 'suppress']);
-const URL_RE = /(?:https?:\/\/|www\.)[^\s)\]]+|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/[^\s)\]]*/gi;
+const URL_RE = /(?:https?:\/\/|www\.)[^\s)\]"'},]+|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/[^\s)\]"'},]*/gi;
 // One visible emoji per match (while keeping ZWJ sequences such as family
 // emoji together). A broad `[...] +` class incorrectly treated three adjacent
 // emoji as one and bypassed the configured cap.
@@ -115,41 +120,61 @@ function serializeProduct(product = {}) {
 }
 
 function selectedPolicyTexts(config = {}, matchedPolicies = []) {
-  const selected = [];
-  const seen = new Set();
-  const add = (value) => {
-    const text = String(value || '').trim();
-    if (!text || seen.has(text)) return;
-    seen.add(text);
-    selected.push(text);
-  };
-  for (const policy of matchedPolicies || []) add(policy?.reply);
-  for (const reply of Object.values(config.autoReplyKeywords || {})) add(reply);
-  return selected.slice(0, 30);
+  void matchedPolicies;
+  let compiled;
+  try {
+    compiled = requireActiveMerchantPolicy(config);
+  } catch (_) {
+    return [];
+  }
+  return [
+    ...compiled.policy.businessRules.map(rule => rule.statement),
+    ...compiled.policy.instantReplies.map(reply => reply.reply),
+  ].slice(0, 30);
 }
 
 function buildAuthoritativeEvidence(config = {}, matchedPolicies = []) {
+  let compiled;
+  try {
+    compiled = requireActiveMerchantPolicy(config);
+  } catch (_) {
+    return '';
+  }
   const parts = [
-    config.storeName,
-    config.storeDescription,
-    config.workingHours,
-    config.botInstructions,
-    ...(Array.isArray(config.products) ? config.products.map(serializeProduct) : []),
+    JSON.stringify(compiled.policy.persona),
+    ...compiled.policy.catalog.products.map(product => JSON.stringify({
+      id: product.id,
+      name: product.name,
+      aliases: product.aliases,
+      description: product.description,
+      variants: product.variants,
+      links: product.links,
+      attributes: product.attributes,
+    })),
     ...selectedPolicyTexts(config, matchedPolicies),
   ];
-  return parts.map(v => String(v || '').trim()).filter(Boolean).join('\n');
+  return parts.filter(Boolean).join('\n');
 }
 
 function buildMerchantGrounding(config = {}, matchedPolicies = []) {
-  const products = Array.isArray(config.products) && config.products.length
-    ? config.products.map((p, i) => `${i + 1}. ${serializeProduct(p) || 'منتج بلا تفاصيل'}`).join('\n')
+  let compiled;
+  try {
+    compiled = requireActiveMerchantPolicy(config);
+  } catch (_) {
+    return 'لا توجد سياسة تاجر نشطة؛ يجب حجب الرد الآلي.';
+  }
+  const products = compiled.policy.catalog.products.length
+    ? compiled.policy.catalog.products.map((product, index) => {
+      const variants = product.variants.map(variant => (
+        `${variant.name}: ${formatMinorAmount(variant.price)}`
+      )).join(' | ');
+      return `${index + 1}. ${product.name}${variants ? ` | ${variants}` : ''}`;
+    }).join('\n')
     : 'لا توجد منتجات مضافة.';
   const policies = selectedPolicyTexts(config, matchedPolicies);
   return [
-    `اسم المتجر: ${String(config.storeName || 'المتجر')}`,
-    `وصف المتجر: ${String(config.storeDescription || 'غير مذكور')}`,
-    `ساعات العمل: ${String(config.workingHours || 'غير مذكورة')}`,
-    `تعليمات المالك:\n${String(config.botInstructions || 'لا توجد تعليمات إضافية.')}`,
+    `إصدار السياسة: ${compiled.policyVersion}`,
+    `الشخصية: ${JSON.stringify(compiled.policy.persona)}`,
     `المنتجات:\n${products}`,
     `السياسات والردود المعتمدة:\n${policies.length ? policies.map(p => `- ${p}`).join('\n') : 'لا توجد سياسات مطابقة.'}`,
   ].join('\n\n');
@@ -212,12 +237,20 @@ function extractWordDurationClaims(text) {
 
 function configuredPriceValues(config = {}) {
   const values = new Set();
-  const add = (text) => {
-    for (const value of normalizeDigits(text).match(/\d+(?:[.,]\d+)?/g) || []) values.add(value.replace(',', '.'));
-  };
-  for (const product of Array.isArray(config.products) ? config.products : []) {
-    add(product?.price || '');
-    for (const variant of Array.isArray(product?.variants) ? product.variants : []) add(variant?.price || '');
+  let compiled;
+  try {
+    compiled = requireActiveMerchantPolicy(config);
+  } catch (_) {
+    return values;
+  }
+  for (const product of compiled.policy.catalog.products) {
+    for (const variant of product.variants) {
+      const formatted = formatMinorAmount(variant.price).split(/\s+/)[0];
+      if (formatted) {
+        values.add(formatted);
+        values.add(String(Number(formatted)));
+      }
+    }
   }
   return values;
 }
@@ -238,7 +271,8 @@ function findUnsupportedFacts(reply, { config = {}, matchedPolicies = [], custom
 
   for (const claim of extractNumericClaims(reply)) {
     const supported = evidenceClaims.has(claim.key)
-      || (claim.group === 'currency' && claim.values.every(v => priceValues.has(v)))
+      || (claim.group === 'currency'
+        && claim.values.every(v => priceValues.has(v) || priceValues.has(String(Number(v)))))
       || isAttributedCustomerClaim(reply, customerText, claim.raw);
     if (!supported) issues.push({ type: 'unsupported_numeric', value: claim.raw });
   }

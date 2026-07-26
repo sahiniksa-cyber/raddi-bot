@@ -43,7 +43,7 @@ test('processOutgoingWhatsapp checks quota before sending (chokepoint gate)', ()
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'workers', 'outgoing-whatsapp-worker.js'), 'utf8');
   assert.match(src, /checkMessageQuota/, 'outgoing worker must import + use checkMessageQuota');
   const gateIdx = src.indexOf('shouldBlockOutgoingForQuota');
-  const sendIdx = src.indexOf('await sendWhatsappReply');
+  const sendIdx = src.indexOf('await gateway.send');
   assert.ok(gateIdx > -1 && gateIdx < sendIdx, 'quota gate must run before the send');
   // @lid path is also gated
   const lidStart = src.indexOf('async function handleLidOutgoing');

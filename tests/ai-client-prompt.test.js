@@ -2,63 +2,41 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
 const AIClient = require('../lib/ai-client');
+const { policy } = require('./helpers/send-gateway-harness');
 
-function makeClient(overrides = {}) {
-  const config = {
-    storeName: 'متجري',
-    welcomeMessage: 'هلا والله',
-    model: 'google/gemini-2.0-flash',
-    googleApiKey: 'AIzaSyDummyKeyForTesting1234',
-    products: [{ name: 'منتج تجريبي', price: '99 ريال', description: 'وصف' }],
-    escalationContacts: [{ name: 'محمد', phone: '0500000000', role: 'مدير', when: 'مشاكل' }],
-    ...overrides,
-  };
+function makeClient(mutator = value => value) {
+  const canonical = JSON.parse(JSON.stringify(policy().policy));
+  delete canonical.policyVersion;
+  mutator(canonical);
   return new AIClient(
-    config,
-    { info: () => {}, warn: () => {}, error: () => {} },
-    { record: () => {}, save: () => {} },
+    {
+      merchantPolicy: canonical,
+      storeName: 'LEGACY-STORE-NAME',
+      welcomeMessage: 'LEGACY-WELCOME',
+      products: [{ name: 'LEGACY-PRODUCT', price: '999 SAR' }],
+    },
+    { info() {}, warn() {}, error() {} },
   );
 }
 
-test('buildSystemPrompt does not wrap welcomeMessage in quote marks', () => {
-  const ai = makeClient();
-  const prompt = ai.buildSystemPrompt([], { isFirstMsg: true });
-  assert.ok(!prompt.includes('"هلا والله"'), 'welcomeMessage must not appear wrapped in double quotes');
-  assert.ok(!prompt.includes("'هلا والله'"), 'welcomeMessage must not appear wrapped in single quotes');
+test('buildSystemPrompt includes canonical persona and policy version', () => {
+  const ai = makeClient(canonical => {
+    canonical.persona.displayName = 'موظف المتجر';
+    canonical.persona.tone = 'ودود ومختصر';
+  });
+  const prompt = ai.buildSystemPrompt([{ role: 'user', content: 'السلام عليكم' }]);
+  assert.match(prompt, /موظف المتجر/);
+  assert.match(prompt, /ودود ومختصر/);
+  assert.match(prompt, /policyVersion: sha256:/);
 });
 
-test('buildSystemPrompt does not wrap storeName in quote marks', () => {
-  const ai = makeClient();
-  const prompt = ai.buildSystemPrompt([]);
-  assert.ok(!prompt.includes('"متجري"'), 'storeName must not appear wrapped in double quotes');
-});
-
-test('buildSystemPrompt does not contain quoted example phrases for the AI to mimic', () => {
-  const ai = makeClient();
-  const prompt = ai.buildSystemPrompt([]);
-  assert.ok(!prompt.includes('"ثانية بس"'), 'example casual phrases must not be in quote marks');
-  assert.ok(!prompt.includes('"خلني أشوف"'), 'example casual phrases must not be in quote marks');
-  assert.ok(!prompt.includes('"خلني أحوّلك للمختص"'), 'escalation example must not be in quote marks');
-});
-
-test('buildSystemPrompt still includes the store name and welcome message somewhere', () => {
-  const ai = makeClient();
-  const prompt = ai.buildSystemPrompt([], { isFirstMsg: true });
-  assert.ok(prompt.includes('متجري'), 'storeName must appear in the prompt');
-  assert.ok(prompt.includes('هلا والله'), 'welcomeMessage must appear in the prompt');
-});
-
-test('buildSystemPrompt does not contain hardcoded behavioral rules', () => {
-  const ai = makeClient();
-  const prompt = ai.buildSystemPrompt([]);
-  // No hardcoded "rules block" of any kind — behavior is configured from dashboard
-  assert.doesNotMatch(prompt, /القواعد الذهبية/);
-  assert.doesNotMatch(prompt, /🚫 ممنوع/);
-  assert.doesNotMatch(prompt, /اختم بسؤال/);
-  assert.doesNotMatch(prompt, /بدون علامات اقتباس/);
-  assert.doesNotMatch(prompt, /لو رحبت بالعميل سابقاً/);
+test('buildSystemPrompt excludes legacy store, welcome, and product fields', () => {
+  const prompt = makeClient().buildSystemPrompt([], { isFirstMsg: true });
+  assert.doesNotMatch(prompt, /LEGACY-STORE-NAME/);
+  assert.doesNotMatch(prompt, /LEGACY-WELCOME/);
+  assert.doesNotMatch(prompt, /LEGACY-PRODUCT/);
+  assert.doesNotMatch(prompt, /999 SAR/);
 });
 
 test('AIClient integrates stripAvoidedContent in getReply', () => {

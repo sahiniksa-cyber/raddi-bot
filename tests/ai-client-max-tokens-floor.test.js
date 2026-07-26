@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const AIClient = require('../lib/ai-client');
+const { policy } = require('./helpers/send-gateway-harness');
 
 const silentLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -13,7 +14,10 @@ test('max_tokens has an 800 floor even when maxResponseLength is small', async (
   process.env.REPLY_VALIDATOR_ENABLED = 'false';
   process.env.KNOWLEDGE_INJECTION_ENABLED = 'false';
   let seenMaxTokens = null;
-  const ai = new AIClient({ maxResponseLength: 200 }, silentLogger);
+  const ai = new AIClient({
+    maxResponseLength: 200,
+    merchantPolicy: policy().policy,
+  }, silentLogger);
   ai.buildClient = () => ({
     model: 'gpt-4o',
     openai: { chat: { completions: { create: async (payload) => { seenMaxTokens = payload.max_tokens; return { choices: [{ message: { content: 'رد' } }] }; } } } },
@@ -26,7 +30,10 @@ test('max_tokens still scales up for a large maxResponseLength (capped at 2000)'
   process.env.REPLY_VALIDATOR_ENABLED = 'false';
   process.env.KNOWLEDGE_INJECTION_ENABLED = 'false';
   let seenMaxTokens = null;
-  const ai = new AIClient({ maxResponseLength: 1500 }, silentLogger);
+  const ai = new AIClient({
+    maxResponseLength: 1500,
+    merchantPolicy: policy().policy,
+  }, silentLogger);
   ai.buildClient = () => ({
     model: 'gpt-4o',
     openai: { chat: { completions: { create: async (payload) => { seenMaxTokens = payload.max_tokens; return { choices: [{ message: { content: 'رد' } }] }; } } } },

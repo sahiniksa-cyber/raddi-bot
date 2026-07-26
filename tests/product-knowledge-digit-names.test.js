@@ -34,9 +34,19 @@ test('product with only name+price (no description) is kept', () => {
 });
 
 const { buildRelevantProductContext, findRelevantProducts } = require('../src/services/products/product-knowledge');
+const { canonicalConfig, product } = require('./helpers/canonical-config');
 
 test('customer asking about "4 اشهر" finds the digit-named product', () => {
-  const config = { products: [], botInstructions: `## المنتجات\nاشتراك 4 أشهر\n120 ريال\nاشتراك سنة\n350 ريال` };
+  const config = canonicalConfig({
+    products: [product({
+      name: 'اشتراك 4 أشهر',
+      aliases: ['اشتراك 4 اشهر'],
+      variants: [{
+        name: 'الخطة',
+        price: { amountMinor: 12000, currency: 'SAR' },
+      }],
+    })],
+  });
   const found = findRelevantProducts(config, 'عندكم اشتراك 4 اشهر؟');
   assert.ok(found.some(p => p.name === 'اشتراك 4 أشهر'), `got ${JSON.stringify(found.map(p=>p.name))}`);
   const ctx = buildRelevantProductContext({ config, customerText: 'عندكم اشتراك 4 اشهر؟' });
