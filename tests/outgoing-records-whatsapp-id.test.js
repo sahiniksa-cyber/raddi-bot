@@ -37,8 +37,8 @@ test('worker records whatsapp_message_id after a successful send (with userId fo
 });
 
 test('LID path also records whatsapp_message_id when the best-effort send succeeds', () => {
-  assert.match(WORKER_SRC, /const\s+lidResult\s*=\s*await\s+bot\.client\.sendMessage/,
-    '@lid path must use bot.client.sendMessage');
+  assert.match(WORKER_SRC, /const\s+lidResult\s*=\s*await\s+sendWhatsappReply/,
+    '@lid path must use the idempotent send wrapper');
   assert.match(WORKER_SRC, /recordWhatsappMessageId\(\{[\s\S]*whatsappMessageId:\s*lidResult\?\.key\?\.id/,
     '@lid path must record the full scope and key.id');
 });

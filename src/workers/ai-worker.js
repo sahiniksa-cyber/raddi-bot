@@ -699,6 +699,7 @@ async function sendInstantAutoReply({
     replyDelayPreset: 'instant-keyword',
     source: 'auto_reply_keyword',
     preSendReviewRequired: true,
+    replyState: 'queued_for_send',
   }, {
     jobKey: String(replyMessageId),
     delay: 0,
@@ -1226,6 +1227,7 @@ async function processAiReply(job) {
       source: 'ai_reply',
       preSendReviewRequired: true,
       replyOperationId,
+      replyState: 'queued_for_send',
       handoffAcknowledgement: Boolean(escalation.ownerMessage),
     }, {
       jobKey: String(replyMessageId),
@@ -1431,6 +1433,7 @@ async function processAiReply(job) {
           reply: fallbackText,
           source: 'ai_failure_fallback',
           preSendReviewRequired: true,
+          replyState: 'queued_for_send',
         }, {
           jobKey: fallbackKey,
         });

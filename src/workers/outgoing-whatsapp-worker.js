@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { Worker } = require('bullmq');
 
 const db = require('../db/client');
@@ -17,6 +18,7 @@ const {
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { prepareEscalation } = require('./escalation-routing');
 const { TIMERS } = require('../../lib/constants');
+const { assertReplyReadyForSend } = require('../services/ai/reply-state-machine');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
 
@@ -488,6 +490,12 @@ async function processOutgoingWhatsapp(job, {
   if (preSend.suppressed) {
     return completeSuppressedOutgoing(job, { replyMessageId, lid: false });
   }
+  if (isAutomatedCustomerReply(payload)) {
+    assertReplyReadyForSend({
+      state: payload.replyState,
+      validationDecision: preSend?.audit?.validationDecision,
+    });
+  }
   let finalReply = String(preSend.reply || '').trim();
   if (!finalReply) throw new Error('pre-send review returned no sendable reply');
   const routed = await routePreSendEscalation({
@@ -507,7 +515,14 @@ async function processOutgoingWhatsapp(job, {
 
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
-  const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
+  const sendResult = await sendWhatsappReply(bot, {
+    sender: deliverTo,
+    reply: finalReply,
+    providerMessageId,
+    replyMessageId,
+    userId,
+    conversationId: payload.conversationId,
+  });
   await recordWhatsappMessageId({
     userId,
     conversationId: payload.conversationId,
@@ -683,6 +698,12 @@ async function handleLidOutgoing({
     if (preSend.suppressed) {
       return completeSuppressedOutgoing(job, { replyMessageId, lid: true });
     }
+    if (isAutomatedCustomerReply(payload)) {
+      assertReplyReadyForSend({
+        state: payload.replyState,
+        validationDecision: preSend?.audit?.validationDecision,
+      });
+    }
     let finalReply = String(preSend.reply || '').trim();
     if (!finalReply) throw new Error('pre-send review returned no sendable reply');
     const routed = await routePreSendEscalation({
@@ -699,7 +720,14 @@ async function handleLidOutgoing({
     });
     finalReply = String(routed.reply || '').trim();
     if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
-    const lidResult = await bot.client.sendMessage(sender, finalReply);
+    const lidResult = await sendWhatsappReply(bot, {
+      sender,
+      reply: finalReply,
+      providerMessageId: payload.providerMessageId,
+      replyMessageId,
+      userId,
+      conversationId: payload.conversationId,
+    });
     await recordWhatsappMessageId({
       userId,
       conversationId: payload.conversationId,
@@ -950,15 +978,61 @@ async function isConversationOwnerPaused({
   }
 }
 
-async function sendWhatsappReply(bot, { sender, reply, providerMessageId }) {
-  const timeoutMs = TIMERS.SEND_MESSAGE_TIMEOUT_MS;
-  return Promise.race([
-    sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), timeoutMs)),
-  ]);
+function buildDeterministicDeliveryId({
+  userId,
+  conversationId,
+  sender,
+  replyMessageId,
+} = {}) {
+  if (!userId || !conversationId || !sender || !replyMessageId) return null;
+  return `R${crypto.createHash('sha256').update([
+    userId,
+    'whatsapp',
+    conversationId,
+    sender,
+    replyMessageId,
+  ].join('\u001f')).digest('hex').slice(0, 31).toUpperCase()}`;
 }
 
-async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }) {
+async function sendWhatsappReply(bot, {
+  sender,
+  reply,
+  providerMessageId,
+  replyMessageId,
+  userId,
+  conversationId,
+}) {
+  const timeoutMs = TIMERS.SEND_MESSAGE_TIMEOUT_MS;
+  let timeout;
+  try {
+    return await Promise.race([
+      sendWhatsappReplyUnchecked(bot, {
+        sender,
+        reply,
+        providerMessageId,
+        deliveryMessageId: buildDeterministicDeliveryId({
+          userId,
+          conversationId,
+          sender,
+          replyMessageId,
+        }),
+      }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('sendMessage timeout (30s)')), timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function sendWhatsappReplyUnchecked(bot, {
+  sender,
+  reply,
+  providerMessageId,
+  deliveryMessageId,
+}) {
   if (providerMessageId && typeof bot.client.getMessageById === 'function') {
     const original = await bot.client.getMessageById(providerMessageId).catch((err) => {
       bot.log?.(`message reply lookup failed: ${err.message}`);
@@ -979,7 +1053,11 @@ async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageI
     }
   }
 
-  return bot.client.sendMessage(sender, reply);
+  return bot.client.sendMessage(
+    sender,
+    reply,
+    deliveryMessageId ? { messageId: deliveryMessageId } : undefined,
+  );
 }
 
 function resolveOutgoingSettleMs(bot) {
@@ -1174,6 +1252,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 }
 
 module.exports = {
+  buildDeterministicDeliveryId,
   cancelDisabledAutoReply,
   completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
