@@ -5,9 +5,12 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
+const { StringDecoder } = require('node:string_decoder');
 
 const readExcelFile = require('read-excel-file/node').default;
 const writeExcelFile = require('write-excel-file/node').default;
+const { Open: openZip } = require('unzipper-esm');
 const {
   getOrderOfSiblings,
   getSelfClosingTagMarkup,
@@ -18,6 +21,8 @@ const {
 
 const LIMITS = Object.freeze({
   maxCompressedBytes: 25 * 1024 * 1024,
+  maxUncompressedBytes: 256 * 1024 * 1024,
+  maxArchiveEntries: 4096,
   maxRows: 50_000,
 });
 
@@ -72,151 +77,303 @@ function enforceSourceLimits(source) {
   }
 }
 
+function rowLimitError(rowsSeen) {
+  return adapterError(
+    'SPREADSHEET_ROW_LIMIT_EXCEEDED',
+    'Spreadsheet exceeds the 50,000-row workbook limit',
+    422,
+    { maxRows: LIMITS.maxRows, rowsSeen },
+  );
+}
+
 function enforceRowLimit(sheets) {
   let rowCount = 0;
   for (const sheet of sheets) {
     rowCount += sheet.rows.length;
-    if (rowCount > LIMITS.maxRows) {
-      throw adapterError(
-        'SPREADSHEET_ROW_LIMIT_EXCEEDED',
-        'Spreadsheet exceeds the 50,000-row workbook limit',
-        422,
-        { maxRows: LIMITS.maxRows },
-      );
-    }
+    if (rowCount > LIMITS.maxRows) throw rowLimitError(rowCount);
   }
   return rowCount;
 }
 
-async function readTextSource(source) {
-  return Buffer.isBuffer(source) ? source.toString('utf8') : fsp.readFile(source, 'utf8');
+function sourceStream(source) {
+  return Buffer.isBuffer(source) ? Readable.from([source]) : fs.createReadStream(source);
 }
 
-function parseCsv(text) {
+async function parseCsv(source) {
   const rows = [];
   let row = [];
   let field = '';
   let quoted = false;
-  let index = 0;
-  const input = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+  let pendingQuote = false;
+  let firstCharacter = true;
+  const decoder = new StringDecoder('utf8');
 
-  while (index < input.length) {
-    const character = input[index];
-    if (quoted) {
-      if (character === '"' && input[index + 1] === '"') {
-        field += '"';
-        index += 2;
+  function pushRow() {
+    const rowsSeen = rows.length + 1;
+    if (rowsSeen > LIMITS.maxRows) throw rowLimitError(rowsSeen);
+    row.push(field);
+    rows.push(row);
+    row = [];
+    field = '';
+  }
+
+  function consume(input) {
+    let index = 0;
+    while (index < input.length) {
+      let character = input[index];
+      if (firstCharacter) {
+        firstCharacter = false;
+        if (character === '\uFEFF') {
+          index += 1;
+          continue;
+        }
+      }
+      if (pendingQuote) {
+        pendingQuote = false;
+        if (character === '"') {
+          field += '"';
+          index += 1;
+          continue;
+        }
+        quoted = false;
+      }
+      if (quoted) {
+        if (character === '"') {
+          if (index + 1 === input.length) {
+            pendingQuote = true;
+            index += 1;
+            continue;
+          }
+          if (input[index + 1] === '"') {
+            field += '"';
+            index += 2;
+            continue;
+          }
+          quoted = false;
+          index += 1;
+          continue;
+        }
+        field += character;
+        index += 1;
         continue;
       }
-      if (character === '"') {
-        quoted = false;
+      if (character === '"' && field.length === 0) {
+        quoted = true;
+        index += 1;
+        continue;
+      }
+      if (character === ',') {
+        row.push(field);
+        field = '';
+        index += 1;
+        continue;
+      }
+      if (character === '\n' || character === '\r') {
+        pushRow();
+        if (character === '\r' && input[index + 1] === '\n') index += 1;
         index += 1;
         continue;
       }
       field += character;
       index += 1;
-      continue;
     }
-    if (character === '"' && field.length === 0) {
-      quoted = true;
-      index += 1;
-      continue;
-    }
-    if (character === ',') {
-      row.push(field);
-      field = '';
-      index += 1;
-      continue;
-    }
-    if (character === '\n' || character === '\r') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-      if (character === '\r' && input[index + 1] === '\n') index += 1;
-      index += 1;
-      continue;
-    }
-    field += character;
-    index += 1;
+  }
+
+  for await (const chunk of sourceStream(source)) consume(decoder.write(chunk));
+  consume(decoder.end());
+  if (pendingQuote) {
+    pendingQuote = false;
+    quoted = false;
   }
   if (quoted) {
     throw adapterError('SPREADSHEET_CORRUPT', 'CSV file contains an unterminated quoted field', 400);
   }
   if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
+    pushRow();
   }
   return rows;
 }
 
-async function readSpreadsheet({ source, originalName }) {
-  const extension = extensionFor(originalName);
-  if (extension !== '.xlsx' && extension !== '.csv') {
-    throw adapterError(
-      'SPREADSHEET_UNSUPPORTED_EXTENSION',
-      'Spreadsheet extension is not supported; use CSV or XLSX',
-      400,
-    );
+function countRowElements(text, beforeIndex = text.length) {
+  let count = 0;
+  const matcher = /<row(?=[\s>])/g;
+  let match;
+  while ((match = matcher.exec(text))) {
+    if (match.index >= beforeIndex) break;
+    count += 1;
   }
-  enforceSourceLimits(source);
-
-  let sheets;
-  if (extension === '.csv') {
-    sheets = [{ name: 'sheet1', rows: parseCsv(await readTextSource(source)) }];
-  } else {
-    const signature = await sourcePrefix(source);
-    if (!signature.equals(Buffer.from([0x50, 0x4B, 0x03, 0x04]))) {
-      throw adapterError('SPREADSHEET_NOT_XLSX', 'File content is not XLSX', 400);
-    }
-    try {
-      const parsed = await readExcelFile(source, { trim: false });
-      sheets = parsed.map(sheet => ({ name: sheet.sheet, rows: sheet.data }));
-    } catch (error) {
-      throw adapterError('SPREADSHEET_CORRUPT', 'XLSX file is corrupt or unreadable', 400, {
-        cause: error.message,
-      });
-    }
-  }
-
-  if (!sheets.length || sheets.every(sheet => sheet.rows.length === 0)) {
-    throw adapterError('SPREADSHEET_EMPTY', 'Spreadsheet contains no used cells', 400);
-  }
-  return { sheets, rowCount: enforceRowLimit(sheets) };
+  return count;
 }
 
-async function spoolUploadToTempFile(stream, { originalName }) {
-  const extension = extensionFor(originalName);
-  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'spreadsheet-upload-'));
-  const filePath = path.join(directory, `upload${extension || '.bin'}`);
-  const handle = await fsp.open(filePath, 'wx');
-  let byteLength = 0;
-  try {
-    for await (const chunk of stream) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      byteLength += buffer.length;
-      if (byteLength > LIMITS.maxCompressedBytes) {
+async function countWorksheetRows(worksheetEntries) {
+  let rowsSeen = 0;
+  let streamedBytes = 0;
+  for (const entry of worksheetEntries) {
+    const decoder = new StringDecoder('utf8');
+    let carry = '';
+    for await (const chunk of entry.stream()) {
+      streamedBytes += chunk.length;
+      if (streamedBytes > LIMITS.maxUncompressedBytes) {
         throw adapterError(
-          'SPREADSHEET_FILE_TOO_LARGE',
-          'Spreadsheet file exceeds the 25 MiB compressed-file limit',
+          'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED',
+          'Spreadsheet archive exceeds the 256 MiB uncompressed-size limit',
           413,
-          { maxCompressedBytes: LIMITS.maxCompressedBytes },
+          { maxUncompressedBytes: LIMITS.maxUncompressedBytes },
         );
       }
-      await handle.write(buffer);
+      carry += decoder.write(chunk);
+      const safeLength = Math.max(0, carry.length - 5);
+      rowsSeen += countRowElements(carry, safeLength);
+      if (rowsSeen > LIMITS.maxRows) throw rowLimitError(rowsSeen);
+      carry = carry.slice(safeLength);
     }
-  } catch (error) {
-    await handle.close().catch(() => {});
-    await fsp.rm(directory, { recursive: true, force: true });
-    throw error;
+    carry += decoder.end();
+    rowsSeen += countRowElements(carry);
+    if (rowsSeen > LIMITS.maxRows) throw rowLimitError(rowsSeen);
   }
-  await handle.close();
+  return rowsSeen;
+}
+
+async function preflightXlsx(source, openZipImpl = openZip) {
+  let directory;
+  try {
+    directory = Buffer.isBuffer(source)
+      ? await openZipImpl.buffer(source)
+      : await openZipImpl.file(source);
+  } catch (error) {
+    throw adapterError('SPREADSHEET_CORRUPT', 'XLSX file is corrupt or unreadable', 400, {
+      cause: error.message,
+    });
+  }
+  if (directory.files.length > LIMITS.maxArchiveEntries) {
+    throw adapterError(
+      'SPREADSHEET_ARCHIVE_ENTRY_LIMIT_EXCEEDED',
+      'Spreadsheet archive contains too many entries',
+      422,
+      { maxArchiveEntries: LIMITS.maxArchiveEntries, entriesSeen: directory.files.length },
+    );
+  }
+  let declaredUncompressedBytes = 0;
+  for (const entry of directory.files) {
+    const entrySize = Number(entry.uncompressedSize);
+    if (!Number.isSafeInteger(entrySize) || entrySize < 0) {
+      throw adapterError('SPREADSHEET_CORRUPT', 'XLSX archive has an invalid entry size', 400);
+    }
+    declaredUncompressedBytes += entrySize;
+    if (declaredUncompressedBytes > LIMITS.maxUncompressedBytes) {
+      throw adapterError(
+        'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED',
+        'Spreadsheet archive exceeds the 256 MiB uncompressed-size limit',
+        413,
+        { maxUncompressedBytes: LIMITS.maxUncompressedBytes },
+      );
+    }
+  }
+  const paths = new Set(directory.files.map(entry => entry.path));
+  const worksheetEntries = directory.files.filter(entry => (
+    /^xl\/worksheets\/sheet[^/]*\.xml$/i.test(entry.path)
+  ));
+  if (!paths.has('[Content_Types].xml') || !paths.has('xl/workbook.xml') || worksheetEntries.length === 0) {
+    throw adapterError('SPREADSHEET_NOT_XLSX', 'File content is not XLSX', 400);
+  }
   return {
-    filePath,
-    byteLength,
-    cleanup: () => fsp.rm(directory, { recursive: true, force: true }),
+    rowCount: await countWorksheetRows(worksheetEntries),
+    archiveEntryCount: directory.files.length,
+    declaredUncompressedBytes,
   };
 }
+
+function createSpreadsheetReader({ readXlsx = readExcelFile, openZipImpl = openZip } = {}) {
+  return async function readSpreadsheetWithDependencies({ source, originalName }) {
+    const extension = extensionFor(originalName);
+    if (extension !== '.xlsx' && extension !== '.csv') {
+      throw adapterError(
+        'SPREADSHEET_UNSUPPORTED_EXTENSION',
+        'Spreadsheet extension is not supported; use CSV or XLSX',
+        400,
+      );
+    }
+    enforceSourceLimits(source);
+
+    let sheets;
+    if (extension === '.csv') {
+      sheets = [{ name: 'sheet1', rows: await parseCsv(source) }];
+    } else {
+      const signature = await sourcePrefix(source);
+      if (!signature.equals(Buffer.from([0x50, 0x4B, 0x03, 0x04]))) {
+        throw adapterError('SPREADSHEET_NOT_XLSX', 'File content is not XLSX', 400);
+      }
+      await preflightXlsx(source, openZipImpl);
+      try {
+        const parsed = await readXlsx(source, { trim: false });
+        sheets = parsed.map(sheet => ({ name: sheet.sheet, rows: sheet.data }));
+      } catch (error) {
+        throw adapterError('SPREADSHEET_CORRUPT', 'XLSX file is corrupt or unreadable', 400, {
+          cause: error.message,
+        });
+      }
+    }
+
+    if (!sheets.length || sheets.every(sheet => sheet.rows.length === 0)) {
+      throw adapterError('SPREADSHEET_EMPTY', 'Spreadsheet contains no used cells', 400);
+    }
+    return { sheets, rowCount: enforceRowLimit(sheets) };
+  };
+}
+
+const readSpreadsheet = createSpreadsheetReader();
+
+async function writeAll(handle, buffer) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesWritten } = await handle.write(buffer, offset, buffer.length - offset, null);
+    if (!Number.isInteger(bytesWritten) || bytesWritten <= 0) {
+      throw new Error('Temporary upload file made no write progress');
+    }
+    offset += bytesWritten;
+  }
+}
+
+function createUploadSpooler({ fsOps = fsp, tempRoot = os.tmpdir() } = {}) {
+  return async function spoolUpload(stream, { originalName }) {
+    const extension = extensionFor(originalName);
+    let directory;
+    let handle;
+    let filePath;
+    let byteLength = 0;
+    try {
+      directory = await fsOps.mkdtemp(path.join(tempRoot, 'spreadsheet-upload-'));
+      filePath = path.join(directory, `upload${extension || '.bin'}`);
+      handle = await fsOps.open(filePath, 'wx');
+      for await (const chunk of stream) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        byteLength += buffer.length;
+        if (byteLength > LIMITS.maxCompressedBytes) {
+          throw adapterError(
+            'SPREADSHEET_FILE_TOO_LARGE',
+            'Spreadsheet file exceeds the 25 MiB compressed-file limit',
+            413,
+            { maxCompressedBytes: LIMITS.maxCompressedBytes },
+          );
+        }
+        await writeAll(handle, buffer);
+      }
+      await handle.close();
+      handle = null;
+    } catch (error) {
+      await handle?.close().catch(() => {});
+      if (directory) await fsOps.rm(directory, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+    return {
+      filePath,
+      byteLength,
+      cleanup: () => fsOps.rm(directory, { recursive: true, force: true }),
+    };
+  };
+}
+
+const spoolUploadToTempFile = createUploadSpooler();
 
 function cellForWrite(value, { bold = false } = {}) {
   const cell = { value: value === undefined ? null : value };
@@ -349,6 +506,8 @@ async function writeBillingLedgerAtomic(filePath, workbook) {
 module.exports = {
   LIMITS,
   SpreadsheetAdapterError,
+  createSpreadsheetReader,
+  createUploadSpooler,
   readSpreadsheet,
   spoolUploadToTempFile,
   writeSpreadsheetBuffer,

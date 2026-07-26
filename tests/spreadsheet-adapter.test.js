@@ -10,6 +10,8 @@ const ExcelJS = require('exceljs');
 
 const {
   LIMITS,
+  createSpreadsheetReader,
+  createUploadSpooler,
   readSpreadsheet,
   spoolUploadToTempFile,
   writeSpreadsheetBuffer,
@@ -34,6 +36,56 @@ async function captureWorkbook(buffer) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
   return workbook;
+}
+
+function makeEmptyStoredZip(paths) {
+  const localParts = [];
+  const centralParts = [];
+  let localOffset = 0;
+  for (const entryPath of paths) {
+    const name = Buffer.from(entryPath, 'utf8');
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034B50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(name.length, 26);
+    localParts.push(local, name);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014B50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(localOffset, 42);
+    centralParts.push(central, name);
+    localOffset += local.length + name.length;
+  }
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054B50, 0);
+  end.writeUInt16LE(paths.length, 8);
+  end.writeUInt16LE(paths.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return Buffer.concat([...localParts, ...centralParts, end]);
+}
+
+function zipWithDeclaredUncompressedSize(size) {
+  const zip = makeEmptyStoredZip([
+    '[Content_Types].xml',
+    'xl/workbook.xml',
+    'xl/worksheets/sheet1.xml',
+  ]);
+  let offset = 0;
+  while ((offset = zip.indexOf(Buffer.from([0x50, 0x4B, 0x01, 0x02]), offset)) !== -1) {
+    const nameLength = zip.readUInt16LE(offset + 28);
+    const name = zip.subarray(offset + 46, offset + 46 + nameLength).toString('utf8');
+    if (name === 'xl/worksheets/sheet1.xml') {
+      zip.writeUInt32LE(size, offset + 24);
+      return zip;
+    }
+    offset += 46 + nameLength;
+  }
+  throw new Error('Worksheet central-directory record was not found');
 }
 
 test('reads every XLSX sheet in workbook order with exact used cells and value types', async () => {
@@ -114,6 +166,72 @@ test('spools an HTTP upload stream to an isolated temporary file and cleans it u
   await assert.rejects(fs.access(spooled.filePath), { code: 'ENOENT' });
 });
 
+test('spooler writes byte-exact content even when the file handle performs short writes', async t => {
+  const tempRoot = await makeTempDirectory();
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }));
+  const fsOps = {
+    mkdtemp: prefix => fs.mkdtemp(prefix),
+    rm: (...args) => fs.rm(...args),
+    open: async (...args) => {
+      const handle = await fs.open(...args);
+      return {
+        write: (buffer, offset, length) => handle.write(
+          buffer,
+          offset,
+          Math.min(length, 3),
+          null,
+        ),
+        close: () => handle.close(),
+      };
+    },
+  };
+  const spool = createUploadSpooler({ fsOps, tempRoot });
+  const expected = Buffer.from('phone,name\n0551234571,ليان ✨\n', 'utf8');
+
+  const spooled = await spool(Readable.from([expected]), { originalName: 'contacts.csv' });
+
+  assert.deepEqual(await fs.readFile(spooled.filePath), expected);
+  await spooled.cleanup();
+  assert.deepEqual(await fs.readdir(tempRoot), []);
+});
+
+test('spooler leaves no temporary artifact when mkdir, open, write, or close fails', async t => {
+  const stages = ['mkdtemp', 'open', 'write', 'close'];
+  for (const stage of stages) {
+    const tempRoot = await makeTempDirectory();
+    t.after(() => fs.rm(tempRoot, { recursive: true, force: true }));
+    const fsOps = {
+      mkdtemp: async prefix => {
+        if (stage === 'mkdtemp') throw new Error('INJECTED_MKDTEMP_FAILURE');
+        return fs.mkdtemp(prefix);
+      },
+      rm: (...args) => fs.rm(...args),
+      open: async (...args) => {
+        if (stage === 'open') throw new Error('INJECTED_OPEN_FAILURE');
+        const handle = await fs.open(...args);
+        return {
+          write: async (...writeArgs) => {
+            if (stage === 'write') throw new Error('INJECTED_WRITE_FAILURE');
+            return handle.write(...writeArgs);
+          },
+          close: async () => {
+            await handle.close();
+            if (stage === 'close') throw new Error('INJECTED_CLOSE_FAILURE');
+          },
+        };
+      },
+    };
+    const spool = createUploadSpooler({ fsOps, tempRoot });
+
+    await assert.rejects(
+      spool(Readable.from([Buffer.from('upload')]), { originalName: 'contacts.csv' }),
+      new RegExp(`INJECTED_${stage.toUpperCase()}_FAILURE`),
+      stage,
+    );
+    assert.deepEqual(await fs.readdir(tempRoot), [], stage);
+  }
+});
+
 test('rejects upload streams above the compressed-byte limit with an application-owned error', async () => {
   const chunk = Buffer.alloc(1024 * 1024, 0x61);
   const upload = Readable.from(Array.from({ length: 26 }, () => chunk));
@@ -185,11 +303,77 @@ test('rejects workbooks above 50,000 rows across all sheets in workbook order', 
   for (let row = 1; row <= 25_001; row += 1) second.addRow([row]);
   const input = Buffer.from(await workbook.xlsx.writeBuffer());
 
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      throw new Error('CANDIDATE_PARSER_ENTERED');
+    },
+  });
+
   await assert.rejects(
-    readSpreadsheet({ source: input, originalName: 'too-many-rows.xlsx' }),
+    guardedRead({ source: input, originalName: 'too-many-rows.xlsx' }),
     error => error.code === 'SPREADSHEET_ROW_LIMIT_EXCEEDED'
       && error.statusCode === 422
       && error.details?.maxRows === 50_000,
+  );
+  assert.equal(candidateCalls, 0);
+});
+
+test('rejects excessive declared XLSX expansion before candidate parsing', async () => {
+  const input = zipWithDeclaredUncompressedSize((256 * 1024 * 1024) + 1);
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      throw new Error('CANDIDATE_PARSER_ENTERED');
+    },
+  });
+
+  await assert.rejects(
+    guardedRead({ source: input, originalName: 'expansion-bomb.xlsx' }),
+    error => error.code === 'SPREADSHEET_UNCOMPRESSED_LIMIT_EXCEEDED'
+      && error.statusCode === 413
+      && error.details?.maxUncompressedBytes === 256 * 1024 * 1024,
+  );
+  assert.equal(candidateCalls, 0);
+  assert.ok(input.length < 2048);
+});
+
+test('rejects excessive XLSX archive entry count before candidate parsing', async () => {
+  const entries = [];
+  for (let index = 0; index <= 4096; index += 1) {
+    entries.push(`entries/${index}.txt`);
+  }
+  const input = makeEmptyStoredZip(entries);
+  let candidateCalls = 0;
+  const guardedRead = createSpreadsheetReader({
+    readXlsx: async () => {
+      candidateCalls += 1;
+      throw new Error('CANDIDATE_PARSER_ENTERED');
+    },
+  });
+
+  await assert.rejects(
+    guardedRead({ source: input, originalName: 'too-many-entries.xlsx' }),
+    error => error.code === 'SPREADSHEET_ARCHIVE_ENTRY_LIMIT_EXCEEDED'
+      && error.statusCode === 422
+      && error.details?.maxArchiveEntries === 4096,
+  );
+  assert.equal(candidateCalls, 0);
+});
+
+test('rejects CSV row 50,001 while keeping the accumulated row array bounded', async () => {
+  const csv = Buffer.from(Array.from(
+    { length: 50_001 },
+    (_, index) => `055${String(index).padStart(8, '0')},Customer ${index}\n`,
+  ).join(''));
+
+  await assert.rejects(
+    readSpreadsheet({ source: csv, originalName: 'too-many-rows.csv' }),
+    error => error.code === 'SPREADSHEET_ROW_LIMIT_EXCEEDED'
+      && error.statusCode === 422
+      && error.details?.rowsSeen === 50_001,
   );
 });
 
@@ -271,14 +455,14 @@ test('preserves Date, decimal, currency, sheet order, and exact row order in exp
     ],
   });
 
-  const readBack = await readSpreadsheet({ source: buffer, originalName: 'export.xlsx' });
-  assert.deepEqual(readBack.sheets.map(sheet => sheet.name), ['Payments', 'Empty but present']);
-  assert.deepEqual(readBack.sheets[0].rows, [
+  const independentOracle = await captureWorkbook(buffer);
+  assert.deepEqual(independentOracle.worksheets.map(sheet => sheet.name), ['Payments', 'Empty but present']);
+  assert.deepEqual(independentOracle.worksheets[0].getRows(1, 3).map(row => row.values.slice(1)), [
     ['Date', 'Amount', 'Currency'],
     [date, 1750, 'SAR'],
     ['2026-07-27', 19.99, 'USD'],
   ]);
-  assert.deepEqual(readBack.sheets[1].rows, [['Value']]);
+  assert.deepEqual(independentOracle.worksheets[1].getRow(1).values.slice(1), ['Value']);
 });
 
 test('reads and atomically rewrites the billing ledger without losing later rows', async t => {
@@ -308,8 +492,11 @@ test('reads and atomically rewrites the billing ledger without losing later rows
     { date: date2, name: 'John', amount: 19.99, currency: 'USD' },
   ]));
 
-  const persisted = await readBillingLedger(filePath);
-  assert.deepEqual(persisted.sheets[0].rows, [
+  const adapterRead = await readBillingLedger(filePath);
+  assert.equal(adapterRead.rowCount, 3);
+  const independentOracle = new ExcelJS.Workbook();
+  await independentOracle.xlsx.readFile(filePath);
+  assert.deepEqual(independentOracle.getWorksheet('Payments').getRows(1, 3).map(row => row.values.slice(1)), [
     ['Date', 'Name', 'Amount', 'Currency'],
     [date1, 'ليان', 1750, 'SAR'],
     [date2, 'John', 19.99, 'USD'],
@@ -321,6 +508,8 @@ test('reads and atomically rewrites the billing ledger without losing later rows
 test('publishes the fixed security limits as adapter-owned constants', () => {
   assert.deepEqual(LIMITS, {
     maxCompressedBytes: 25 * 1024 * 1024,
+    maxUncompressedBytes: 256 * 1024 * 1024,
+    maxArchiveEntries: 4096,
     maxRows: 50_000,
   });
 });
