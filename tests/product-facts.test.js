@@ -42,6 +42,9 @@ test('buildProductFactCatalog keeps each price and duration attached to one prod
     productId: 'adobe',
     canonicalName: 'اشتراك أدوبي',
     aliases: ['اشتراك أدوبي', 'أدوبي'],
+    description: '',
+    longDescription: '',
+    url: '',
     available: true,
     plans: [
       {

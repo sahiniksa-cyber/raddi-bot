@@ -67,6 +67,7 @@ test('20 concurrent customers never receive another conversation secret in the r
         return {
           reply: `reviewed ${JSON.stringify({ draft, history, customerText })}`,
           suppressed: false,
+          validationDecision: 'validated',
           audit: { decision: 'pass', confidence: 1 },
         };
       },

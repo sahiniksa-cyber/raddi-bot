@@ -73,12 +73,12 @@
 - Produces `finalizeReply({ draft, history, customerText, config, catalogVersion })`.
 - Returns `{ decision, reply, claims, focus, stages, reason }`.
 
-- [ ] Write failing tests showing a reviewer repair cannot clear earlier violations, repaired text is revalidated, one repair is the maximum, and unresolved commercial facts become clarification rather than guesses.
-- [ ] Verify RED.
-- [ ] Implement deterministic precedence and one bounded repair followed by a complete second validation.
-- [ ] Make pre-send require `decision === 'validated'` before returning sendable text.
-- [ ] Re-run AI client, pre-send, and quality tests.
-- [ ] Commit the isolated task.
+- [x] Write failing tests showing a reviewer repair cannot clear earlier violations, repaired text is revalidated, one repair is the maximum, and unresolved commercial facts become clarification rather than guesses.
+- [x] Verify RED.
+- [x] Implement deterministic precedence and one bounded repair followed by a complete second validation.
+- [x] Make pre-send require `decision === 'validated'` before returning sendable text.
+- [x] Re-run AI client, pre-send, and quality tests.
+- [x] Commit the isolated task.
 
 ### Task 4: Forbidden language and optional employee identity
 

@@ -57,6 +57,10 @@ function extractProductSection(instructions) {
   return match ? match[1] : '';
 }
 
+function stripProductSections(instructions) {
+  return String(instructions || '').replace(PRODUCT_SECTION_RE, '').trim();
+}
+
 function parsePromptProducts(instructions) {
   const section = extractProductSection(instructions);
   if (!section) return [];
@@ -204,4 +208,5 @@ module.exports = {
   normalizeProductText,
   parsePromptProducts,
   scoreProduct,
+  stripProductSections,
 };

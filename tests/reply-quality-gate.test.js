@@ -303,6 +303,73 @@ test('AIClient sends the draft through the reviewer before returning the custome
   assert.equal(ai.lastDebug.qualityGate.decision, 'repair');
 });
 
+test('AIClient replaces a cross-product reviewer answer with a revalidated catalog answer', async () => {
+  let calls = 0;
+  const ai = new AIClient(
+    {
+      productCatalogVersion: 44,
+      products: [
+        {
+          id: 'adobe',
+          name: 'اشتراك أدوبي',
+          variants: [
+            { id: 'adobe-4m', label: '4 أشهر', price: '189 ريال' },
+            { id: 'adobe-8m', label: '8 أشهر', price: '319 ريال' },
+          ],
+        },
+        {
+          id: 'freepik',
+          name: 'اشتراك فري بيك',
+          variants: [
+            { id: 'freepik-6m', label: '6 أشهر', price: '89 ريال' },
+            { id: 'freepik-1y', label: 'سنة', price: '139 ريال' },
+          ],
+        },
+      ],
+      replyStyle: { emojiLevel: 'none' },
+    },
+    silentLogger,
+    { record() {} },
+  );
+  ai.buildClient = () => ({
+    model: 'test-model',
+    openai: { chat: { completions: { create: async () => {
+      calls++;
+      if (calls === 1) {
+        return { choices: [{ message: { content: '6 أشهر بـ89 ريال، والسنة بـ139 ريال.' } }], usage: {} };
+      }
+      return {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              decision: 'pass',
+              intent: 'يسأل عن مدد أدوبي',
+              unanswered: [],
+              violations: [],
+              unsupported_claims: [],
+              final_reply: '6 أشهر بـ89 ريال، والسنة بـ139 ريال.',
+            }),
+          },
+        }],
+        usage: {},
+      };
+    } } } },
+  });
+
+  const reply = await ai.getReply([
+    { role: 'user', content: 'أدور على اشتراك أدوبي' },
+    { role: 'assistant', content: 'أي مدة تناسبك؟' },
+    { role: 'user', content: 'كم السنة وكم الست أشهر؟' },
+  ], { maxRetries: 0 });
+
+  assert.equal(calls, 2);
+  assert.match(reply, /6 أشهر.*غير متوفرة/);
+  assert.match(reply, /السنة.*غير متوفرة/);
+  assert.doesNotMatch(reply, /(?:^|[^\d])(?:89|139)\s*ريال/);
+  assert.equal(ai.lastDebug.finalValidation.decision, 'validated');
+  assert.equal(ai.lastDebug.finalValidation.repairCount, 1);
+});
+
 test('AIClient enforces the merchant line setting after the final pre-send review', async () => {
   const ai = new AIClient(
     { replyStyle: { lineBreakMode: 'sentence', emojiLevel: 'none' } },

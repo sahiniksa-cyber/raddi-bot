@@ -116,6 +116,9 @@ function normalizeProduct(product, index, defaultCurrency) {
     productId,
     canonicalName,
     aliases: uniqueStrings([canonicalName, conciseName, ...(Array.isArray(product?.aliases) ? product.aliases : [])]),
+    description: String(product?.description || '').trim(),
+    longDescription: String(product?.longDescription || '').trim(),
+    url: String(product?.url || '').trim(),
     available: product?.available !== false,
     plans: variants
       .map((variant, variantIndex) => normalizePlan({ ...product, id: productId }, variant, variantIndex, defaultCurrency))

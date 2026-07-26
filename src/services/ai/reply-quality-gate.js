@@ -580,6 +580,7 @@ async function reviewFinalReplyBeforeSend({
       repeatedClaims: hardDuplicate.repeatedClaims,
       violations: [...parsed.violations, 'semantic_duplicate_after_review'],
       unsupportedClaims: grounded.issues.map(issue => issue.value),
+      deterministicIssuesAfter: grounded.issues,
       hardFallback: grounded.usedFallback,
       latencyMs: Date.now() - startedAt,
     };
@@ -593,6 +594,7 @@ async function reviewFinalReplyBeforeSend({
     repeatedClaims: parsed.repeatedClaims,
     violations: parsed.violations,
     unsupportedClaims: grounded.issues.map(issue => issue.value),
+    deterministicIssuesAfter: grounded.issues,
     hardFallback: grounded.usedFallback,
     latencyMs: Date.now() - startedAt,
   };
