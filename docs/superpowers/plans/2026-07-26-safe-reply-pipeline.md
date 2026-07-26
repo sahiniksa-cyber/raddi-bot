@@ -33,11 +33,11 @@
 - Produces `resolveProductFocus({ catalog, history, customerText })`.
 - Produces `buildScopedProductContext({ catalog, focus })`.
 
-- [ ] Write tests proving Adobe resolves from a generic duration follow-up, multiple explicit products are ambiguous, aliases stay attached to one product, and only selected products enter context.
-- [ ] Run the tests and verify failures are caused by the missing APIs/current all-catalog behavior.
-- [ ] Implement normalized product/plan IDs, Arabic/English aliases, duration and currency parsing, and ordered focus resolution.
-- [ ] Run product tests and the existing prompt tests.
-- [ ] Commit the isolated task.
+- [x] Write tests proving Adobe resolves from a generic duration follow-up, multiple explicit products are ambiguous, aliases stay attached to one product, and only selected products enter context.
+- [x] Run the tests and verify failures are caused by the missing APIs/current all-catalog behavior.
+- [x] Implement normalized product/plan IDs, Arabic/English aliases, duration and currency parsing, and ordered focus resolution.
+- [x] Run product tests and the existing prompt tests.
+- [x] Commit the isolated task.
 
 ### Task 2: Tuple-level commercial claim validator
 
