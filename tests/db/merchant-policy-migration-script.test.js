@@ -15,23 +15,43 @@ const {
   migrateLegacyConfig,
 } = require('../../src/policy/merchant-policy-migrator');
 
+const EMPTY_POLICY_VERSION =
+  'sha256:4bace95f29993ac8692842190f8f282f6269d4c94636db3347e305010760722f';
+const NULL_POLICY_VERSION =
+  'sha256:aae58081cf414fb3c67e3480222ce8dc0a0c7bcb5d24f6a8903bcd5ffb0e826c';
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function originalMerchantPolicy(raw) {
+  const config = JSON.parse(raw);
+  const present = Object.prototype.hasOwnProperty.call(config, 'merchantPolicy');
+  return {
+    present,
+    raw: present ? JSON.stringify(config.merchantPolicy) : null,
+  };
+}
+
 function makeDatabase(rows) {
-  const state = rows.map((row) => ({
-    user_id: row.user_id,
-    config_raw: row.configRaw ?? JSON.stringify(row.config),
-    merchant_policy_raw: null,
-  }));
+  const state = rows.map((row) => {
+    const configRaw = row.configRaw ?? JSON.stringify(row.config);
+    const originalPolicy = originalMerchantPolicy(configRaw);
+    return {
+      user_id: row.user_id,
+      config_raw: configRaw,
+      merchant_policy_present: originalPolicy.present,
+      merchant_policy_raw: originalPolicy.raw,
+      unrelated_edit: row.unrelatedEdit ?? null,
+    };
+  });
   const calls = [];
   const client = {
     async query(sql, params = []) {
       const normalized = sql.replace(/\s+/g, ' ').trim();
       calls.push({ sql: normalized, params: clone(params) });
       if (
-        /^SELECT user_id, config::text AS config_raw FROM bot_configs ORDER BY user_id(?: FOR UPDATE)?/i
+        /^SELECT user_id, config::text AS config_raw,[\s\S]+FROM bot_configs ORDER BY user_id(?: FOR UPDATE)?/i
           .test(
             normalized,
           )
@@ -54,12 +74,30 @@ function makeDatabase(rows) {
         row.config_raw = typeof params[1] === 'string'
           ? params[1]
           : JSON.stringify(params[1]);
-        row.merchant_policy_raw = null;
+        const policy = originalMerchantPolicy(row.config_raw);
+        row.merchant_policy_present = policy.present;
+        row.merchant_policy_raw = policy.raw;
+        row.unrelated_edit = null;
         return { rows: [], rowCount: 1 };
       }
       if (/^UPDATE bot_configs SET config = jsonb_set\(/i.test(normalized)) {
         const row = state.find((candidate) => candidate.user_id === params[0]);
+        row.merchant_policy_present = true;
         row.merchant_policy_raw = params[1];
+        return { rows: [], rowCount: 1 };
+      }
+      if (/^UPDATE bot_configs SET config = CASE/i.test(normalized)) {
+        const row = state.find((candidate) => candidate.user_id === params[0]);
+        const currentPolicy = row?.merchant_policy_present && row.merchant_policy_raw !== 'null'
+          ? JSON.parse(row.merchant_policy_raw)
+          : null;
+        const enforcesAppliedVersion =
+          /config->'merchantPolicy'->>'policyVersion' = \$4/i.test(normalized);
+        if (!row || (enforcesAppliedVersion && currentPolicy?.policyVersion !== params[3])) {
+          return { rows: [], rowCount: 0 };
+        }
+        row.merchant_policy_present = params[1];
+        row.merchant_policy_raw = params[1] ? params[2] : null;
         return { rows: [], rowCount: 1 };
       }
       throw new Error(`Unexpected SQL: ${normalized}`);
@@ -125,7 +163,15 @@ test('dry-run needs only an injected query contract and never opens a configured
   const queryOnlyDatabase = {
     async query(sql) {
       assert.match(sql, /config::text AS config_raw/i);
-      return { rows: [{ user_id: 'merchant-one', config_raw: '{"products":[]}' }] };
+      assert.match(sql, /config \? 'merchantPolicy'/i);
+      return {
+        rows: [{
+          user_id: 'merchant-one',
+          config_raw: '{"products":[]}',
+          merchant_policy_present: false,
+          merchant_policy_raw: null,
+        }],
+      };
     },
   };
 
@@ -160,6 +206,11 @@ test('apply saves rollback payload before updating bot_configs and preserves leg
     merchantConfigs: [{
       userId: 'merchant-apply',
       configRaw: JSON.stringify(originalConfig),
+      originalMerchantPolicy: {
+        present: false,
+        raw: null,
+      },
+      appliedPolicyVersion: EMPTY_POLICY_VERSION,
     }],
   });
   assert.equal(state[0].config_raw, JSON.stringify(originalConfig));
@@ -171,7 +222,7 @@ test('apply saves rollback payload before updating bot_configs and preserves leg
   assert.equal(calls[0].sql, 'BEGIN');
   assert.match(
     calls[1].sql,
-    /SELECT user_id, config::text AS config_raw FROM bot_configs ORDER BY user_id FOR UPDATE/i,
+    /SELECT user_id, config::text AS config_raw,[\s\S]+FROM bot_configs ORDER BY user_id FOR UPDATE/i,
   );
   const update = calls.find((call) => /^UPDATE bot_configs/i.test(call.sql));
   assert.match(update.sql, /jsonb_set\(config, '\{merchantPolicy\}', \$2::jsonb, true\)/i);
@@ -200,15 +251,27 @@ test('rollback payload preserves an existing merchantPolicy byte-for-byte', asyn
     merchantConfigs: [{
       userId: 'merchant-existing-policy',
       configRaw: JSON.stringify(originalConfig),
+      originalMerchantPolicy: {
+        present: true,
+        raw: JSON.stringify(originalConfig.merchantPolicy),
+      },
+      appliedPolicyVersion: EMPTY_POLICY_VERSION,
     }],
   });
+  assert.equal(
+    rollbackPayload.merchantConfigs[0].appliedPolicyVersion,
+    originalConfig.merchantPolicy.policyVersion,
+  );
 });
 
-test('apply and rollback preserve high-precision unrelated JSONB values as raw text', async () => {
-  const originalRaw = '{"products":[],"legacyCounter":9007199254740993}';
-  const { database, state, calls } = makeDatabase([
-    { user_id: 'merchant-high-precision', configRaw: originalRaw },
-  ]);
+test('rollback restores only merchantPolicy for absent, null, and present originals', async () => {
+  const presentConfig = migrateLegacyConfig({ products: [] }).migratedConfig;
+  const seeds = [
+    { user_id: 'merchant-absent', configRaw: '{"products":[]}' },
+    { user_id: 'merchant-null', configRaw: '{"products":[],"merchantPolicy":null}' },
+    { user_id: 'merchant-present', configRaw: JSON.stringify(presentConfig) },
+  ];
+  const { database, state, calls } = makeDatabase(seeds);
   let rollbackPayload;
 
   await runMerchantPolicyMigration({
@@ -218,30 +281,154 @@ test('apply and rollback preserve high-precision unrelated JSONB values as raw t
       rollbackPayload = clone(payload);
     },
   });
-
-  assert.deepEqual(rollbackPayload, {
-    merchantConfigs: [{
-      userId: 'merchant-high-precision',
-      configRaw: originalRaw,
-    }],
+  assert.deepEqual(
+    rollbackPayload.merchantConfigs.map((entry) => entry.originalMerchantPolicy),
+    [
+      { present: false, raw: null },
+      { present: true, raw: 'null' },
+      {
+        present: true,
+        raw: JSON.stringify(presentConfig.merchantPolicy),
+      },
+    ],
+  );
+  assert.deepEqual(
+    rollbackPayload.merchantConfigs.map((entry) => entry.appliedPolicyVersion),
+    [EMPTY_POLICY_VERSION, NULL_POLICY_VERSION, EMPTY_POLICY_VERSION],
+  );
+  state.forEach((row, index) => {
+    row.unrelated_edit = `post-migration-${index}`;
   });
-  assert.equal(state[0].config_raw, originalRaw);
-  assert.ok(state[0].merchant_policy_raw);
-  const update = calls.find((call) => /^UPDATE bot_configs/i.test(call.sql));
-  assert.match(update.sql, /jsonb_set/i);
-  assert.doesNotMatch(update.params[1], /9007199254740992/);
 
-  state[0].config_raw = '{"changed":true}';
-  await restoreMerchantPolicyConfigs({
+  await restoreMerchantPolicyConfigs({ database, snapshot: rollbackPayload });
+
+  assert.deepEqual(
+    state.map((row) => ({
+      present: row.merchant_policy_present,
+      raw: row.merchant_policy_raw,
+      unrelatedEdit: row.unrelated_edit,
+    })),
+    [
+      { present: false, raw: null, unrelatedEdit: 'post-migration-0' },
+      { present: true, raw: 'null', unrelatedEdit: 'post-migration-1' },
+      {
+        present: true,
+        raw: JSON.stringify(presentConfig.merchantPolicy),
+        unrelatedEdit: 'post-migration-2',
+      },
+    ],
+  );
+  const restoreUpdate = calls.find((call) => /^UPDATE bot_configs SET config = CASE/i.test(
+    call.sql,
+  ));
+  assert.match(restoreUpdate.sql, /config - 'merchantPolicy'/i);
+  assert.match(
+    restoreUpdate.sql,
+    /config->'merchantPolicy'->>'policyVersion' = \$4/i,
+  );
+});
+
+test('rollback conflicts atomically when any current merchantPolicy version changed', async () => {
+  const { database, state, calls } = makeDatabase([
+    { user_id: 'merchant-first', config: { products: [] } },
+    { user_id: 'merchant-conflict', config: { products: [] } },
+  ]);
+  let rollbackPayload;
+  await runMerchantPolicyMigration({
     database,
-    snapshot: rollbackPayload,
+    apply: true,
+    rollbackSink: async (payload) => {
+      rollbackPayload = clone(payload);
+    },
   });
+  state[0].unrelated_edit = 'must-survive';
+  state[1].merchant_policy_raw = '{"policyVersion":"sha256:changed"}';
+  const beforeRollback = clone(state);
 
-  assert.equal(state[0].config_raw, originalRaw);
-  const restoreUpdate = calls
-    .filter((call) => /^UPDATE bot_configs SET config = \$2::jsonb/i.test(call.sql))
-    .at(-1);
-  assert.equal(restoreUpdate.params[1], originalRaw);
+  await assert.rejects(
+    restoreMerchantPolicyConfigs({ database, snapshot: rollbackPayload }),
+    /rollback conflict.*merchant-conflict/i,
+  );
+
+  assert.deepEqual(state, beforeRollback);
+  assert.equal(calls.at(-1).sql, 'ROLLBACK');
+});
+
+test('dry-run reports unsafe raw JSON numbers without parsing or changing data', async () => {
+  const unsafeProductRaw =
+    '{"products":[{"id":"p1","name":"unsafe","price":{"amountMinor":9007199254740993,"currency":"SAR"}}],"botInstructions":"literal 9007199254740993 stays text"}';
+  const unsafeDecimalRaw =
+    '{"products":[],"legacyDecimal":1.0000000000000001e+0}';
+  const { database, state, calls } = makeDatabase([
+    { user_id: 'merchant-unsafe-product', configRaw: unsafeProductRaw },
+    { user_id: 'merchant-unsafe-decimal', configRaw: unsafeDecimalRaw },
+  ]);
+
+  const result = await runMerchantPolicyMigration({ database });
+
+  assert.deepEqual(result.reviewIds, [
+    'merchant-unsafe-product',
+    'merchant-unsafe-decimal',
+  ]);
+  assert.deepEqual(result.merchants.map((merchant) => merchant.status), [
+    'invalid',
+    'invalid',
+  ]);
+  assert.deepEqual(
+    result.merchants.map((merchant) => merchant.numericSafetyIssues[0].lexeme),
+    ['9007199254740993', '1.0000000000000001e+0'],
+  );
+  assert.equal(
+    result.merchants.every(
+      (merchant) => merchant.reviewItems[0].code === 'unsafe_json_number',
+    ),
+    true,
+  );
+  assert.deepEqual(state.map((row) => row.config_raw), [
+    unsafeProductRaw,
+    unsafeDecimalRaw,
+  ]);
+  assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
+});
+
+test('apply fails closed on unsafe raw numbers before rollback preservation or UPDATE', async () => {
+  const unsafeRaw =
+    '{"products":[{"name":"unsafe","price":{"amountMinor":9007199254740993,"currency":"SAR"}}]}';
+  const { database, state, calls } = makeDatabase([
+    { user_id: 'merchant-unsafe', configRaw: unsafeRaw },
+  ]);
+  let preserved = false;
+
+  await assert.rejects(
+    runMerchantPolicyMigration({
+      database,
+      apply: true,
+      rollbackSink: async () => {
+        preserved = true;
+      },
+    }),
+    (error) => error.code === 'UNSAFE_JSON_NUMBER'
+      && error.reviewIds.includes('merchant-unsafe'),
+  );
+
+  assert.equal(preserved, false);
+  assert.equal(state[0].config_raw, unsafeRaw);
+  assert.equal(calls.some((call) => /^UPDATE bot_configs/i.test(call.sql)), false);
+  assert.equal(calls.at(-1).sql, 'ROLLBACK');
+});
+
+test('raw numeric safety accepts exactly round-trippable decimals and exponents', async () => {
+  const { database } = makeDatabase([
+    {
+      user_id: 'merchant-safe-numbers',
+      configRaw: '{"products":[],"legacyRatio":1.25,"legacyExponent":1e3}',
+    },
+  ]);
+
+  const result = await runMerchantPolicyMigration({ database });
+
+  assert.equal(result.merchants[0].status, 'active');
+  assert.deepEqual(result.merchants[0].numericSafetyIssues, []);
 });
 
 test('apply refuses missing rollback preservation and never falls back to a configured database', async () => {
