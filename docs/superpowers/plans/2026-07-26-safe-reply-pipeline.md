@@ -53,12 +53,12 @@
 - Produces `validateCommercialClaims(reply, { catalog, focus })`.
 - Produces `buildDeterministicCatalogReply({ customerText, focus, catalog })`.
 
-- [ ] Write failing tests for Adobe 6/89, Adobe year/139, stale Adobe 8/289, unavailable plans, cross-product prices, correct Adobe 4/189 and 8/319, and ambiguous questions.
-- [ ] Verify every unsafe case passes incorrectly or lacks an implementation on the baseline.
-- [ ] Implement tuple matching on productId, planId, duration, amount, currency, and availability.
-- [ ] Replace global `configuredPriceValues` acceptance for product claims with tuple validation.
-- [ ] Re-run all product and quality-gate tests.
-- [ ] Commit the isolated task.
+- [x] Write failing tests for Adobe 6/89, Adobe year/139, stale Adobe 8/289, unavailable plans, cross-product prices, correct Adobe 4/189 and 8/319, and ambiguous questions.
+- [x] Verify every unsafe case passes incorrectly or lacks an implementation on the baseline.
+- [x] Implement tuple matching on productId, planId, duration, amount, currency, and availability.
+- [x] Replace global `configuredPriceValues` acceptance for product claims with tuple validation.
+- [x] Re-run all product and quality-gate tests.
+- [x] Commit the isolated task.
 
 ### Task 3: Deterministic repair and final validation loop
 

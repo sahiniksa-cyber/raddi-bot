@@ -1,6 +1,11 @@
 'use strict';
 
 const { normalizeArabic } = require('../../../lib/post-process-reply');
+const {
+  buildProductFactCatalog,
+  resolveProductFocus,
+} = require('../products/product-facts');
+const { validateCommercialClaims } = require('./product-claim-validator');
 
 const DECISIONS = new Set(['pass', 'repair', 'clarify', 'escalate']);
 const FINAL_DECISIONS = new Set(['pass', 'repair', 'suppress']);
@@ -235,6 +240,27 @@ function findUnsupportedFacts(reply, { config = {}, matchedPolicies = [], custom
   const evidenceWordDurations = new Set(extractWordDurationClaims(evidence));
   const priceValues = configuredPriceValues(config);
   const issues = [];
+
+  const productCatalog = buildProductFactCatalog(config, {
+    catalogVersion: config.productCatalogVersion || 0,
+  });
+  let productFocus = resolveProductFocus({
+    catalog: productCatalog,
+    history: [],
+    customerText,
+  });
+  if (productFocus.status === 'unknown' && productCatalog.products.length === 1) {
+    productFocus = {
+      status: 'resolved',
+      source: 'single_catalog_product',
+      productIds: [productCatalog.products[0].productId],
+    };
+  }
+  const commercialValidation = validateCommercialClaims(reply, {
+    catalog: productCatalog,
+    focus: productFocus,
+  });
+  issues.push(...commercialValidation.issues);
 
   for (const claim of extractNumericClaims(reply)) {
     const supported = evidenceClaims.has(claim.key)

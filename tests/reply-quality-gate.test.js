@@ -200,6 +200,39 @@ test('findUnsupportedFacts rejects invented prices, durations, and links but acc
   assert.deepEqual(findUnsupportedFacts('شكراً ويوم سعيد', { config }), [], 'التحية ليست مدة تجارية');
 });
 
+test('findUnsupportedFacts rejects a price and duration borrowed from another product', () => {
+  const config = {
+    products: [
+      {
+        id: 'adobe',
+        name: 'اشتراك أدوبي',
+        variants: [
+          { id: 'adobe-4m', label: '4 أشهر', price: '189 ريال' },
+          { id: 'adobe-8m', label: '8 أشهر', price: '319 ريال' },
+        ],
+      },
+      {
+        id: 'freepik',
+        name: 'اشتراك فري بيك',
+        variants: [
+          { id: 'freepik-6m', label: '6 أشهر', price: '89 ريال' },
+          { id: 'freepik-1y', label: 'سنة', price: '139 ريال' },
+        ],
+      },
+    ],
+  };
+
+  const issues = findUnsupportedFacts(
+    'اشتراك أدوبي: 6 أشهر بـ89 ريال، وسنة بـ139 ريال.',
+    { config, customerText: 'أبي أدوبي، كم السنة وكم الست أشهر؟' },
+  );
+
+  assert.ok(
+    issues.some(issue => issue.type === 'unsupported_product_claim'),
+    'وجود 89 و139 في فري بيك لا يثبت أنهما خطط أدوبي',
+  );
+});
+
 test('applyGroundingFallback replaces a still-invented hard fact with an honest escalation', () => {
   const result = applyGroundingFallback({
     reply: 'أكيد، سعره 777 ريال وضمانه سنتين.',
