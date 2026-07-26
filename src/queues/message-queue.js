@@ -2,6 +2,7 @@
 
 require('dotenv').config({ quiet: true });
 
+const crypto = require('node:crypto');
 const { Queue, QueueEvents } = require('bullmq');
 
 const db = require('../db/client');
@@ -43,6 +44,30 @@ const STALE_ACTIVE_JOB_MS = parseInt(process.env.AI_WORKER_LOCK_DURATION_MS || '
 let connection = null;
 let queues = null;
 let events = null;
+
+function buildScopedQueueJobKey(kind, payload = {}, baseKey = '') {
+  const userId = String(payload.userId || '').trim();
+  const tenantId = String(payload.tenantId || userId).trim();
+  if (userId && tenantId && userId !== tenantId) {
+    throw new Error('queue payload tenant alias mismatch');
+  }
+  const channelId = String(payload.channelId || '').trim();
+  const conversationId = String(payload.conversationId || '').trim();
+  const customerId = String(payload.customerId || payload.sender || payload.participantId || '').trim();
+  const rawBase = String(baseKey || '').trim();
+  const fallback = rawBase.replace(/:/g, '-');
+  if (!tenantId || !channelId || !conversationId || !customerId || !rawBase) {
+    return fallback;
+  }
+  const digest = crypto.createHash('sha256').update([
+    tenantId,
+    channelId,
+    conversationId,
+    customerId,
+    rawBase,
+  ].join('\u001f')).digest('hex');
+  return `${String(kind || 'job').replace(/[^a-z0-9_-]/gi, '-').toLowerCase()}-${digest}`;
+}
 
 function getConnection() {
   if (!connection) connection = createRedisConnection();
@@ -121,7 +146,11 @@ async function recordJob(queueName, jobKey, payload, metadata = {}) {
 
 async function enqueueIncomingMessage(payload, options = {}) {
   const { incomingMessages } = getQueues();
-  const jobKey = options.jobKey || payload.providerMessageId || payload.messageId;
+  const jobKey = buildScopedQueueJobKey(
+    'incoming',
+    payload,
+    options.jobKey || payload.providerMessageId || payload.messageId,
+  );
   await recordJob(QUEUE_NAMES.incomingMessages, jobKey, payload, payload);
   return incomingMessages.add('process-incoming-message', payload, {
     jobId: jobKey || undefined,
@@ -147,7 +176,8 @@ function buildAiReplyQueueOptions(payload = {}, options = {}) {
   const debounce = options.debounce !== false;
   const conversationId = payload.conversationId || options.conversationId;
   const fallbackKey = options.jobKey || payload.messageId || conversationId;
-  const jobKey = debounce && conversationId ? `conversation-${conversationId}` : fallbackKey;
+  const rawJobKey = debounce && conversationId ? `conversation-${conversationId}` : fallbackKey;
+  const jobKey = buildScopedQueueJobKey('ai', payload, rawJobKey);
   return {
     jobKey,
     jobId: jobKey,
@@ -207,7 +237,11 @@ async function ensureReusableQueueJobId(queue, jobId, desiredDelayMs) {
 
 async function enqueueOutgoingWhatsapp(payload, options = {}) {
   const { outgoingWhatsapp } = getQueues();
-  const jobKey = normalizeOutgoingJobKey(options.jobKey || payload.replyMessageId || payload.messageId, payload);
+  const normalized = normalizeOutgoingJobKey(
+    options.jobKey || payload.replyMessageId || payload.messageId,
+    payload,
+  );
+  const jobKey = buildScopedQueueJobKey('outgoing', payload, normalized);
   await recordJob(QUEUE_NAMES.outgoingWhatsapp, jobKey, payload, payload);
   return outgoingWhatsapp.add('send-whatsapp-message', payload, {
     jobId: jobKey || undefined,
@@ -233,6 +267,7 @@ async function closeQueues() {
 module.exports = {
   QUEUE_NAMES,
   buildAiReplyQueueOptions,
+  buildScopedQueueJobKey,
   closeQueues,
   enqueueAiReply,
   enqueueIncomingMessage,

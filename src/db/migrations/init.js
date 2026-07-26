@@ -211,15 +211,19 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_messages_user_sender_created
     ON messages(user_id, sender, created_at DESC)`,
 
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_user_provider_message_unique
-    ON messages(user_id, provider_message_id)
-    WHERE provider_message_id IS NOT NULL`,
-
   `ALTER TABLE conversations
      ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT 'whatsapp'`,
 
   `ALTER TABLE messages
      ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT 'whatsapp'`,
+
+  // Provider ids are unique inside a tenant + transport, not globally across
+  // every channel owned by the same merchant.
+  `DROP INDEX IF EXISTS idx_messages_user_provider_message_unique`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_scope_provider_message_unique
+    ON messages(user_id, channel_id, provider_message_id)
+    WHERE provider_message_id IS NOT NULL`,
 
   `ALTER TABLE messages
      ALTER COLUMN conversation_id SET NOT NULL`,
