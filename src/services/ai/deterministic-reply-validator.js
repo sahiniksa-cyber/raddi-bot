@@ -1,5 +1,14 @@
 'use strict';
 
+const { isDeepStrictEqual } = require('node:util');
+
+const {
+  compileMerchantPolicy,
+} = require('../../policy/merchant-policy-compiler');
+const {
+  PLATFORM_REPLY_POLICY,
+} = require('../../policy/platform-reply-policy');
+
 const MATERIAL_CODES = Object.freeze({
   availability: 'UNSUPPORTED_AVAILABILITY',
   compatibility: 'UNSUPPORTED_COMPATIBILITY',
@@ -22,6 +31,10 @@ const TOPIC_MARKERS = Object.freeze({
     'available',
     'availability',
     'in stock',
+    'موجود',
+    'موجودة',
+    'نافد',
+    'نافذة',
   ],
   compatibility: [
     'متوافق',
@@ -30,6 +43,10 @@ const TOPIC_MARKERS = Object.freeze({
     'compatible',
     'compatibility',
     'works with',
+    'يعمل على',
+    'تعمل على',
+    'يدعم',
+    'تدعم',
   ],
   contact: [
     'اتصل',
@@ -48,6 +65,9 @@ const TOPIC_MARKERS = Object.freeze({
     'الشحن',
     'delivery',
     'shipping',
+    'مجاني',
+    'مجانية',
+    'free',
   ],
   discount: [
     'خصم',
@@ -57,6 +77,7 @@ const TOPIC_MARKERS = Object.freeze({
     'discount',
     'promotion',
     'promo',
+    'عرض خاص',
   ],
   duration: [
     'مدة',
@@ -102,6 +123,8 @@ const TOPIC_MARKERS = Object.freeze({
     'guarantee',
     'promise',
     'commit',
+    'مضمون',
+    'مضمونة',
   ],
   refund: [
     'استرجاع',
@@ -110,6 +133,8 @@ const TOPIC_MARKERS = Object.freeze({
     'الاسترداد',
     'refund',
     'return',
+    'ترجيع',
+    'الترجيع',
   ],
   url: [
     'رابط',
@@ -123,6 +148,11 @@ const TOPIC_MARKERS = Object.freeze({
     'الضمان',
     'كفالة',
     'warranty',
+    'مكفول',
+    'مكفولة',
+    'ضمانا',
+    'شامل',
+    'مدى الحياة',
   ],
 });
 
@@ -135,7 +165,7 @@ const CURRENCY_MARKERS = Object.freeze([
   { code: 'GBP', values: ['جنيه استرليني', 'جنيه إسترليني', 'gbp', '£'] },
 ]);
 
-const URL_RE = /(?:https?:\/\/|www\.)[^\s<>()]+/giu;
+const URL_RE = /(?:https?:\/\/|www\.)[^\s<>()]+|(?:[a-z0-9-]+\.)+[a-z]{2,63}(?:\/[^\s<>()]*)?/giu;
 const PHONE_RE = /(?:\+?\d[\d\s().-]{6,}\d)/gu;
 const NUMBER_RE = /\d+(?:\.\d+)?/gu;
 const ARABIC_DIACRITICS_RE = /[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed]/gu;
@@ -162,11 +192,20 @@ function normalizeText(value) {
 }
 
 function normalizeUrl(value) {
-  return normalizeDigits(value)
+  const raw = normalizeDigits(value)
     .trim()
-    .replace(/[،؛,.!?]+$/gu, '')
-    .replace(/\/$/u, '')
-    .toLocaleLowerCase('en-US');
+    .replace(/[،؛,.!?]+$/gu, '');
+  const withScheme = /^(?:https?:\/\/)/iu.test(raw)
+    ? raw
+    : `https://${raw.replace(/^www\./iu, '')}`;
+  try {
+    const parsed = new URL(withScheme);
+    const port = parsed.port ? `:${parsed.port}` : '';
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/$/u, '');
+    return `${parsed.hostname.toLocaleLowerCase('en-US')}${port}${path}${parsed.search}${parsed.hash}`;
+  } catch {
+    return raw;
+  }
 }
 
 function normalizePhone(value) {
@@ -179,6 +218,16 @@ function hasPhrase(text, phrase) {
   const haystack = ` ${normalizeText(text)} `;
   const needle = normalizeText(phrase);
   return needle !== '' && haystack.includes(` ${needle} `);
+}
+
+function hasTopicMarker(text, marker) {
+  const normalizedText = normalizeText(text);
+  const normalizedMarker = normalizeText(marker);
+  if (!normalizedMarker) return false;
+  if (/[\u0600-\u06ff]/u.test(normalizedMarker)) {
+    return normalizedText.includes(normalizedMarker);
+  }
+  return hasPhrase(normalizedText, normalizedMarker);
 }
 
 function uniqueStrings(values) {
@@ -215,7 +264,7 @@ function textTopics(value) {
   const normalized = normalizeText(value);
   const topics = [];
   for (const [topic, markers] of Object.entries(TOPIC_MARKERS)) {
-    if (markers.some(marker => hasPhrase(normalized, marker))) topics.push(topic);
+    if (markers.some(marker => hasTopicMarker(normalized, marker))) topics.push(topic);
   }
   if (/(?:^|\s)(?:السلام|هلا|مرحبا|اهلا|حياك|hello|hi)(?:\s|$)/u.test(normalized)) {
     topics.push('greeting');
@@ -304,7 +353,22 @@ function productFacts(product, variantId) {
   if (variantId) {
     const variant = product.variants.find(entry => entry.id === variantId);
     if (variant) {
-      facts.push({ ref: product.id, type: 'variant', value: variant.name });
+      facts.push({
+        ref: product.id,
+        type: 'variant',
+        value: variant.name,
+        variantId: variant.id,
+      });
+      for (const alias of Array.isArray(variant.attributes?.aliases)
+        ? variant.attributes.aliases
+        : []) {
+        facts.push({
+          ref: product.id,
+          type: 'variant',
+          value: alias,
+          variantId: variant.id,
+        });
+      }
       facts.push({
         amountMinor: variant.price.amountMinor,
         amounts: priceAmounts(variant.price),
@@ -312,12 +376,23 @@ function productFacts(product, variantId) {
         ref: product.id,
         type: 'price',
         value: `${variant.price.amountMinor} ${variant.price.currency}`,
+        variantId: variant.id,
       });
       if (variant.duration) {
-        facts.push({ ref: product.id, type: 'duration', value: variant.duration });
+        facts.push({
+          ref: product.id,
+          type: 'duration',
+          value: variant.duration,
+          variantId: variant.id,
+        });
       }
       if (variant.availability) {
-        facts.push({ ref: product.id, type: 'availability', value: variant.availability });
+        facts.push({
+          ref: product.id,
+          type: 'availability',
+          value: variant.availability,
+          variantId: variant.id,
+        });
       }
       addAttributeFacts(facts, product.id, variant.attributes);
     }
@@ -387,34 +462,43 @@ function numberValues(reply) {
   return [...normalizeDigits(reply).matchAll(NUMBER_RE)].map(match => match[0]);
 }
 
-function priceNumberValues(reply, facts) {
-  let remaining = ` ${normalizeText(reply)} `;
+function removeNumericIdentities(reply, facts) {
+  let remaining = normalizeDigits(reply);
   const numericIdentities = facts
     .filter(fact => ['product', 'variant'].includes(fact.type))
     .filter(fact => numberValues(fact.value).length > 0)
-    .sort((left, right) => right.normalized.length - left.normalized.length);
+    .sort((left, right) => String(right.value).length - String(left.value).length);
   for (const fact of numericIdentities) {
-    const phrase = ` ${fact.normalized} `;
-    const index = remaining.indexOf(phrase);
-    if (index >= 0) {
-      remaining = `${remaining.slice(0, index)} ${remaining.slice(index + phrase.length)}`;
-    }
+    const phrase = normalizeDigits(fact.value);
+    if (!phrase) continue;
+    remaining = remaining.split(phrase).join(' ');
   }
-  return numberValues(remaining);
+  return remaining;
 }
 
 function factContained(reply, fact) {
   return fact.normalized !== '' && hasPhrase(reply, fact.normalized);
 }
 
-function compatibilityTarget(reply) {
+function compatibilityTargets(reply, facts) {
   const normalized = normalizeText(reply);
-  const match = normalized.match(/(?:متوافق(?:ه)?\s+مع|compatible\s+with|works\s+with)\s+(.+)$/u);
-  return match ? match[1].trim() : '';
+  const match = normalized.match(
+    /(?:متوافق(?:ه)?\s+مع|compatible\s+with|works\s+with|يعمل\s+على|تعمل\s+على|يدعم|تدعم)\s+(.+)$/u,
+  );
+  if (!match) return [];
+  let target = match[1];
+  for (const fact of facts.filter(entry => ['product', 'variant'].includes(entry.type))) {
+    target = target.split(fact.normalized).join(' ');
+  }
+  return uniqueStrings(target
+    .split(/\s+(?:و|او|أو|and|or)\s+|[,/]/u)
+    .map(value => normalizeText(value))
+    .filter(Boolean));
 }
 
 function materialClaimTypes(reply) {
   const topics = textTopics(reply);
+  const normalizedReply = normalizeText(reply);
   const types = [];
   for (const topic of [
     'price',
@@ -429,10 +513,20 @@ function materialClaimTypes(reply) {
     if (topic === 'duration' && topics.includes('warranty')) continue;
     if (topics.includes(topic)) types.push(topic);
   }
-  if (topics.includes('availability')
-      && !topics.some(topic => ['delivery', 'refund', 'discount'].includes(topic))) {
-    types.push('availability');
-  }
+  const strongAvailability = [
+    'متوفر',
+    'متوفره',
+    'غير متوفر',
+    'نافد',
+    'موجود',
+    'available',
+    'unavailable',
+    'in stock',
+    'out of stock',
+  ].some(marker => hasTopicMarker(normalizedReply, marker));
+  const genericAvailabilityOnly = topics.includes('availability')
+    && !topics.some(topic => ['delivery', 'refund', 'discount'].includes(topic));
+  if (strongAvailability || genericAvailabilityOnly) types.push('availability');
   return uniqueStrings(types);
 }
 
@@ -446,17 +540,86 @@ function mentionedProducts(reply, compiledPolicy) {
   return uniqueStrings(found);
 }
 
+function mentionedVariants(reply, compiledPolicy) {
+  const found = [];
+  for (const product of Object.values(compiledPolicy.indexes.productsById)) {
+    for (const variant of product.variants) {
+      const aliases = Array.isArray(variant.attributes?.aliases)
+        ? variant.attributes.aliases
+        : [];
+      if ([variant.name, ...aliases].some(alias => hasPhrase(reply, alias))) {
+        found.push({ productId: product.id, variantId: variant.id });
+      }
+    }
+  }
+  return found;
+}
+
+function removeFactsFromReply(reply, facts) {
+  let residual = ` ${normalizeText(reply)} `;
+  for (const fact of [...facts].sort((a, b) => b.normalized.length - a.normalized.length)) {
+    if (!fact.normalized) continue;
+    residual = residual.split(` ${fact.normalized} `).join(' ');
+  }
+  return normalizeText(residual);
+}
+
+function hasContradictoryNegation(reply, fact) {
+  const normalizedReply = ` ${normalizeText(reply)} `;
+  const value = fact.normalized;
+  if (!value) return false;
+  const positiveFact = !/(?:^|\s)(?:غير|ليس|مو|not|unavailable)(?:\s|$)/u.test(value);
+  if (!positiveFact) return false;
+  return [
+    ` غير ${value} `,
+    ` ليس ${value} `,
+    ` مو ${value} `,
+    ` not ${value} `,
+  ].some(pattern => normalizedReply.includes(pattern));
+}
+
 function exactFactAllows(type, reply, facts) {
   const candidates = facts.filter(fact => fact.type === type);
   if (type === 'compatibility') {
-    const target = compatibilityTarget(reply);
-    if (!target) return false;
-    return candidates.some(fact =>
-      hasPhrase(target, fact.value)
-      || hasPhrase(fact.value, target)
-      || factContained(reply, fact));
+    const targets = compatibilityTargets(reply, facts);
+    if (targets.length === 0) return false;
+    return targets.every(target => candidates.some(fact => normalizeText(fact.value) === target));
   }
-  return candidates.some(fact => factContained(reply, fact));
+  const contained = candidates.filter(fact => factContained(reply, fact));
+  if (contained.length === 0) return false;
+  if (contained.some(fact => hasContradictoryNegation(reply, fact))) return false;
+  if (type === 'duration') return true;
+  const residual = removeFactsFromReply(reply, contained);
+  return !textTopics(residual).includes(type);
+}
+
+function decimalToMinor(value, fractionDigits) {
+  const match = String(value).match(/^(\d+)(?:\.(\d+))?$/u);
+  if (!match) return null;
+  const fraction = match[2] || '';
+  if (fraction.length > fractionDigits) return null;
+  const padded = `${fraction}${'0'.repeat(fractionDigits)}`.slice(0, fractionDigits);
+  const major = BigInt(match[1]);
+  const minor = major * (10n ** BigInt(fractionDigits)) + BigInt(padded || '0');
+  return minor <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(minor) : null;
+}
+
+function pricePairs(reply, facts) {
+  const remaining = removeNumericIdentities(reply, facts);
+  const matches = [...remaining.matchAll(NUMBER_RE)];
+  return matches.map((match, index) => {
+    const nextIndex = matches[index + 1]?.index ?? remaining.length;
+    const previousEnd = index === 0
+      ? Math.max(0, match.index - 24)
+      : matches[index - 1].index + matches[index - 1][0].length;
+    const after = remaining.slice(match.index + match[0].length, nextIndex);
+    const before = remaining.slice(previousEnd, match.index);
+    return {
+      currency: currencyInText(normalizeText(after))
+        || currencyInText(normalizeText(before)),
+      value: match[0],
+    };
+  });
 }
 
 function priceClaim(reply, facts) {
@@ -465,19 +628,21 @@ function priceClaim(reply, facts) {
   const hasPriceMarker = TOPIC_MARKERS.price.some(marker => hasPhrase(normalizedReply, marker));
   if (!currency && !hasPriceMarker) return null;
 
-  const values = priceNumberValues(reply, facts);
-  if (values.length === 0) return null;
-  const allowed = values.every(value => facts
+  const pairs = pricePairs(reply, facts);
+  const allowed = pairs.length > 0 && pairs.every(pair => facts
     .filter(fact => fact.type === 'price')
-    .some(fact =>
-      fact.currency === currency
-      && fact.amounts.some(amount => Number(amount) === Number(value))));
+    .some(fact => {
+      if (!pair.currency || fact.currency !== pair.currency) return false;
+      const minor = decimalToMinor(pair.value, currencyFractionDigits(pair.currency));
+      return minor !== null && minor === fact.amountMinor;
+    }));
   return {
     allowed,
-    currency,
+    currency: pairs.length === 1 ? pairs[0].currency : null,
+    pairs,
     type: 'price',
-    value: values.join(','),
-    values,
+    value: pairs.map(pair => `${pair.value}:${pair.currency || '?'}`).join(','),
+    values: pairs.map(pair => pair.value),
   };
 }
 
@@ -487,31 +652,49 @@ function canonicalNumberAllowed(value, facts) {
       return fact.amounts.some(amount => Number(amount) === Number(value));
     }
     if (fact.type === 'contact') {
-      return normalizePhone(fact.value).replace(/\D/gu, '').includes(value);
+      return normalizePhone(fact.value).replace(/\D/gu, '') === value;
     }
     return numberValues(fact.value).includes(value);
   });
 }
 
-function validatePolicyBoundary(compiledPolicy, platformPolicy) {
-  if (!compiledPolicy) return 'POLICY_MISSING';
+function authenticatePolicyContext(compiledPolicy, platformPolicy) {
+  if (!compiledPolicy) return { ok: false, code: 'POLICY_MISSING' };
+  if (!isDeepStrictEqual(platformPolicy, PLATFORM_REPLY_POLICY)) {
+    return { ok: false, code: 'POLICY_INVALID' };
+  }
   if (compiledPolicy.ok !== true
       || !compiledPolicy.policy
+      || typeof compiledPolicy.policy !== 'object'
       || !compiledPolicy.indexes
-      || compiledPolicy.policy.status !== 'active') {
-    return 'POLICY_INVALID';
+      || typeof compiledPolicy.indexes !== 'object') {
+    return { ok: false, code: 'POLICY_INVALID' };
   }
-  if (compiledPolicy.policyVersion !== compiledPolicy.policy.policyVersion) {
-    return 'POLICY_VERSION_MISMATCH';
+
+  const rebuilt = compileMerchantPolicy(compiledPolicy.policy);
+  if (!rebuilt.ok) {
+    const errors = Array.isArray(rebuilt.errors) ? rebuilt.errors : [];
+    const versionFailure = errors.length > 0
+      && errors.every(error => error.code === 'policy_version_mismatch');
+    return {
+      ok: false,
+      code: versionFailure ? 'POLICY_VERSION_MISMATCH' : 'POLICY_INVALID',
+    };
   }
-  const invariants = platformPolicy?.invariants;
-  if (!platformPolicy?.policyVersion
-      || invariants?.automatedRepliesRequireActiveMerchantPolicy !== true
-      || invariants?.merchantFactsComeOnlyFromCanonicalPolicy !== true
-      || invariants?.probabilisticComponentsHaveNoSendAuthority !== true) {
-    return 'POLICY_INVALID';
+  if (rebuilt.policy.status !== 'active') {
+    return { ok: false, code: 'POLICY_INVALID' };
   }
-  return null;
+  if (compiledPolicy.policyVersion !== rebuilt.policyVersion) {
+    return { ok: false, code: 'POLICY_VERSION_MISMATCH' };
+  }
+  if (!isDeepStrictEqual(compiledPolicy.indexes, rebuilt.indexes)) {
+    return { ok: false, code: 'POLICY_INVALID' };
+  }
+  return {
+    ok: true,
+    compiledPolicy: rebuilt,
+    platformPolicy: PLATFORM_REPLY_POLICY,
+  };
 }
 
 function validateAutomatedReply({
@@ -521,16 +704,17 @@ function validateAutomatedReply({
   compiledPolicy,
   platformPolicy,
 } = {}) {
-  const boundaryCode = validatePolicyBoundary(compiledPolicy, platformPolicy);
-  if (boundaryCode) {
+  const authenticated = authenticatePolicyContext(compiledPolicy, platformPolicy);
+  if (!authenticated.ok) {
     return {
       claims: [],
       evidenceRefs: [],
       ok: false,
       status: 'rejected',
-      violations: [{ code: boundaryCode, evidenceRefs: [] }],
+      violations: [{ code: authenticated.code, evidenceRefs: [] }],
     };
   }
+  compiledPolicy = authenticated.compiledPolicy;
 
   const focus = asFocus(conversationFocus);
   const evidence = resolveEvidence(compiledPolicy, focus);
@@ -553,6 +737,14 @@ function validateAutomatedReply({
     const claim = { type: 'product', value: productId };
     claims.push(claim);
     if (productId !== focus.productId || !evidence.refs.includes(productId)) {
+      addViolation('UNSUPPORTED_PRODUCT', claim);
+    }
+  }
+
+  for (const mentioned of mentionedVariants(reply, compiledPolicy)) {
+    const claim = { type: 'variant', value: mentioned.variantId };
+    claims.push(claim);
+    if (mentioned.productId !== focus.productId || mentioned.variantId !== focus.variantId) {
       addViolation('UNSUPPORTED_PRODUCT', claim);
     }
   }
@@ -588,7 +780,8 @@ function validateAutomatedReply({
     if (!price.allowed) addViolation(MATERIAL_CODES.price, claim);
   }
 
-  for (const type of materialClaimTypes(reply)) {
+  const detectedMaterialTypes = materialClaimTypes(reply);
+  for (const type of detectedMaterialTypes) {
     if (type === 'price') continue;
     const claim = { type, value: normalizeText(reply) };
     claims.push(claim);
@@ -597,10 +790,24 @@ function validateAutomatedReply({
     }
   }
 
+  const replyTextTopics = textTopics(reply).filter(topic =>
+    !['availability', 'duration'].includes(topic) || detectedMaterialTypes.includes(topic));
+  if (replyTextTopics.includes('contact') && phones.length === 0) {
+    claims.push({ type: 'contact', value: 'contact_advice' });
+  }
+  if (/(?:^|\s)(?:ميزه|ميزة|feature)(?:\s|$)/iu.test(normalizeText(reply))) {
+    const claim = { type: 'product', value: 'unspecified_feature' };
+    claims.push(claim);
+    const exactFeature = evidence.facts
+      .filter(fact => fact.type === 'product_fact')
+      .some(fact => factContained(reply, fact));
+    if (!exactFeature) addViolation('UNSUPPORTED_PRODUCT', claim);
+  }
+
   const phoneDigits = new Set(phones.map(phone => phone.replace(/\D/gu, '')));
   for (const value of numberValues(reply)) {
     if (priceNumbers.has(value)) continue;
-    if ([...phoneDigits].some(phone => phone.includes(value))) continue;
+    if (phoneDigits.has(value)) continue;
     if (urls.some(url => numberValues(url).includes(value))) continue;
     if (canonicalNumberAllowed(value, evidence.facts)) continue;
     const claim = { type: 'number', value };
@@ -624,13 +831,26 @@ function validateAutomatedReply({
     addViolation('INTERNAL_MARKER_LEAK', { type: 'internal_marker', value: 'redacted' });
   }
 
+  const customerTopics = textTopics(customerText);
+  const greetingOnly = customerTopics.includes('greeting')
+    && customerTopics.every(topic => topic === 'greeting');
+  const normalizedCustomer = normalizeText(customerText);
+  const allowsCarryover = !greetingOnly && (
+    customerTopics.some(topic => topic !== 'greeting')
+    || /(?:سعره|سعرها|مدته|مدتها|توفره|توفرها|تقصد|تقصدين|عنه|عنها|it|its)/iu
+      .test(normalizedCustomer)
+  );
+  const customerProducts = mentionedProducts(customerText, compiledPolicy);
   const currentTopics = uniqueStrings([
-    ...focus.topics,
-    ...textTopics(customerText),
+    ...customerTopics,
+    ...(allowsCarryover ? focus.topics : []),
+    ...(customerProducts.length > 0 || (allowsCarryover && focus.productId) ? ['product'] : []),
   ]);
-  const replyTopics = uniqueStrings(claims
-    .map(claim => claim.type)
-    .filter(type => [
+  if (currentTopics.includes('contact')) currentTopics.push('number');
+  const replyTopics = uniqueStrings([
+    ...replyTextTopics,
+    ...claims.map(claim => claim.type),
+  ].filter(type => [
       'availability',
       'compatibility',
       'contact',
@@ -642,13 +862,17 @@ function validateAutomatedReply({
       'promise',
       'refund',
       'url',
+      'product',
+      'variant',
       'warranty',
+      'greeting',
     ].includes(type)));
-  const offTopic = replyTopics.some(topic => !currentTopics.includes(topic));
+  const comparableReplyTopics = replyTopics.map(topic => topic === 'variant' ? 'product' : topic);
+  const offTopic = comparableReplyTopics.some(topic => !currentTopics.includes(topic));
   if (offTopic) {
     addViolation('OFF_TOPIC_CURRENT_TURN', {
       type: 'relevance',
-      value: replyTopics.filter(topic => !currentTopics.includes(topic)).join(','),
+      value: comparableReplyTopics.filter(topic => !currentTopics.includes(topic)).join(','),
     });
   }
 
@@ -662,6 +886,7 @@ function validateAutomatedReply({
 }
 
 module.exports = {
+  authenticatePolicyContext,
   normalizeDigits,
   normalizePhone,
   normalizeText,

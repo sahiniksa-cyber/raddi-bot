@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  authenticatePolicyContext,
   validateAutomatedReply,
 } = require('./deterministic-reply-validator');
 
@@ -108,6 +109,17 @@ function buildDeterministicFallback({
   evidenceRef = null,
 } = {}) {
   const focus = normalizedFocus(conversationFocus);
+  const authenticated = authenticatePolicyContext(compiledPolicy, platformPolicy);
+  if (!authenticated.ok) {
+    return safeClarification({
+      customerText,
+      focus,
+      compiledPolicy,
+      platformPolicy,
+    });
+  }
+  compiledPolicy = authenticated.compiledPolicy;
+  platformPolicy = authenticated.platformPolicy;
   const candidate = candidateForReference({
     compiledPolicy,
     evidenceRef,
