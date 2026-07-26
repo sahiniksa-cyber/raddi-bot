@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 
 const POLICY_SCHEMA_VERSION = 1;
 const POLICY_STATUSES = Object.freeze(['active', 'needs_review', 'invalid']);
+const SUPPORTED_CURRENCIES = Object.freeze(['AED', 'SAR', 'USD']);
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const VOLATILE_MIGRATION_KEYS = new Set([
   'createdAt',
   'generatedAt',
@@ -11,6 +13,60 @@ const VOLATILE_MIGRATION_KEYS = new Set([
   'migrationTimestamp',
   'updatedAt',
 ]);
+const ALLOWED_KEYS = {
+  root: new Set([
+    'schemaVersion',
+    'policyVersion',
+    'status',
+    'catalog',
+    'persona',
+    'businessRules',
+    'prohibitions',
+    'routing',
+    'instantReplies',
+    'migration',
+  ]),
+  catalog: new Set(['products']),
+  product: new Set([
+    'id',
+    'name',
+    'aliases',
+    'description',
+    'variants',
+    'links',
+    'attributes',
+  ]),
+  variant: new Set([
+    'id',
+    'name',
+    'price',
+    'duration',
+    'availability',
+    'attributes',
+  ]),
+  price: new Set(['amountMinor', 'currency']),
+  persona: new Set([
+    'role',
+    'displayName',
+    'language',
+    'dialect',
+    'tone',
+    'brevity',
+    'formatting',
+  ]),
+  businessRule: new Set(['id', 'topic', 'statement']),
+  prohibitions: new Set(['words', 'phrases', 'claims', 'destinations']),
+  routing: new Set(['contacts', 'rules', 'pauseAfterHandoff']),
+  contact: new Set(['id', 'name', 'phoneNumber']),
+  routingRule: new Set(['id', 'topic', 'contactId']),
+  instantReply: new Set(['id', 'triggers', 'reply', 'evidenceRefs']),
+  migration: new Set([
+    'legacyArchived',
+    'reviewItems',
+    ...VOLATILE_MIGRATION_KEYS,
+  ]),
+  reviewItem: new Set(['path', 'code']),
+};
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -20,6 +76,20 @@ function isPlainObject(value) {
 
 function normalizeLookupKey(value) {
   return String(value).normalize('NFKC').trim().toLocaleLowerCase('en-US');
+}
+
+function defineOwn(target, key, value) {
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
+function childPath(parent, key) {
+  if (typeof key === 'number') return `${parent}[${key}]`;
+  return parent ? `${parent}.${key}` : key;
 }
 
 function canonicalize(value, path = [], ancestors = new Set()) {
@@ -32,17 +102,24 @@ function canonicalize(value, path = [], ancestors = new Set()) {
   }
   if (typeof value !== 'object') throw new TypeError('non_json_value');
   if (ancestors.has(value)) throw new TypeError('cyclic_value');
+  if (!Array.isArray(value) && !isPlainObject(value)) {
+    throw new TypeError('invalid_prototype');
+  }
 
   ancestors.add(value);
   let result;
   if (Array.isArray(value)) {
     result = value.map((entry, index) => canonicalize(entry, [...path, index], ancestors));
   } else {
-    result = {};
+    result = Object.create(null);
     for (const key of Object.keys(value).sort()) {
       if (path.length === 0 && key === 'policyVersion') continue;
       if (path[0] === 'migration' && VOLATILE_MIGRATION_KEYS.has(key)) continue;
-      result[key] = canonicalize(value[key], [...path, key], ancestors);
+      defineOwn(
+        result,
+        key,
+        canonicalize(value[key], [...path, key], ancestors),
+      );
     }
   }
   ancestors.delete(value);
@@ -65,15 +142,18 @@ function cloneJsonValue(value, ancestors = new Set()) {
   }
   if (typeof value !== 'object') throw new TypeError('non_json_value');
   if (ancestors.has(value)) throw new TypeError('cyclic_value');
+  if (!Array.isArray(value) && !isPlainObject(value)) {
+    throw new TypeError('invalid_prototype');
+  }
 
   ancestors.add(value);
   let result;
   if (Array.isArray(value)) {
     result = value.map((entry) => cloneJsonValue(entry, ancestors));
   } else {
-    result = {};
+    result = Object.getPrototypeOf(value) === null ? Object.create(null) : {};
     for (const key of Object.keys(value)) {
-      result[key] = cloneJsonValue(value[key], ancestors);
+      defineOwn(result, key, cloneJsonValue(value[key], ancestors));
     }
   }
   ancestors.delete(value);
@@ -85,6 +165,49 @@ function deepFreeze(value, seen = new Set()) {
   seen.add(value);
   for (const child of Object.values(value)) deepFreeze(child, seen);
   return Object.freeze(value);
+}
+
+function scanJsonSafety(value, path, addError, ancestors = new Set()) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) addError(path, 'invalid_number');
+    return;
+  }
+  if (typeof value !== 'object') {
+    addError(path, 'non_json_value');
+    return;
+  }
+  if (ancestors.has(value)) {
+    addError(path, 'cyclic_value');
+    return;
+  }
+  if (!Array.isArray(value) && !isPlainObject(value)) {
+    addError(path, 'invalid_prototype');
+    return;
+  }
+
+  ancestors.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      scanJsonSafety(entry, childPath(path, index), addError, ancestors);
+    });
+  } else {
+    for (const key of Object.keys(value)) {
+      const pathForKey = childPath(path, key);
+      if (FORBIDDEN_KEYS.has(key)) addError(pathForKey, 'forbidden_key');
+      scanJsonSafety(value[key], pathForKey, addError, ancestors);
+    }
+  }
+  ancestors.delete(value);
+}
+
+function rejectUnexpectedKeys(value, allowed, path, addError) {
+  if (!isPlainObject(value)) return;
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key) && !FORBIDDEN_KEYS.has(key)) {
+      addError(childPath(path, key), 'unexpected_key');
+    }
+  }
 }
 
 function validateMerchantPolicy(input) {
@@ -109,6 +232,9 @@ function validateMerchantPolicy(input) {
       errors: [{ path: '', code: 'invalid_type' }],
     };
   }
+
+  scanJsonSafety(input, '', addError);
+  rejectUnexpectedKeys(input, ALLOWED_KEYS.root, '', addError);
 
   for (const section of requiredSections) {
     if (!Object.prototype.hasOwnProperty.call(input, section)) addError(section, 'required');
@@ -140,6 +266,7 @@ function validateMerchantPolicy(input) {
   };
 
   if (isPlainObject(input.catalog)) {
+    rejectUnexpectedKeys(input.catalog, ALLOWED_KEYS.catalog, 'catalog', addError);
     if (!Array.isArray(input.catalog.products)) {
       addError('catalog.products', Object.prototype.hasOwnProperty.call(input.catalog, 'products')
         ? 'invalid_type'
@@ -151,6 +278,7 @@ function validateMerchantPolicy(input) {
           addError(base, 'invalid_type');
           return;
         }
+        rejectUnexpectedKeys(product, ALLOWED_KEYS.product, base, addError);
         registerId(product.id, `${base}.id`, { evidence: true });
         if (typeof product.name !== 'string' || product.name.trim() === '') {
           addError(`${base}.name`, product.name === undefined ? 'required' : 'invalid_string');
@@ -188,6 +316,7 @@ function validateMerchantPolicy(input) {
               addError(variantBase, 'invalid_type');
               return;
             }
+            rejectUnexpectedKeys(variant, ALLOWED_KEYS.variant, variantBase, addError);
             registerId(variant.id, `${variantBase}.id`);
             if (typeof variant.name !== 'string' || variant.name.trim() === '') {
               addError(
@@ -201,16 +330,22 @@ function validateMerchantPolicy(input) {
                 variant.price === undefined ? 'required' : 'invalid_type',
               );
             } else {
+              rejectUnexpectedKeys(
+                variant.price,
+                ALLOWED_KEYS.price,
+                `${variantBase}.price`,
+                addError,
+              );
               if (!Object.prototype.hasOwnProperty.call(variant.price, 'amountMinor')) {
                 addError(`${variantBase}.price.amountMinor`, 'required');
-              } else if (!Number.isInteger(variant.price.amountMinor)
+              } else if (!Number.isSafeInteger(variant.price.amountMinor)
                          || variant.price.amountMinor < 0) {
                 addError(`${variantBase}.price.amountMinor`, 'invalid_integer');
               }
               if (!Object.prototype.hasOwnProperty.call(variant.price, 'currency')) {
                 addError(`${variantBase}.price.currency`, 'required');
               } else if (typeof variant.price.currency !== 'string'
-                         || !/^[A-Z]{3}$/.test(variant.price.currency)) {
+                         || !SUPPORTED_CURRENCIES.includes(variant.price.currency)) {
                 addError(`${variantBase}.price.currency`, 'invalid_currency');
               }
             }
@@ -247,6 +382,7 @@ function validateMerchantPolicy(input) {
 
   if (isPlainObject(input.persona)) {
     const persona = input.persona;
+    rejectUnexpectedKeys(persona, ALLOWED_KEYS.persona, 'persona', addError);
     if (persona.role !== 'customer_service_agent') addError('persona.role', 'invalid_enum');
     if (persona.displayName !== null && typeof persona.displayName !== 'string') {
       addError('persona.displayName', persona.displayName === undefined ? 'required' : 'invalid_type');
@@ -281,6 +417,7 @@ function validateMerchantPolicy(input) {
         addError(base, 'invalid_type');
         return;
       }
+      rejectUnexpectedKeys(rule, ALLOWED_KEYS.businessRule, base, addError);
       registerId(rule.id, `${base}.id`, { evidence: true });
       for (const field of ['topic', 'statement']) {
         if (typeof rule[field] !== 'string' || rule[field].trim() === '') {
@@ -291,6 +428,12 @@ function validateMerchantPolicy(input) {
   }
 
   if (isPlainObject(input.prohibitions)) {
+    rejectUnexpectedKeys(
+      input.prohibitions,
+      ALLOWED_KEYS.prohibitions,
+      'prohibitions',
+      addError,
+    );
     for (const field of ['words', 'phrases', 'claims', 'destinations']) {
       if (!Array.isArray(input.prohibitions[field])) {
         addError(
@@ -310,6 +453,7 @@ function validateMerchantPolicy(input) {
   }
 
   if (isPlainObject(input.routing)) {
+    rejectUnexpectedKeys(input.routing, ALLOWED_KEYS.routing, 'routing', addError);
     if (!Array.isArray(input.routing.contacts)) {
       addError(
         'routing.contacts',
@@ -322,6 +466,7 @@ function validateMerchantPolicy(input) {
           addError(base, 'invalid_type');
           return;
         }
+        rejectUnexpectedKeys(contact, ALLOWED_KEYS.contact, base, addError);
         registerId(contact.id, `${base}.id`, { evidence: true, contact: true });
         if (typeof contact.name !== 'string' || contact.name.trim() === '') {
           addError(`${base}.name`, contact.name === undefined ? 'required' : 'invalid_string');
@@ -344,6 +489,7 @@ function validateMerchantPolicy(input) {
           addError(base, 'invalid_type');
           return;
         }
+        rejectUnexpectedKeys(rule, ALLOWED_KEYS.routingRule, base, addError);
         registerId(rule.id, `${base}.id`);
         if (typeof rule.topic !== 'string' || rule.topic.trim() === '') {
           addError(`${base}.topic`, rule.topic === undefined ? 'required' : 'invalid_string');
@@ -377,6 +523,7 @@ function validateMerchantPolicy(input) {
         addError(base, 'invalid_type');
         return;
       }
+      rejectUnexpectedKeys(reply, ALLOWED_KEYS.instantReply, base, addError);
       registerId(reply.id, `${base}.id`);
       if (!Array.isArray(reply.triggers) || reply.triggers.length === 0) {
         addError(
@@ -403,6 +550,12 @@ function validateMerchantPolicy(input) {
   }
 
   if (isPlainObject(input.migration)) {
+    rejectUnexpectedKeys(
+      input.migration,
+      ALLOWED_KEYS.migration,
+      'migration',
+      addError,
+    );
     if (!isPlainObject(input.migration.legacyArchived)) {
       addError(
         'migration.legacyArchived',
@@ -414,6 +567,23 @@ function validateMerchantPolicy(input) {
         'migration.reviewItems',
         input.migration.reviewItems === undefined ? 'required' : 'invalid_type',
       );
+    } else {
+      input.migration.reviewItems.forEach((item, index) => {
+        const base = `migration.reviewItems[${index}]`;
+        if (!isPlainObject(item)) {
+          addError(base, 'invalid_type');
+          return;
+        }
+        rejectUnexpectedKeys(item, ALLOWED_KEYS.reviewItem, base, addError);
+        for (const field of ['path', 'code']) {
+          if (typeof item[field] !== 'string' || item[field].trim() === '') {
+            addError(
+              `${base}.${field}`,
+              item[field] === undefined ? 'required' : 'invalid_string',
+            );
+          }
+        }
+      });
     }
   } else if (Object.prototype.hasOwnProperty.call(input, 'migration')) {
     addError('migration', 'invalid_type');
@@ -476,6 +646,7 @@ function validateMerchantPolicy(input) {
 module.exports = {
   POLICY_SCHEMA_VERSION,
   POLICY_STATUSES,
+  SUPPORTED_CURRENCIES,
   canonicalJson,
   deepFreeze,
   derivePolicyVersion,

@@ -3,6 +3,8 @@
 const crypto = require('node:crypto');
 
 const {
+  SUPPORTED_CURRENCIES,
+  canonicalJson,
   derivePolicyVersion,
   isPlainObject,
   normalizeLookupKey,
@@ -22,6 +24,7 @@ const ARCHIVED_FIELDS = [
   'escalationPausesBot',
   'autoReplyKeywords',
   'botInstructions',
+  'merchantPolicy',
 ];
 
 function cloneValue(value, ancestors = new Set()) {
@@ -32,10 +35,24 @@ function cloneValue(value, ancestors = new Set()) {
   }
   if (typeof value !== 'object') throw new TypeError('Legacy config must contain JSON values');
   if (ancestors.has(value)) throw new TypeError('Legacy config cannot contain cycles');
+  if (!Array.isArray(value) && !isPlainObject(value)) {
+    throw new TypeError('Legacy config must contain only plain JSON objects');
+  }
 
   ancestors.add(value);
-  const copy = Array.isArray(value) ? [] : {};
-  for (const key of Object.keys(value)) copy[key] = cloneValue(value[key], ancestors);
+  const copy = Array.isArray(value)
+    ? []
+    : Object.getPrototypeOf(value) === null
+      ? Object.create(null)
+      : {};
+  for (const key of Object.keys(value)) {
+    Object.defineProperty(copy, key, {
+      configurable: true,
+      enumerable: true,
+      value: cloneValue(value[key], ancestors),
+      writable: true,
+    });
+  }
   ancestors.delete(value);
   return copy;
 }
@@ -67,38 +84,32 @@ function archiveLegacyFields(config) {
   return archived;
 }
 
-function currencyCode(raw, fallback = 'SAR') {
-  if (raw === undefined || raw === null || raw === '') return fallback;
+function currencyCode(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
   const normalized = String(raw).normalize('NFKC').trim();
-  if (/^[A-Za-z]{3}$/.test(normalized)) return normalized.toUpperCase();
+  if (/^[A-Za-z]{3}$/.test(normalized)) {
+    const code = normalized.toUpperCase();
+    return SUPPORTED_CURRENCIES.includes(code) ? code : null;
+  }
   if (/^(?:ر\.?\s?س\.?|ريال|ريال سعودي)$/.test(normalized)) return 'SAR';
   return null;
 }
 
-function parseStructuredPrice(rawPrice, fallbackCurrency) {
+function parseStructuredPrice(rawPrice) {
   if (isPlainObject(rawPrice)) {
-    if (!Number.isInteger(rawPrice.amountMinor) || rawPrice.amountMinor < 0) return null;
-    const currency = currencyCode(rawPrice.currency, null);
+    if (!Number.isSafeInteger(rawPrice.amountMinor) || rawPrice.amountMinor < 0) return null;
+    const currency = currencyCode(rawPrice.currency);
     if (!currency) return null;
     return { amountMinor: rawPrice.amountMinor, currency };
-  }
-
-  if (typeof rawPrice === 'number') {
-    if (!Number.isFinite(rawPrice) || rawPrice < 0) return null;
-    const currency = currencyCode(fallbackCurrency);
-    if (!currency) return null;
-    const amountMinor = Math.round(rawPrice * 100);
-    if (!Number.isSafeInteger(amountMinor)) return null;
-    return { amountMinor, currency };
   }
 
   if (typeof rawPrice !== 'string') return null;
   const match = rawPrice
     .normalize('NFKC')
     .trim()
-    .match(/^(\d+)(?:[.,](\d{1,2}))?(?:\s*([A-Za-z]{3}|ر\.?\s?س\.?|ريال|ريال سعودي))?$/);
+    .match(/^(\d+)(?:[.,](\d{1,2}))?\s*([A-Za-z]{3}|ر\.?\s?س\.?|ريال|ريال سعودي)$/);
   if (!match) return null;
-  const currency = currencyCode(match[3], currencyCode(fallbackCurrency));
+  const currency = currencyCode(match[3]);
   if (!currency) return null;
   const fraction = (match[2] || '').padEnd(2, '0');
   const amountMinor = (Number(match[1]) * 100) + Number(fraction || 0);
@@ -110,13 +121,13 @@ function rawProductPriceSignature(product) {
   if (!isPlainObject(product)) return 'invalid';
   const prices = [];
   if (Object.prototype.hasOwnProperty.call(product, 'price')) {
-    const price = parseStructuredPrice(product.price, product.currency);
+    const price = parseStructuredPrice(product.price);
     prices.push(price ? `${price.amountMinor}:${price.currency}` : 'invalid');
   }
   if (Array.isArray(product.variants)) {
     for (const variant of product.variants) {
       const price = isPlainObject(variant)
-        ? parseStructuredPrice(variant.price, variant.currency || product.currency)
+        ? parseStructuredPrice(variant.price)
         : null;
       prices.push(price ? `${price.amountMinor}:${price.currency}` : 'invalid');
     }
@@ -148,12 +159,9 @@ function mapProduct(rawProduct, index, reviewItems) {
   const variants = [];
   if (Array.isArray(rawProduct.variants) && rawProduct.variants.length > 0) {
     if (Object.prototype.hasOwnProperty.call(rawProduct, 'price')) {
-      const topLevel = parseStructuredPrice(rawProduct.price, rawProduct.currency);
+      const topLevel = parseStructuredPrice(rawProduct.price);
       const soleVariant = rawProduct.variants.length === 1 && isPlainObject(rawProduct.variants[0])
-        ? parseStructuredPrice(
-          rawProduct.variants[0].price,
-          rawProduct.variants[0].currency || rawProduct.currency,
-        )
+        ? parseStructuredPrice(rawProduct.variants[0].price)
         : null;
       if (!topLevel || !soleVariant
           || topLevel.amountMinor !== soleVariant.amountMinor
@@ -173,10 +181,7 @@ function mapProduct(rawProduct, index, reviewItems) {
       const variantName = typeof rawVariant.name === 'string' && rawVariant.name.trim() !== ''
         ? rawVariant.name
         : rawVariant.label;
-      const price = parseStructuredPrice(
-        rawVariant.price,
-        rawVariant.currency || rawProduct.currency,
-      );
+      const price = parseStructuredPrice(rawVariant.price);
       if (typeof variantName !== 'string' || variantName.trim() === '' || !price) {
         addReview(reviewItems, variantPath, 'ambiguous_product_variant');
         return null;
@@ -200,7 +205,7 @@ function mapProduct(rawProduct, index, reviewItems) {
       });
     }
   } else if (Object.prototype.hasOwnProperty.call(rawProduct, 'price')) {
-    const price = parseStructuredPrice(rawProduct.price, rawProduct.currency);
+    const price = parseStructuredPrice(rawProduct.price);
     if (!price) {
       addReview(reviewItems, `${path}.price`, 'ambiguous_product_price');
       return null;
@@ -237,38 +242,49 @@ function mapProducts(config, reviewItems, mapped) {
   }
   mapped.push('products->merchantPolicy.catalog.products');
 
-  const conflicts = new Set();
-  const byName = new Map();
+  const groups = new Map();
   config.products.forEach((product, index) => {
-    if (!isPlainObject(product) || typeof product.name !== 'string') return;
-    const key = normalizeLookupKey(product.name);
-    const previous = byName.get(key);
-    const signature = rawProductPriceSignature(product);
-    if (previous && previous.signature !== signature) {
-      conflicts.add(key);
-      addReview(reviewItems, `products[${index}]`, 'conflicting_product_prices');
-      if (!previous.reported) {
-        addReview(reviewItems, `products[${previous.index}]`, 'conflicting_product_prices');
-        previous.reported = true;
-      }
-    } else if (!previous) {
-      byName.set(key, { signature, index, reported: false });
-    }
-  });
-
-  const seen = new Set();
-  const products = [];
-  config.products.forEach((product, index) => {
-    const key = isPlainObject(product) && typeof product.name === 'string'
+    const key = isPlainObject(product)
+      && typeof product.name === 'string'
+      && product.name.trim() !== ''
       ? normalizeLookupKey(product.name)
       : `invalid:${index}`;
-    if (conflicts.has(key) || seen.has(key)) return;
-    const mappedProduct = mapProduct(product, index, reviewItems);
-    if (mappedProduct) {
-      products.push(mappedProduct);
-      seen.add(key);
-    }
+    const entries = groups.get(key) || [];
+    entries.push({ index, product });
+    groups.set(key, entries);
   });
+
+  const products = [];
+  for (const entries of groups.values()) {
+    const candidates = entries.map(({ product, index }) => ({
+      index,
+      mappedProduct: mapProduct(product, index, reviewItems),
+      priceSignature: rawProductPriceSignature(product),
+    }));
+    if (candidates.length === 1) {
+      if (candidates[0].mappedProduct) products.push(candidates[0].mappedProduct);
+      continue;
+    }
+
+    const allMapped = candidates.every(({ mappedProduct }) => mappedProduct !== null);
+    const semanticSignatures = new Set(
+      candidates
+        .filter(({ mappedProduct }) => mappedProduct !== null)
+        .map(({ mappedProduct }) => canonicalJson(mappedProduct)),
+    );
+    if (allMapped && semanticSignatures.size === 1) {
+      products.push(candidates[0].mappedProduct);
+      continue;
+    }
+
+    const priceSignatures = new Set(
+      candidates.map(({ priceSignature }) => priceSignature),
+    );
+    const code = priceSignatures.size > 1
+      ? 'conflicting_product_prices'
+      : 'conflicting_product_facts';
+    for (const { index } of candidates) addReview(reviewItems, `products[${index}]`, code);
+  }
   return products;
 }
 
@@ -451,7 +467,10 @@ function mapRouting(config, reviewItems, mapped) {
   const contacts = [];
   const rules = [];
   const contactIds = new Set();
+  const contactsById = new Map();
+  const conflictedContactIds = new Set();
   const rawToCanonicalId = new Map();
+  let pendingRoutingRules = [];
   let pauseAfterHandoff = false;
 
   const addContacts = (rawContacts, path) => {
@@ -460,10 +479,29 @@ function mapRouting(config, reviewItems, mapped) {
       return;
     }
     rawContacts.forEach((rawContact, index) => {
-      const contact = mapContact(rawContact, `${path}[${index}]`, reviewItems);
-      if (!contact || contactIds.has(contact.id)) return;
+      const contactPath = `${path}[${index}]`;
+      const contact = mapContact(rawContact, contactPath, reviewItems);
+      if (!contact) return;
+      if (conflictedContactIds.has(contact.id)) {
+        addReview(reviewItems, contactPath, 'conflicting_contact_id');
+        return;
+      }
+      const previous = contactsById.get(contact.id);
+      if (previous) {
+        if (canonicalJson(previous.contact) === canonicalJson(contact)) return;
+        addReview(reviewItems, previous.path, 'conflicting_contact_id');
+        addReview(reviewItems, contactPath, 'conflicting_contact_id');
+        conflictedContactIds.add(contact.id);
+        contactsById.delete(contact.id);
+        contactIds.delete(contact.id);
+        rawToCanonicalId.delete(contact.id);
+        const previousIndex = contacts.findIndex(({ id }) => id === contact.id);
+        if (previousIndex !== -1) contacts.splice(previousIndex, 1);
+        return;
+      }
       contacts.push(contact);
       contactIds.add(contact.id);
+      contactsById.set(contact.id, { contact, path: contactPath });
       if (isPlainObject(rawContact)
           && typeof rawContact.id === 'string'
           && rawContact.id.trim() !== '') {
@@ -491,29 +529,7 @@ function mapRouting(config, reviewItems, mapped) {
         if (!Array.isArray(config.routing.rules)) {
           addReview(reviewItems, 'routing.rules', 'ambiguous_routing_rules');
         } else {
-          config.routing.rules.forEach((rawRule, index) => {
-            const path = `routing.rules[${index}]`;
-            if (!isPlainObject(rawRule)
-                || typeof rawRule.topic !== 'string'
-                || rawRule.topic.trim() === ''
-                || typeof rawRule.contactId !== 'string'
-                || rawRule.contactId.trim() === '') {
-              addReview(reviewItems, path, 'ambiguous_routing_rule');
-              return;
-            }
-            const contactId = rawToCanonicalId.get(rawRule.contactId) || rawRule.contactId;
-            if (!contactIds.has(contactId)) {
-              addReview(reviewItems, `${path}.contactId`, 'unknown_contact_ref');
-              return;
-            }
-            rules.push({
-              id: typeof rawRule.id === 'string' && rawRule.id.trim() !== ''
-                ? rawRule.id
-                : stableId('route', rawRule.topic, contactId),
-              topic: rawRule.topic,
-              contactId,
-            });
-          });
+          pendingRoutingRules = config.routing.rules;
         }
       }
     }
@@ -544,6 +560,30 @@ function mapRouting(config, reviewItems, mapped) {
              && config.escalationConditions !== '') {
     addReview(reviewItems, 'escalationConditions', 'ambiguous_routing_condition');
   }
+
+  pendingRoutingRules.forEach((rawRule, index) => {
+    const path = `routing.rules[${index}]`;
+    if (!isPlainObject(rawRule)
+        || typeof rawRule.topic !== 'string'
+        || rawRule.topic.trim() === ''
+        || typeof rawRule.contactId !== 'string'
+        || rawRule.contactId.trim() === '') {
+      addReview(reviewItems, path, 'ambiguous_routing_rule');
+      return;
+    }
+    const contactId = rawToCanonicalId.get(rawRule.contactId) || rawRule.contactId;
+    if (!contactIds.has(contactId)) {
+      addReview(reviewItems, `${path}.contactId`, 'unknown_contact_ref');
+      return;
+    }
+    rules.push({
+      id: typeof rawRule.id === 'string' && rawRule.id.trim() !== ''
+        ? rawRule.id
+        : stableId('route', rawRule.topic, contactId),
+      topic: rawRule.topic,
+      contactId,
+    });
+  });
 
   return { contacts, rules, pauseAfterHandoff };
 }
@@ -608,22 +648,63 @@ function invalidMigrationResult(config, rollbackConfig, hash, errors) {
   };
 }
 
+function rollbackFromMigratedConfig(config) {
+  const rollbackConfig = cloneValue(config);
+  const archived = isPlainObject(config.merchantPolicy?.migration?.legacyArchived)
+    ? config.merchantPolicy.migration.legacyArchived
+    : null;
+  if (archived
+      && Object.prototype.hasOwnProperty.call(archived, 'merchantPolicy')
+      && archived.merchantPolicy === null) {
+    rollbackConfig.merchantPolicy = null;
+  } else {
+    delete rollbackConfig.merchantPolicy;
+  }
+  return rollbackConfig;
+}
+
+function isGeneratedInvalidPolicy(candidate, replayPolicy) {
+  if (!isPlainObject(candidate) || !isPlainObject(replayPolicy)) return false;
+  try {
+    return typeof candidate.policyVersion === 'string'
+      && candidate.policyVersion === derivePolicyVersion(candidate)
+      && canonicalJson(candidate) === canonicalJson(replayPolicy);
+  } catch {
+    return false;
+  }
+}
+
 function migrateLegacyConfig(config) {
   if (!isPlainObject(config)) throw new TypeError('Legacy config must be a plain object');
 
   const input = cloneValue(config);
-  if (Object.prototype.hasOwnProperty.call(input, 'merchantPolicy')) {
-    const rollbackConfig = cloneValue(input);
-    delete rollbackConfig.merchantPolicy;
+  if (Object.prototype.hasOwnProperty.call(input, 'merchantPolicy')
+      && input.merchantPolicy !== null) {
+    const rollbackConfig = rollbackFromMigratedConfig(input);
     const hash = legacyHash(rollbackConfig);
+    const replay = migrateLegacyConfig(rollbackConfig);
     const validation = validateMerchantPolicy(input.merchantPolicy);
     if (!validation.ok) {
+      if (isGeneratedInvalidPolicy(
+        input.merchantPolicy,
+        replay.migratedConfig.merchantPolicy,
+      )) {
+        return {
+          migratedConfig: input,
+          report: replay.report,
+          rollbackConfig,
+        };
+      }
       return invalidMigrationResult(input, rollbackConfig, hash, validation.errors);
     }
-    const replay = migrateLegacyConfig(rollbackConfig);
+    const migratedConfig = cloneValue(input);
+    migratedConfig.merchantPolicy = validation.policy;
     return {
-      migratedConfig: input,
-      report: replay.report,
+      migratedConfig,
+      report: {
+        ...replay.report,
+        status: validation.policy.status,
+      },
       rollbackConfig,
     };
   }

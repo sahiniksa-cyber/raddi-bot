@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  derivePolicyVersion,
   validateMerchantPolicy,
 } = require('../../src/policy/merchant-policy-schema');
 const {
@@ -239,4 +240,162 @@ test('platform reply invariants are code-owned, versioned, and immutable', () =>
 test('default config contains no fabricated canonical merchant facts', () => {
   assert.equal(DEFAULT_CONFIG.merchantPolicy, null);
   assert.equal(validateMerchantPolicy(DEFAULT_CONFIG.merchantPolicy).ok, false);
+});
+
+test('canonical hashing preserves an own __proto__ key instead of colliding with clean JSON', () => {
+  const clean = validPolicy();
+  const poisoned = validPolicy();
+  poisoned.catalog.products[0].attributes = JSON.parse(
+    '{"__proto__":{"commercialFact":"forged"}}',
+  );
+
+  assert.notEqual(derivePolicyVersion(poisoned), derivePolicyVersion(clean));
+});
+
+test('rejects magic keys before returning a policy', () => {
+  const magic = validPolicy();
+  magic.catalog.products[0].attributes = JSON.parse(
+    '{"__proto__":{"commercialFact":"forged"}}',
+  );
+  const magicResult = validateMerchantPolicy(magic);
+  assert.equal(magicResult.ok, false);
+  assert.equal(
+    hasError(
+      magicResult,
+      'catalog.products[0].attributes.__proto__',
+      'forbidden_key',
+    ),
+    true,
+  );
+});
+
+test('rejects unsupported object prototypes before returning a policy', () => {
+  const unsupported = validPolicy();
+  unsupported.persona.formatting = Object.create({ inherited: 'not-json' });
+  const unsupportedResult = validateMerchantPolicy(unsupported);
+  assert.equal(unsupportedResult.ok, false);
+  assert.equal(
+    hasError(unsupportedResult, 'persona.formatting', 'invalid_prototype'),
+    true,
+  );
+});
+
+test('deep-freezes safe nested extension values', () => {
+  const policy = validPolicy();
+  policy.catalog.products[0].attributes = {
+    package: { dimensions: { width: 12 } },
+  };
+
+  const result = validateMerchantPolicy(policy);
+  assert.equal(result.ok, true);
+  assert.equal(
+    Object.isFrozen(
+      result.policy.catalog.products[0].attributes.package.dimensions,
+    ),
+    true,
+  );
+  assert.throws(() => {
+    result.policy.catalog.products[0].attributes.package.dimensions.width = 99;
+  }, TypeError);
+});
+
+test('rejects unexpected keys at every fact-bearing policy level', () => {
+  const cases = [
+    ['root', 'botInstructions', (policy) => { policy.botInstructions = 'price 10'; }],
+    ['catalog', 'catalog.source', (policy) => { policy.catalog.source = 'legacy'; }],
+    [
+      'product',
+      'catalog.products[0].legacyPrice',
+      (policy) => { policy.catalog.products[0].legacyPrice = '45'; },
+    ],
+    [
+      'variant',
+      'catalog.products[0].variants[0].prose',
+      (policy) => { policy.catalog.products[0].variants[0].prose = 'guess'; },
+    ],
+    [
+      'price',
+      'catalog.products[0].variants[0].price.display',
+      (policy) => { policy.catalog.products[0].variants[0].price.display = '45'; },
+    ],
+    ['persona', 'persona.instructions', (policy) => { policy.persona.instructions = 'sell'; }],
+    [
+      'business rule',
+      'businessRules[0].confidence',
+      (policy) => { policy.businessRules[0].confidence = 0.7; },
+    ],
+    [
+      'prohibitions',
+      'prohibitions.notes',
+      (policy) => { policy.prohibitions.notes = 'free prose'; },
+    ],
+    ['routing', 'routing.ownerNumber', (policy) => { policy.routing.ownerNumber = '0500'; }],
+    [
+      'contact',
+      'routing.contacts[0].instructions',
+      (policy) => { policy.routing.contacts[0].instructions = 'guess'; },
+    ],
+    [
+      'routing rule',
+      'routing.rules[0].fallback',
+      (policy) => { policy.routing.rules[0].fallback = 'owner'; },
+    ],
+    [
+      'instant reply',
+      'instantReplies[0].modelPrompt',
+      (policy) => { policy.instantReplies[0].modelPrompt = 'invent'; },
+    ],
+    ['migration', 'migration.notes', (policy) => { policy.migration.notes = 'free prose'; }],
+    [
+      'review item',
+      'migration.reviewItems[0].text',
+      (policy) => {
+        policy.status = 'needs_review';
+        policy.migration.reviewItems.push({ path: 'legacy', code: 'review', text: 'guess' });
+      },
+    ],
+  ];
+
+  const missed = [];
+  for (const [label, path, mutate] of cases) {
+    const policy = validPolicy();
+    mutate(policy);
+    const result = validateMerchantPolicy(policy);
+    if (result.ok || !hasError(result, path, 'unexpected_key')) missed.push(label);
+  }
+
+  assert.deepEqual(missed, []);
+});
+
+test('requires safe integer minor units', () => {
+  const policy = validPolicy();
+  policy.catalog.products[0].variants[0].price.amountMinor =
+    Number.MAX_SAFE_INTEGER + 1;
+
+  const result = validateMerchantPolicy(policy);
+  assert.equal(result.ok, false);
+  assert.equal(
+    hasError(
+      result,
+      'catalog.products[0].variants[0].price.amountMinor',
+      'invalid_integer',
+    ),
+    true,
+  );
+});
+
+test('rejects syntactically plausible but unsupported currencies', () => {
+  const policy = validPolicy();
+  policy.catalog.products[0].variants[0].price.currency = 'ZZZ';
+
+  const result = validateMerchantPolicy(policy);
+  assert.equal(result.ok, false);
+  assert.equal(
+    hasError(
+      result,
+      'catalog.products[0].variants[0].price.currency',
+      'invalid_currency',
+    ),
+    true,
+  );
 });

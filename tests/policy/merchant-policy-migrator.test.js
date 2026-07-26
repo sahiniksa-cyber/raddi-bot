@@ -8,6 +8,9 @@ const path = require('node:path');
 const {
   migrateLegacyConfig,
 } = require('../../src/policy/merchant-policy-migrator');
+const {
+  DEFAULT_CONFIG,
+} = require('../../lib/constants');
 
 function fixture(name) {
   const file = path.join(__dirname, '..', 'fixtures', 'policy', name);
@@ -187,5 +190,221 @@ test('migration is pure, byte-equivalent for rollback, and idempotent on repeat'
     JSON.stringify(first.migratedConfig),
   );
   assert.equal(JSON.stringify(second.rollbackConfig), beforeBytes);
+  assert.deepEqual(second.report, first.report);
+});
+
+test('treats DEFAULT_CONFIG merchantPolicy null as unmigrated and preserves null in rollback bytes', () => {
+  const legacy = {
+    ...DEFAULT_CONFIG,
+    replyStyle: {
+      tone: 'friendly',
+      useDialect: false,
+      useShortReplies: false,
+      avoidPhrases: [],
+    },
+    products: [
+      {
+        id: 'product-null-default',
+        name: 'Explicit price',
+        price: '25 SAR',
+      },
+    ],
+  };
+  const beforeBytes = JSON.stringify(legacy);
+
+  const result = migrateLegacyConfig(legacy);
+
+  assert.equal(result.report.status, 'active');
+  assert.equal(
+    result.migratedConfig.merchantPolicy.catalog.products[0].id,
+    'product-null-default',
+  );
+  assert.equal(JSON.stringify(result.rollbackConfig), beforeBytes);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(result.rollbackConfig, 'merchantPolicy'),
+    true,
+  );
+  assert.equal(result.rollbackConfig.merchantPolicy, null);
+});
+
+test('preserves own magic legacy keys byte-equivalently without prototype injection', () => {
+  const legacy = JSON.parse(
+    '{"products":[],"__proto__":{"sentinel":"archived-not-inherited"}}',
+  );
+  const beforeBytes = JSON.stringify(legacy);
+
+  const result = migrateLegacyConfig(legacy);
+
+  assert.equal(JSON.stringify(result.rollbackConfig), beforeBytes);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(result.rollbackConfig, '__proto__'),
+    true,
+  );
+  assert.equal(Object.getPrototypeOf(result.rollbackConfig), Object.prototype);
+  assert.equal(result.rollbackConfig.sentinel, undefined);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(result.migratedConfig, '__proto__'),
+    true,
+  );
+});
+
+test('quarantines duplicate normalized products when any commercial fact differs', () => {
+  const result = migrateLegacyConfig({
+    products: [
+      {
+        id: 'product-one',
+        name: 'Bundle',
+        aliases: ['starter'],
+        description: 'first description',
+        price: '100 SAR',
+      },
+      {
+        id: 'product-two',
+        name: ' bundle ',
+        aliases: ['different alias'],
+        description: 'different description',
+        price: '100 SAR',
+      },
+    ],
+  });
+  const policy = result.migratedConfig.merchantPolicy;
+
+  assert.equal(policy.status, 'needs_review');
+  assert.deepEqual(policy.catalog.products, []);
+  assert.equal(
+    policy.migration.reviewItems.some(
+      (item) => item.code === 'conflicting_product_facts',
+    ),
+    true,
+  );
+});
+
+test('deduplicates only semantically identical normalized products', () => {
+  const product = {
+    id: 'product-identical',
+    name: 'Bundle',
+    aliases: ['starter'],
+    description: 'same description',
+    price: '100 SAR',
+  };
+  const result = migrateLegacyConfig({
+    products: [product, { price: '100 SAR', ...product }],
+  });
+  const policy = result.migratedConfig.merchantPolicy;
+
+  assert.equal(policy.status, 'active');
+  assert.equal(policy.catalog.products.length, 1);
+  assert.equal(policy.catalog.products[0].id, 'product-identical');
+});
+
+test('quarantines duplicate contact IDs when contact facts differ', () => {
+  const result = migrateLegacyConfig({
+    routing: {
+      contacts: [
+        {
+          id: 'contact-sales',
+          name: 'Sales',
+          phoneNumber: '+966500000000',
+        },
+        {
+          id: 'contact-sales',
+          name: 'Other sales',
+          phoneNumber: '+966511111111',
+        },
+      ],
+      rules: [],
+      pauseAfterHandoff: false,
+    },
+  });
+  const policy = result.migratedConfig.merchantPolicy;
+
+  assert.equal(policy.status, 'needs_review');
+  assert.deepEqual(policy.routing.contacts, []);
+  assert.equal(
+    policy.migration.reviewItems.some(
+      (item) => item.code === 'conflicting_contact_id',
+    ),
+    true,
+  );
+});
+
+test('deduplicates only semantically identical contacts', () => {
+  const contact = {
+    id: 'contact-sales',
+    name: 'Sales',
+    phoneNumber: '+966500000000',
+  };
+  const result = migrateLegacyConfig({
+    routing: {
+      contacts: [contact, { phoneNumber: '+966500000000', ...contact }],
+      rules: [],
+      pauseAfterHandoff: false,
+    },
+  });
+  const policy = result.migratedConfig.merchantPolicy;
+
+  assert.equal(policy.status, 'active');
+  assert.deepEqual(policy.routing.contacts, [contact]);
+});
+
+test('never invents major units or SAR for bare legacy prices', () => {
+  const cases = [
+    { name: 'number', price: 100 },
+    { name: 'numeric string', price: '100' },
+  ];
+
+  const activated = [];
+  const missingReview = [];
+  for (const product of cases) {
+    const result = migrateLegacyConfig({ products: [product] });
+    const policy = result.migratedConfig.merchantPolicy;
+    if (policy.status !== 'needs_review' || policy.catalog.products.length !== 0) {
+      activated.push(product.name);
+    }
+    if (!policy.migration.reviewItems.some(
+      (item) => item.code === 'ambiguous_product_price',
+    )) {
+      missingReview.push(product.name);
+    }
+  }
+
+  assert.deepEqual(activated, []);
+  assert.deepEqual(missingReview, []);
+});
+
+test('keeps invalid migration reports byte-equivalent across repeat migration', () => {
+  const legacy = fixture('fully-structured-legacy.json');
+  legacy.businessRules[0].id = 'product-coffee';
+
+  const first = migrateLegacyConfig(legacy);
+  const second = migrateLegacyConfig(first.migratedConfig);
+
+  assert.equal(first.report.status, 'invalid');
+  assert.deepEqual(second.report, first.report);
+  assert.equal(
+    JSON.stringify(second.migratedConfig),
+    JSON.stringify(first.migratedConfig),
+  );
+  assert.equal(JSON.stringify(second.rollbackConfig), JSON.stringify(legacy));
+});
+
+test('versions a structurally valid existing policy and keeps the normalized output idempotent', () => {
+  const generated = migrateLegacyConfig(
+    fixture('fully-structured-legacy.json'),
+  ).migratedConfig.merchantPolicy;
+  const unversioned = JSON.parse(JSON.stringify(generated));
+  delete unversioned.policyVersion;
+
+  const first = migrateLegacyConfig({ merchantPolicy: unversioned });
+  assert.match(
+    first.migratedConfig.merchantPolicy.policyVersion,
+    /^sha256:[a-f0-9]{64}$/,
+  );
+
+  const second = migrateLegacyConfig(first.migratedConfig);
+  assert.equal(
+    JSON.stringify(second.migratedConfig),
+    JSON.stringify(first.migratedConfig),
+  );
   assert.deepEqual(second.report, first.report);
 });
