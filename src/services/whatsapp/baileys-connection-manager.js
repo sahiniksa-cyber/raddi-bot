@@ -8,7 +8,7 @@ const {
   Browsers,
   DisconnectReason,
   downloadMediaMessage,
-  fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
   generateMessageIDV2,
   jidNormalizedUser,
   makeWASocket,
@@ -378,8 +378,27 @@ class BaileysConnectionManager extends EventEmitter {
       this._authStore = store || null;
       this._activeAuthImportId = historyImportMode ? historyImportId : null;
       if (!this._version) {
-        const { version } = await fetchLatestBaileysVersion();
-        this._version = version;
+        // Baileys' fetchLatestBaileysVersion() returns a STALE bundled WA Web
+        // version ([2,3000,1035194821]) while reporting isLatest:true. WhatsApp's
+        // servers reject device linking under that stale version, so the QR ref
+        // is generated but the phone shows "Invalid QR code" and pairing never
+        // reaches creds.update/connected (Baileys issue #2679). fetchLatestWaWebVersion()
+        // returns the actual current WA Web version and links on the first scan.
+        // Fall back to a pinned known-good version (env-overridable) ONLY if the
+        // live fetch fails — never back to the broken bundled default.
+        const parsePinnedVersion = (raw) => {
+          const parts = String(raw || '').split('.').map((n) => parseInt(n, 10));
+          return parts.length === 3 && parts.every(Number.isFinite) ? parts : null;
+        };
+        const pinnedVersion = parsePinnedVersion(process.env.WA_WEB_VERSION) || [2, 3000, 1043880906];
+        try {
+          const { version } = await fetchLatestWaWebVersion();
+          this._version = Array.isArray(version) && version.length === 3 ? version : pinnedVersion;
+        } catch (err) {
+          this._version = pinnedVersion;
+          this.log('warn', 'boot', `fetchLatestWaWebVersion failed; using pinned WA Web version ${pinnedVersion.join('.')}: ${err.message}`);
+        }
+        this.log('info', 'boot', `Baileys using WA Web version ${this._version.join('.')}`);
       }
 
       const sock = makeWASocket({
