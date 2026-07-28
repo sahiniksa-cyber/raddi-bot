@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 const pino = require('pino');
+const crypto = require('crypto');
 const {
   Browsers,
   DisconnectReason,
@@ -57,6 +58,19 @@ function shouldSyncEssentialHistoryMessage({ syncType } = {}) {
 // emits a connection.update 'close' that triggers scheduleReconnect.
 function isSocketDeadReadyState(readyState) {
   return readyState === 2 || readyState === 3;
+}
+
+// Which Railway instance/process this socket lives on — lets linking diagnostics
+// prove the QR was issued and scanned on the SAME instance.
+const LINK_INSTANCE = String(
+  process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || 'local',
+).slice(0, 8);
+
+// Short, non-reversible fingerprint of a QR ref for diagnostics. NEVER log the
+// raw ref — it is a live linking secret.
+function qrFingerprint(raw) {
+  if (!raw) return 'none';
+  return crypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 10);
 }
 
 function textFromBaileysMessage(message = {}) {
@@ -307,6 +321,26 @@ class BaileysConnectionManager extends EventEmitter {
     }
   }
 
+  // Read-back check for the creds.update trace: confirms the pairing write
+  // actually persisted for this tenant WITHOUT reading the secret values.
+  async verifyPersistedCreds() {
+    try {
+      const r = await this.db.query(
+        `SELECT (auth_state->'baileys'->'creds'->>'registered') AS registered,
+                ((auth_state->'baileys'->'creds'->'me'->>'id') IS NOT NULL) AS has_me
+           FROM whatsapp_sessions WHERE user_id = $1`,
+        [this.userId],
+      );
+      const row = r?.rows?.[0] || {};
+      return {
+        registered: row.registered === 'true' || row.registered === true,
+        hasMe: row.has_me === true,
+      };
+    } catch (err) {
+      return { registered: null, hasMe: null, verifyError: err.message };
+    }
+  }
+
   state() {
     return {
       status: this.status,
@@ -472,7 +506,20 @@ class BaileysConnectionManager extends EventEmitter {
         },
       });
 
-      sock.ev.on('creds.update', saveCreds);
+      // Linking-path trace for creds persistence: begin → saveCreds → read-back
+      // of whatsapp_sessions to confirm the write landed (registered + me.id).
+      sock.ev.on('creds.update', () => {
+        this.log('info', 'auth', `creds.update begin gen=${socketGeneration} instance=${LINK_INSTANCE}`);
+        Promise.resolve()
+          .then(() => saveCreds())
+          .then(() => this.verifyPersistedCreds())
+          .then((v) => {
+            this.log('info', 'auth', `creds.update saved gen=${socketGeneration} registered=${v.registered} hasMe=${v.hasMe}${v.verifyError ? ` verifyError=${v.verifyError}` : ''}`);
+          })
+          .catch((err) => {
+            this.log('error', 'auth', `creds.update saveCreds FAILED gen=${socketGeneration}: ${err.message}`, err);
+          });
+      });
       sock.ev.on('connection.update', (update) => {
         this.handleConnectionUpdate(update, retryCount, socketGeneration).catch((err) => {
           this.lastError = err.message;
@@ -704,6 +751,13 @@ class BaileysConnectionManager extends EventEmitter {
       return;
     }
 
+    // Linking-path trace: log every connection transition + the scan signal
+    // (isNewLogin) so a live scan shows exactly how far pairing got.
+    if (typeof update.connection === 'string' || update.isNewLogin) {
+      const ageMs = this._qrIssuedAt ? Date.now() - this._qrIssuedAt : null;
+      this.log('info', 'connection', `update conn=${update.connection || '-'} isNewLogin=${!!update.isNewLogin} gen=${socketGeneration} instance=${LINK_INSTANCE}${ageMs != null ? ` qrAgeMs=${ageMs}` : ''}`);
+    }
+
     if (update.qr) {
       this.qr = update.qr;
       this.qrVersion++;
@@ -711,7 +765,8 @@ class BaileysConnectionManager extends EventEmitter {
       this.authFailureCount = 0;
       clearTimeout(this._qrWatchdogTimer);
       this._qrWatchdogTimer = null;
-      this.log('info', 'qr', `Baileys QR ready version=${this.qrVersion}`);
+      this._qrIssuedAt = Date.now();
+      this.log('info', 'qr', `Baileys QR ready version=${this.qrVersion} gen=${socketGeneration} instance=${LINK_INSTANCE} fp=${qrFingerprint(this.qr)}`);
       this.setStatus('qr_ready', 'qr');
       this.emit('qr', { qr: this.qr, qrVersion: this.qrVersion });
       this.startQrStuckWatchdog(retryCount, socketGeneration);
