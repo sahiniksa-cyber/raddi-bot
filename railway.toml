@@ -3,8 +3,8 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "npm run start:all"
+startCommand = "node scripts/wa-isolation-service.js"
 restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 100
-healthcheckPath = "/health"
+healthcheckPath = "/healthz"
 healthcheckTimeout = 300
