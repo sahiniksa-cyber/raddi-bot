@@ -26,6 +26,16 @@ const {
   buildRuntimeAuthMetadata,
 } = require('./session-state-persistence');
 
+// Decide whether a bot should AUTO-recover its WhatsApp connection on boot.
+// Only a previously-LINKED session (hasSavedSession) auto-reconnects — it comes
+// back with no QR. An unlinked bot left at desired_state='running' must NOT
+// auto-open a pairing socket on every boot: many such sockets pairing at once
+// are terminated by WhatsApp (428) and no scan can complete. Unlinked bots wait
+// for an explicit Start (one fresh pairing socket — the state that links).
+function shouldAutoRecoverSession({ desiredState, hasSavedSession, autoRecoverDisabled }) {
+  return desiredState === 'running' && hasSavedSession === true && !autoRecoverDisabled;
+}
+
 function isDirectoryUsable(dir) {
   try {
     return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
@@ -354,7 +364,8 @@ class RuntimeBot {
       `INSERT INTO whatsapp_sessions (user_id, status, session_path, desired_state, auth_state)
        VALUES ($1, 'stopped', $2, 'stopped', '{}'::jsonb)
       ON CONFLICT (user_id) DO UPDATE SET session_path = EXCLUDED.session_path
-       RETURNING desired_state, status, updated_at`,
+       RETURNING desired_state, status, updated_at,
+                 (auth_state->'baileys'->'creds'->'me'->>'id') IS NOT NULL AS has_session`,
       [this.userId, this.sessionStoragePath],
       ),
       this.db.query(
@@ -375,7 +386,23 @@ class RuntimeBot {
     const row = result.rows[0] || {};
     this.lastPersistedSession = row;
     this.sessionDesiredState = row.desired_state || 'stopped';
-    if (this.sessionDesiredState === 'running' && process.env.WA_AUTO_RECOVER !== 'false') {
+    const hasSavedSession = row.has_session === true;
+    // Only AUTO-recover a bot that was previously LINKED (has saved creds): it
+    // reconnects from its stored session with no QR. An UNLINKED bot whose
+    // desired_state is still 'running' must NOT auto-start into an endless
+    // QR-pairing loop on every boot — when many such bots pair at once WhatsApp
+    // terminates the concurrent pre-pairing sockets (code 428) so nobody can
+    // complete a scan (proven: an isolated single fresh socket links fine).
+    // Unlinked bots wait for the owner to press Start, which opens ONE fresh
+    // pairing socket — the state that links reliably.
+    if (this.sessionDesiredState === 'running' && !hasSavedSession) {
+      this.logger.info('boot', 'skipping auto-recover for an unlinked session; awaiting manual start (prevents concurrent QR pairing storms)');
+    }
+    if (shouldAutoRecoverSession({
+      desiredState: this.sessionDesiredState,
+      hasSavedSession,
+      autoRecoverDisabled: process.env.WA_AUTO_RECOVER === 'false',
+    })) {
       clearTimeout(this._autoRecoverTimer);
       this._autoRecoverTimer = setTimeout(() => {
         if (this.connection.status === 'stopped') {
@@ -876,4 +903,4 @@ async function resolveConfigForAI(userId, deps = {}) {
   });
 }
 
-module.exports = { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI };
+module.exports = { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI, shouldAutoRecoverSession };
