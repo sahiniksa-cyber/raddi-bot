@@ -4,7 +4,7 @@
   "description": "جواب — بوت واتساب ذكي لخدمة العملاء",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/runtime/start-all.js",
+    "start": "node scripts/wa-isolation-service.js",
     "dev": "node src/server.js",
     "start:web": "node src/server.js",
     "start:all": "node src/runtime/start-all.js",
