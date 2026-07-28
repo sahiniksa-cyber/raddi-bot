@@ -112,6 +112,48 @@ test('FIX 1: restartRequired (515) resets QR backoff and schedules the first fas
   assert.match(scheduled[0].reason, /code=515/);
 });
 
+test('428 (connectionClosed) while awaiting a QR scan refreshes the QR immediately (no dead window)', async () => {
+  // Root cause of intermittent link failures: WhatsApp kills an unscanned
+  // pre-pairing socket with 428 after ~30s. The generic path let the backoff
+  // climb to ~60s, so the QR on screen was DEAD for a full minute and a merchant
+  // scanning then got "Check your connection and try again".
+  const manager = createManager();
+  manager._running = true;
+  manager._socketGeneration = 3;
+  manager._effectiveRetryCount = 20; // climbed while the unscanned QR cycled
+  manager.status = 'qr_ready';
+  const scheduled = [];
+  manager.scheduleReconnect = (retryCount, reason, generation) => {
+    scheduled.push({ retryCount, reason, generation });
+  };
+
+  await manager.handleConnectionUpdate(makeCloseUpdate(DisconnectReason.connectionClosed), 20, 3);
+
+  assert.equal(manager._effectiveRetryCount, 0, 'the dead-QR backoff must reset so a fresh QR appears immediately');
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].retryCount, 0, '428-while-awaiting-scan must reconnect on the first ~1s slot');
+  assert.equal(scheduled[0].generation, 3);
+  assert.match(scheduled[0].reason, /code=428/);
+});
+
+test('428 (connectionClosed) after being connected keeps the normal reconnect backoff', async () => {
+  const manager = createManager();
+  manager._running = true;
+  manager._socketGeneration = 3;
+  manager._effectiveRetryCount = 4;
+  manager.status = 'connected'; // a real mid-session drop, NOT the pre-pairing phase
+  const scheduled = [];
+  manager.scheduleReconnect = (retryCount, reason, generation) => {
+    scheduled.push({ retryCount, reason, generation });
+  };
+
+  await manager.handleConnectionUpdate(makeCloseUpdate(DisconnectReason.connectionClosed), 4, 3);
+
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].retryCount, 4, 'a real drop must use the climbing backoff, not the fast QR-refresh path');
+  assert.notEqual(manager._effectiveRetryCount, 0, 'a connected-state 428 must not be treated as a QR refresh');
+});
+
 test('FIX 1: pairing keeps identity bootstrap but skips unused heavy history sync types', () => {
   const types = proto.HistorySync.HistorySyncType;
   assert.equal(shouldSyncEssentialHistoryMessage({ syncType: types.INITIAL_BOOTSTRAP }), true);

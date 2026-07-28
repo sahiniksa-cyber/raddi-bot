@@ -881,6 +881,23 @@ class BaileysConnectionManager extends EventEmitter {
         this.emit('connection_conflict', { reason: technicalMessage, message: this.lastError });
         return;
       }
+      // WhatsApp terminates an UNSCANNED pre-pairing socket with 428
+      // (connectionClosed) after ~30s. In the generic path below the reconnect
+      // backoff keeps climbing (the socket never stabilizes while waiting for a
+      // scan) until it maxes at ~60s — leaving a long window where the QR shown
+      // on screen is DEAD. A merchant who scans during that window gets
+      // "Check your connection and try again", while scanning during the brief
+      // live window succeeds. That intermittent behavior is the root cause of
+      // failed links. While still awaiting a scan (status is qr_ready), reset the
+      // backoff and reconnect immediately so a FRESH, live QR is always on screen.
+      if (statusCode === DisconnectReason.connectionClosed && this.status === 'qr_ready') {
+        this.lastError = technicalMessage;
+        this._effectiveRetryCount = 0;
+        this.log('info', 'connection', 'Baileys pre-pairing socket closed (428) while awaiting QR scan; refreshing QR immediately');
+        this.emit('disconnected', technicalMessage);
+        this.scheduleReconnect(0, technicalMessage, socketGeneration);
+        return;
+      }
       this.lastError = technicalMessage;
       this.emit('disconnected', technicalMessage);
       this.scheduleReconnect(this._effectiveRetryCount, technicalMessage, socketGeneration);
