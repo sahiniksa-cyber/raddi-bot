@@ -49,6 +49,7 @@ const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('./services/bot/platform-features');
 const { listPausedChats, resumePausedChat } = require('./services/bot/paused-chats');
+const { startRetentionLoop } = require('./services/maintenance/db-retention');
 const { runLearningPass, listLearnedReplies, setLearnedReplyStatus, updateLearnedReply } = require('./services/learning/owner-reply-learner');
 const {
   buildTrainAnalyzeRequest,
@@ -1001,6 +1002,10 @@ async function main() {
   });
   aiRecoveryTimer = startAiRecoveryLoop();
   startLearningLoop();
+  // Phase 1 stability: bounded DB retention/cleanup (env-gated, single-instance
+  // via advisory lock, batched). Prevents the unbounded messages/jobs growth
+  // that caused the 2026-07-07 disk-full outage. Timer is unref'd.
+  startRetentionLoop({ db });
 
   // Start outgoing worker after the dashboard is available.
   if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {
