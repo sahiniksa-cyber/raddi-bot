@@ -30,6 +30,8 @@ function createAlertDispatcher({
   mailer = null,
   ownerPhone = process.env.OWNER_ALERT_PHONE || '',
   ownerEmail = process.env.OWNER_ALERT_EMAIL || '',
+  webhookUrl = process.env.OWNER_ALERT_WEBHOOK_URL || '',
+  fetchImpl = (typeof fetch === 'function' ? fetch : null),
   logger = console,
 } = {}) {
   async function sendWhatsapp(text) {
@@ -57,18 +59,56 @@ function createAlertDispatcher({
     }
   }
 
+  // Phase 8: an OUT-OF-BAND channel that does NOT depend on the WhatsApp bot or
+  // the database — so an outage in exactly those components (the times you most
+  // need to know) still reaches you. Best-effort, timeout-bounded, never throws,
+  // and carries no secrets (just the incident summary).
+  async function sendWebhook(kind, incident, text) {
+    const url = String(webhookUrl || '').trim();
+    if (!url || typeof fetchImpl !== 'function') return false;
+    const payload = {
+      kind,
+      severity: incident.severity || 'critical',
+      component: incident.component,
+      detail: incident.detail || '',
+      key: incident.key || '',
+      scope: incident.scope || '',
+      text,
+      at: new Date().toISOString(),
+    };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), parseInt(process.env.OWNER_ALERT_WEBHOOK_TIMEOUT_MS || '5000', 10));
+    try {
+      const res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      return !!res && (res.ok === true || (typeof res.status === 'number' && res.status >= 200 && res.status < 300));
+    } catch (err) {
+      logger.warn?.('monitor', `owner webhook alert failed: ${err.message}`);
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function dispatch({ kind, incident }) {
     const text = formatIncidentMessage(kind, incident);
     const subject = kind === 'resolved'
       ? `✅ تعافت: ${incident.component}`
       : `🚨 عطل: ${incident.component}`;
     const channels = [];
+    // Each channel is independent & best-effort; a failure in one never blocks
+    // the others, so the out-of-band webhook still fires when WhatsApp/DB are down.
     if (await sendWhatsapp(text)) channels.push('whatsapp');
     if (await sendEmail(subject, text)) channels.push('email');
+    if (await sendWebhook(kind, incident, text)) channels.push('webhook');
     return channels;
   }
 
-  return { dispatch, sendWhatsapp, sendEmail };
+  return { dispatch, sendWhatsapp, sendEmail, sendWebhook };
 }
 
 module.exports = { createAlertDispatcher, formatIncidentMessage, ownerJid };
