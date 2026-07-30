@@ -561,4 +561,5 @@ module.exports = {
   createAdminApiKeysHandlers,
   createCustomerApiKeysHandlers,
   createQuotaStopMessageHandlers,
+  timingSafeEqualStr,
 };
