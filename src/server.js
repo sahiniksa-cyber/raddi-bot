@@ -56,7 +56,7 @@ const {
   buildEnhanceInstructionsRequest,
   buildLearnStyleRequest,
 } = require('./services/ai/meta-prompts');
-const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
+const { createOutgoingWhatsappWorker, startOutgoingRequeueLoop } = require('./workers/outgoing-whatsapp-worker');
 const { createCampaignWorker, recoverCampaignDeliveries } = require('./workers/campaign-worker');
 const { closeCampaignQueue } = require('./queues/campaign-queue');
 const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
@@ -1012,6 +1012,9 @@ async function main() {
     try {
       outgoingWorker = createOutgoingWhatsappWorker({ getUserBot });
       await outgoingWorker.waitUntilReady();
+      // Phase 4 stability: periodically re-enqueue outgoing replies stranded by a
+      // reconnect window (additive; the per-send dedup guard still applies).
+      startOutgoingRequeueLoop({});
       startupState.workers.outgoingWhatsapp = 'ready';
       console.log(`${new Date().toISOString()} [server] outgoing whatsapp worker started`);
     } catch (err) {

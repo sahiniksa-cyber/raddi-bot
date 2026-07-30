@@ -1119,8 +1119,35 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
   return worker;
 }
 
+// Phase 4: periodically re-enqueue outgoing replies that were persisted but lost
+// their live BullMQ job (e.g. BullMQ retries exhausted during a WhatsApp
+// reconnect window). Previously they sat until the next process restart and then
+// expired → silent customer-reply loss. Additive only: it does NOT change the
+// send/dedup/quota logic — the per-send isReplyAlreadySent guard still prevents
+// double sends, and the stale-age expiry inside requeue prevents old-chat spam.
+function startOutgoingRequeueLoop({ logger = console, intervalMs, runner = requeuePersistedOutgoingJobs } = {}) {
+  if (process.env.STABILITY_OUTGOING_REQUEUE_ENABLED === 'false') return null;
+  const ms = intervalMs || parseInt(process.env.STABILITY_OUTGOING_REQUEUE_INTERVAL_MS || '60000', 10);
+  let inFlight = false;
+  const run = async () => {
+    if (inFlight) return;          // never overlap a slow requeue with the next tick
+    inFlight = true;
+    try {
+      await runner();
+    } catch (err) {
+      if (logger && logger.error) logger.error(`${new Date().toISOString()} [${WORKER_NAME}] periodic requeue failed: ${err.message}`);
+    } finally {
+      inFlight = false;
+    }
+  };
+  const timer = setInterval(run, ms);
+  if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
+
 module.exports = {
   cancelDisabledAutoReply,
+  startOutgoingRequeueLoop,
   completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
