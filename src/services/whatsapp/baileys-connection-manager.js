@@ -288,6 +288,7 @@ class BaileysConnectionManager extends EventEmitter {
     this._pairingStartedAt = null;
     this._running = false;
     this._retryTimer = null;
+    this._startRetryCount = 0;
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
     this._qrStuckTimer = null;
@@ -576,11 +577,55 @@ class BaileysConnectionManager extends EventEmitter {
       return true;
     } catch (err) {
       this.lastError = err.message;
-      this._running = false;
-      this.setStatus('error', 'start_failed');
       this.log('error', 'boot', `Baileys start failed: ${err.message}`, err);
+      // Self-heal instead of parking permanently in `error`.
+      return this.scheduleStartRetry(err, retryCount);
+    }
+  }
+
+  // A start() failure used to be a permanent dead-end (status stuck at `error`,
+  // nothing retries). A transient boot failure (DB blip, version fetch, socket
+  // handshake) is now retried with bounded backoff+jitter while the session is
+  // desired-running. Terminal failures (bad credentials) or an exhausted ladder
+  // settle in `error` for manual intervention. Single-flight: `_running` stays
+  // true during the wait so a concurrent start() is ignored, and `stop()`
+  // cancels the pending timer + flips status to `stopped`.
+  scheduleStartRetry(err, retryCount) {
+    const maxRetries = parseInt(process.env.STABILITY_START_MAX_RETRIES || '8', 10);
+    const classification = this._classifyStartError(err);
+
+    if (classification === 'permanent' || this._startRetryCount >= maxRetries) {
+      this._running = false;
+      this._startRetryCount = 0;
+      this.setStatus('error', classification === 'permanent' ? 'start_failed_permanent' : 'start_failed_exhausted');
+      this.log('error', 'boot',
+        `Baileys start not retrying (${classification === 'permanent' ? 'permanent' : `exhausted ${maxRetries} retries`}): ${err.message}`);
       return false;
     }
+    if (this._retryTimer) return false; // a retry is already scheduled (single-flight)
+
+    this._startRetryCount += 1;
+    const idx = Math.min(this._startRetryCount - 1, RECONNECT_DELAYS_MS.length - 1);
+    const delay = RECONNECT_DELAYS_MS[idx] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
+    this.ready = false;
+    this.setStatus('reconnecting', 'start_retry');
+    this.log('warn', 'boot', `Baileys start failed; retry ${this._startRetryCount}/${maxRetries} in ${Math.round(delay / 1000)}s: ${err.message}`);
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
+      if (this.status === 'stopped') return; // stop() won the race
+      this._running = false;                 // release right before re-entering start()
+      this.start(retryCount + 1).catch((e) => {
+        this.log('error', 'boot', `Baileys start retry failed: ${e.message}`, e);
+      });
+    }, delay);
+    if (typeof this._retryTimer.unref === 'function') this._retryTimer.unref();
+    return false;
+  }
+
+  _classifyStartError(err) {
+    const msg = String((err && err.message) || '').toLowerCase();
+    if (/logged?\s*out|unauthorized|invalid credentials|forbidden|401|403/.test(msg)) return 'permanent';
+    return 'transient';
   }
 
   async stop() {
@@ -787,6 +832,7 @@ class BaileysConnectionManager extends EventEmitter {
       clearTimeout(this._qrStuckTimer);
       this._qrStuckTimer = null;
       this.ready = true;
+      this._startRetryCount = 0; // a successful connection clears the start-retry ladder
       this._hasEverConnected = true;
       this.lastProbeState = 'CONNECTED';
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
