@@ -1,0 +1,88 @@
+# خطة تحصين الاستقرار — Stability Hardening Plan
+
+- **الفرع:** `claude/stability-hardening` (مستقل، مبني على `claude/reliability-system` = كود الإنتاج `c521b34` + شبكة أمان CI).
+- **نقطة الرجوع (rollback):** commit `74a4977` (رأس `reliability-system`). أي رجوع = `git reset --hard 74a4977` أو حذف الفرع.
+- **القيود:** لا نشر على Railway/إنتاج، لا اتصال بقاعدة الإنتاج، لا تعديل بيانات عملاء، لا تغيير سلوك الردود/الحملات/الأسعار إلا لضرورة تقنية مباشرة، لا حلول ترقيعية، كل commit مستقل ومختبَر.
+- **الأساس:** [الفحص الشامل](vault/نظام-الموثوقية/الفحص-الشامل-2026-07-30.md) — كل النقاط مؤكَّدة بالكود.
+- **التقييم الحالي:** ~5.5/10 · **الهدف:** أقرب ما يمكن لـ9–10/10.
+
+> **مبدأ الإثبات:** لا ادّعاء ضمان مطلق. كل مرحلة تُثبَت باختبارات سلوكية + قياسات + خطة رجوع.
+
+## بيئة الاختبار (صادق)
+لا يوجد Postgres/Redis محلي، والاختبارات تعتمد Node `node:test` + fakes (بلا اتصال إنتاج). لذلك:
+- منطق القرار (أي صف يُحذف) يُستخرَج لدوال نقية ويُختبَر سلوكياً بصفوف حقيقية في الذاكرة.
+- التنسيق (دفعات/dry-run/قفل/تسجيل) يُختبَر بـ fake db يسجّل الاستدعاءات.
+- اختبار SQL كامل على pg-mem/بيئة staging = طبقة إثبات إضافية موصى بها وموثّقة (تحتاج بيئة مجهّزة منفصلة).
+
+---
+
+## ترتيب التنفيذ وشروط النجاح
+
+كل مرحلة: تعديل محدود → اختبارات سلوكية → `npm test` أخضر → commit مستقل → توثيق رجوع → المرحلة التالية.
+
+### المرحلة 1 — تحصين قاعدة البيانات (retention + cleanup) 🔴
+- **الوضع الحالي:** `messages` و`jobs` تنموان بلا حد؛ صفر `DELETE`؛ `compact-message-media` يدوي/وسائط فقط؛ `app_sessions.cleanup()` بلا مُستدعٍ.
+- **السبب:** لا سياسة احتفاظ ولا تنظيف دوري (سبب انقطاع 2026-07-07).
+- **الخطورة:** حرجة (انقطاع كامل متكرر).
+- **الملفات:** جديد `src/services/maintenance/db-retention.js`؛ تعديل `src/server.js` (حلقة دورية)؛ `.env.example`؛ اختبارات جديدة.
+- **الإصلاح:** خدمة تنظيف بدفعات صغيرة، تحذف فقط الحالات النهائية الأقدم من مدة احتفاظ قابلة للضبط، مع dry-run، advisory lock (نسخة واحدة)، قياس حجم DB قبل/بعد، ANALYZE، تسجيل كامل. فهارس عبر `CREATE INDEX CONCURRENTLY IF NOT EXISTS` (خارج معاملة، best-effort).
+- **يُحفظ دائماً (لا يُحذف أبداً):** `queued_for_ai`, `queued_for_send`؛ jobs غير نهائية (`queued/active/pending/retrying`)؛ أي صف أحدث من مدة الاحتفاظ؛ سجلات الفوترة/التدقيق (جداول منفصلة لا تُمَس).
+- **المخاطر:** حذف خاطئ لصفوف مطلوبة → يُمنع بفلاتر الحالة + الحداثة + dry-run + مدد افتراضية سخيّة (messages 90 يوم، jobs 14 يوم). قفل طويل → يُمنع بالدفعات + عدم DELETE ضخم في معاملة + CONCURRENTLY.
+- **الاختبارات:** لا يحذف الجاري/الحديث؛ يحذف النهائي القديم فقط؛ الدفعات تتوقف عند 0؛ dry-run لا DELETE؛ القفل يُؤخذ ويُحرَّر (حتى عند خطأ)؛ يتخطّى لو القفل مأخوذ؛ تسجيل الأعداد.
+- **الرجوع:** الميزة خلف env (`STABILITY_CLEANUP_ENABLED`)؛ إيقافها = تعطيل فوري. لا migration مدمّرة.
+- **نجاح:** سياسة احتفاظ فعلية + تنظيف دوري آمن + اختبارات خضراء تثبت عدم حذف المطلوب.
+
+### المرحلة 2 — مراقبة التخزين والإنذارات 👁️
+- قياس `pg_database_size` وأكبر الجداول + مساحة القرص (statfs)، مستويات warning/critical قابلة للضبط، health endpoint داخلي آمن، logs عند التجاوز، cooldown/dedup للإنذارات، اختبار يحاكي اقتراب الامتلاء.
+- الملفات: `src/services/monitoring/health-checks.js`, `volume-inspector.js`, `alerts.js`, اختبارات.
+- الرجوع: env-gated thresholds؛ إزالة الفحص لا يؤثر على الباقي.
+
+### المرحلة 3 — الشفاء الذاتي من فشل `start()` 🔧
+- إعادة محاولة backoff+jitter عند فشل عابر بدل البقاء في `error`؛ تمييز أنواع الفشل (عابر/QR/credentials/شبكة/دائم)؛ single-flight (لا sockets مزدوجة)؛ metrics.
+- الملفات: `src/services/whatsapp/baileys-connection-manager.js` (المسار `start()` catch)، اختبارات سلوكية fail→recover.
+- الرجوع: تغيير محصور في مسار الإقلاع؛ env لعدد المحاولات.
+
+### المرحلة 4 — موثوقية طابور الإرسال 📤
+- مؤقّت دوري لإعادة `requeuePersistedOutgoingJobs`؛ استرجاع jobs العالقة بعد restart/موت العامل؛ تصنيف الأخطاء (retryable/غير)؛ dead-letter؛ احترام pause/cancel قبل الإرسال؛ عدم خصم الحصة مرتين.
+- الملفات: `src/workers/outgoing-whatsapp-worker.js`, `src/server.js`, اختبارات restart/disconnect.
+
+### المرحلة 5 — منع الإرسال المكرر (idempotency مقاومة للانهيار) 🔁
+- مفتاح idempotency ثابت لكل إرسال منطقي + uniqueness في DB؛ atomic claim؛ تغطية الانهيار قبل/أثناء/بعد الإرسال؛ منع عاملين لنفس job؛ تسجيل أحداث منع التكرار؛ اختبارات concurrency/crash.
+- الملفات: `outgoing-whatsapp-worker.js`, `message-queue.js`, migration فهرس فريد (قابل للتراجع)، اختبارات.
+
+### المرحلة 6 — QR و408 📱
+- كشف 408/انتهاء صلاحية QR وتجديد فوري (تمديد مسار 428 الحالي)؛ إبطال QR القديم؛ qrVersion++؛ no-store؛ منع محاولات ربط متزامنة؛ تنظيف listeners؛ timeout واضح؛ اختبار سلوكي كامل للربط.
+- الملفات: `baileys-connection-manager.js` (معالج close)، اختبارات.
+
+### المرحلة 7 — كشف السوكِت الميت الصامت 💀
+- مراقبة آخر نشاط/event/إرسال ناجح؛ كشف socket غير مستجيب؛ threshold مناسب؛ reconnect آمن بلا ازدواج؛ metric لعمر آخر نشاط؛ اختبار socket موجود لكن ميت.
+- الملفات: `baileys-connection-manager.js` (heartbeat)، اختبارات.
+
+### المرحلة 8 — قناة إنذار مستقلة 📣
+- قناة لا تعتمد على البوت/DB المتعطّل (webhook/SMTP out-of-band)؛ للحالات المهمة فقط؛ rate-limit/dedup؛ لا secrets في logs؛ اختبار فشل القناة نفسها.
+- الملفات: `src/services/monitoring/alerts.js`, اختبارات.
+
+### المرحلة 9 — تحويل الاختبارات لسلوكية ✅
+- استبدال اختبارات "البحث النصي" للمسارات الحرجة (auth، reconnect، dedup، quota) بتشغيل السلوك الفعلي؛ concurrency/crash/network/QR/health؛ deterministic؛ في CI؛ منع merge عند الفشل.
+- الملفات: `tests/*` (تحويل)، `.github/workflows/ci.yml` (timeout/audit/coverage).
+
+### المرحلة 10 — الأمان والتوسّع 🔒
+- SSRF DNS-rebinding: تثبيت IP المُتحقَّق (`ssrf-guard.js`, `helpers.js`, `store-scanner.js`).
+- كلمة مرور الأدمن المشتركة → نموذج `role='admin'`/`adminEmails` + تقصير جلسة + rate-limit (بلا كسر دخول حالي).
+- CSRF default-deny لكل مسارات التعديل.
+- عزل كل تاجر: حدود/concurrency/circuit-breaker لكل تاجر (jار مزعج).
+- فحوصات: memory/listener/socket/timer leaks، unhandled promises/exceptions، graceful shutdown، DB locks، missing indexes، slow queries، secrets في logs، health مضللة، توافق migrations/الحملات/الحصص.
+
+---
+
+## سجل التنفيذ (يُحدَّث لكل مرحلة)
+| المرحلة | الحالة | Commit | إثبات |
+|---|---|---|---|
+| 1 تحصين DB | 🟡 قيد التنفيذ | — | — |
+| 2–10 | ⚪ لم تبدأ | — | — |
+
+## خطوات النشر الآمن لاحقاً (بعد الاكتمال)
+1. مراجعة PR كامل + CI أخضر + تفعيل branch protection على production.
+2. تشغيل التنظيف بـ`dry-run` أولاً على staging/إنتاج بحدود مراقَبة.
+3. نشر تدريجي + مراقبة حجم DB والذاكرة و connections.
+4. الاحتفاظ بنقطة الرجوع `74a4977`.
