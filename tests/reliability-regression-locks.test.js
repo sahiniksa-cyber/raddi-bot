@@ -27,11 +27,14 @@ test('قفل QR1: نسخة واتساب عبر fetchLatestWaWebVersion + fallbac
   assert.match(src, /WA_WEB_VERSION/);
 });
 
-// [QR2] إغلاق 428 أثناء انتظار مسح الباركود لازم يجدّد الباركود فوراً حتى لا
-// يبقى الباركود المعروض ميتاً.
-test('قفل QR2: إغلاق 428 وحالة qr_ready يجدّد الباركود فوراً', () => {
+// [QR2] إغلاق pre-pairing أثناء انتظار مسح الباركود لازم يجدّد الباركود فوراً
+// حتى لا يبقى المعروض ميتاً — يغطّي 428 (connectionClosed) و408
+// (timedOut/connectionLost) بعد توسعة المرحلة 6.
+test('قفل QR2: إغلاق pre-pairing (428/408) وحالة qr_ready يجدّد الباركود فوراً', () => {
   const src = read('src/services/whatsapp/baileys-connection-manager.js');
-  assert.match(src, /DisconnectReason\.connectionClosed\s*&&\s*this\.status === 'qr_ready'/);
+  assert.match(src, /DisconnectReason\.connectionClosed/);
+  assert.match(src, /DisconnectReason\.timedOut/);
+  assert.match(src, /this\.status === 'qr_ready'/);
   assert.match(src, /refreshing QR immediately/);
 });
 

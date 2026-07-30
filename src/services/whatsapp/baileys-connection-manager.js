@@ -928,18 +928,22 @@ class BaileysConnectionManager extends EventEmitter {
         return;
       }
       // WhatsApp terminates an UNSCANNED pre-pairing socket with 428
-      // (connectionClosed) after ~30s. In the generic path below the reconnect
-      // backoff keeps climbing (the socket never stabilizes while waiting for a
-      // scan) until it maxes at ~60s — leaving a long window where the QR shown
-      // on screen is DEAD. A merchant who scans during that window gets
-      // "Check your connection and try again", while scanning during the brief
-      // live window succeeds. That intermittent behavior is the root cause of
-      // failed links. While still awaiting a scan (status is qr_ready), reset the
-      // backoff and reconnect immediately so a FRESH, live QR is always on screen.
-      if (statusCode === DisconnectReason.connectionClosed && this.status === 'qr_ready') {
+      // (connectionClosed) after ~30s, and — once the socket's finite QR refs
+      // are exhausted — with 408 (timedOut / connectionLost). In the generic
+      // path below the reconnect backoff keeps climbing (the socket never
+      // stabilizes while waiting for a scan) until it maxes at ~60s — leaving a
+      // long window where the QR shown on screen is DEAD. A merchant who scans
+      // during that window gets "Check your connection and try again". While
+      // still awaiting a scan (status is qr_ready), reset the backoff and
+      // reconnect immediately so a FRESH, live QR is always on screen. Covers
+      // BOTH close codes so no pre-pairing close path can strand a dead QR.
+      const isPrePairingClose = statusCode === DisconnectReason.connectionClosed
+        || statusCode === DisconnectReason.timedOut
+        || statusCode === DisconnectReason.connectionLost;
+      if (isPrePairingClose && this.status === 'qr_ready') {
         this.lastError = technicalMessage;
         this._effectiveRetryCount = 0;
-        this.log('info', 'connection', 'Baileys pre-pairing socket closed (428) while awaiting QR scan; refreshing QR immediately');
+        this.log('info', 'connection', `Baileys pre-pairing socket closed (code=${statusCode || 'unknown'}) while awaiting QR scan; refreshing QR immediately`);
         this.emit('disconnected', technicalMessage);
         this.scheduleReconnect(0, technicalMessage, socketGeneration);
         return;
