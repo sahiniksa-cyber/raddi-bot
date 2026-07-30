@@ -12,7 +12,7 @@
     "db:compact-message-media": "node scripts/compact-message-media.js",
     "migrate:json": "node scripts/migrate-json-to-postgres.js",
     "worker:ai": "node src/workers/ai-worker.js",
-    "test": "node --test --test-timeout=30000"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20.18.1"
