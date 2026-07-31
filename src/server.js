@@ -27,6 +27,10 @@ try { helmet = require('helmet'); } catch (_) {
 const { createBotResolver } = require('./runtime/bot-resolver');
 const { recoverRunningBots } = require('./runtime/boot-recovery');
 const requireSameOrigin = require('./middleware/require-same-origin');
+// Fallback keeps a stubbed/legacy middleware (no helper attached, e.g. in tests)
+// working: default to the legacy allowlist decision.
+const shouldEnforceSameOrigin = requireSameOrigin.shouldEnforceSameOrigin
+  || (({ path, protectedPrefixes = [] }) => protectedPrefixes.some((p) => String(path).startsWith(p)));
 const { assertPublicUrl } = require('./middleware/ssrf-guard');
 const { checkMessageQuota, decrementMessageQuota } = require('./services/billing/message-quota');
 
@@ -49,13 +53,14 @@ const { getBillingSettings } = require('./services/billing/billing-settings');
 const { organizeProductsForConfig } = require('./services/products/product-import');
 const { findAutoReply, collectInstantReplies, combineCannedAndAi } = require('./services/bot/platform-features');
 const { listPausedChats, resumePausedChat } = require('./services/bot/paused-chats');
+const { startRetentionLoop } = require('./services/maintenance/db-retention');
 const { runLearningPass, listLearnedReplies, setLearnedReplyStatus, updateLearnedReply } = require('./services/learning/owner-reply-learner');
 const {
   buildTrainAnalyzeRequest,
   buildEnhanceInstructionsRequest,
   buildLearnStyleRequest,
 } = require('./services/ai/meta-prompts');
-const { createOutgoingWhatsappWorker } = require('./workers/outgoing-whatsapp-worker');
+const { createOutgoingWhatsappWorker, startOutgoingRequeueLoop } = require('./workers/outgoing-whatsapp-worker');
 const { createCampaignWorker, recoverCampaignDeliveries } = require('./workers/campaign-worker');
 const { closeCampaignQueue } = require('./queues/campaign-queue');
 const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
@@ -280,9 +285,19 @@ function createApp() {
   const CSRF_SKIP_PATHS = new Set([
     // Add explicit webhook paths here, e.g. '/api/billing/webhook/moyasar'
   ]);
+  // Phase 10: opt-in strict (default-deny) CSRF. When STABILITY_STRICT_CSRF=true
+  // EVERY mutating /api request is same-origin checked (except webhooks/skips),
+  // not just the allowlisted prefixes. Off by default so production behavior is
+  // unchanged until validated.
+  const STRICT_CSRF = process.env.STABILITY_STRICT_CSRF === 'true';
   app.use((req, res, next) => {
-    if (CSRF_SKIP_PATHS.has(req.path)) return next();
-    if (CSRF_PROTECTED_PREFIXES.some(p => req.path.startsWith(p))) {
+    if (shouldEnforceSameOrigin({
+      method: req.method,
+      path: req.path,
+      strict: STRICT_CSRF,
+      protectedPrefixes: CSRF_PROTECTED_PREFIXES,
+      skipPaths: CSRF_SKIP_PATHS,
+    })) {
       return requireSameOrigin(req, res, next);
     }
     return next();
@@ -1001,12 +1016,19 @@ async function main() {
   });
   aiRecoveryTimer = startAiRecoveryLoop();
   startLearningLoop();
+  // Phase 1 stability: bounded DB retention/cleanup (env-gated, single-instance
+  // via advisory lock, batched). Prevents the unbounded messages/jobs growth
+  // that caused the 2026-07-07 disk-full outage. Timer is unref'd.
+  startRetentionLoop({ db });
 
   // Start outgoing worker after the dashboard is available.
   if (process.env.OUTGOING_WORKER_DISABLED !== 'true') {
     try {
       outgoingWorker = createOutgoingWhatsappWorker({ getUserBot });
       await outgoingWorker.waitUntilReady();
+      // Phase 4 stability: periodically re-enqueue outgoing replies stranded by a
+      // reconnect window (additive; the per-send dedup guard still applies).
+      startOutgoingRequeueLoop({});
       startupState.workers.outgoingWhatsapp = 'ready';
       console.log(`${new Date().toISOString()} [server] outgoing whatsapp worker started`);
     } catch (err) {

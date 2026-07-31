@@ -60,6 +60,17 @@ function isSocketDeadReadyState(readyState) {
   return readyState === 2 || readyState === 3;
 }
 
+// Phase 7: active-liveness decision. A half-open/zombie socket keeps
+// readyState=OPEN but receives no frames. On a healthy link Baileys' keepalive
+// produces inbound traffic ~every 20s, so silence well past that = dead. Pure &
+// side-effect-free so it is unit-testable; normal idle never trips it because
+// keepalive traffic keeps lastActivityAt fresh.
+function socketIdleExceeded({ ready, lastActivityAt, now, idleMaxMs } = {}) {
+  if (!ready) return false;
+  if (!Number.isFinite(lastActivityAt) || !Number.isFinite(idleMaxMs) || idleMaxMs <= 0) return false;
+  return (now - lastActivityAt) > idleMaxMs;
+}
+
 // Which Railway instance/process this socket lives on — lets linking diagnostics
 // prove the QR was issued and scanned on the SAME instance.
 const LINK_INSTANCE = String(
@@ -288,6 +299,8 @@ class BaileysConnectionManager extends EventEmitter {
     this._pairingStartedAt = null;
     this._running = false;
     this._retryTimer = null;
+    this._startRetryCount = 0;
+    this._lastActivityAt = Date.now();
     this._heartbeatTimer = null;
     this._qrWatchdogTimer = null;
     this._qrStuckTimer = null;
@@ -473,6 +486,11 @@ class BaileysConnectionManager extends EventEmitter {
       });
 
       this.sock = sock;
+      // Active-liveness signal: every inbound WS frame (incl. Baileys keepalive
+      // responses ~every 20s) refreshes the activity clock, so the heartbeat can
+      // tell a silent-but-OPEN zombie socket apart from a normally idle one.
+      this._lastActivityAt = Date.now();
+      try { sock?.ws?.on?.('message', () => { this._lastActivityAt = Date.now(); }); } catch (_) { /* passive listener */ }
       const socketGeneration = ++this._socketGeneration;
       // Each start() builds a fresh `client` wrapper closed over the new
       // `sock` const, and atomically replaces `this.client`. Callers that
@@ -576,11 +594,55 @@ class BaileysConnectionManager extends EventEmitter {
       return true;
     } catch (err) {
       this.lastError = err.message;
-      this._running = false;
-      this.setStatus('error', 'start_failed');
       this.log('error', 'boot', `Baileys start failed: ${err.message}`, err);
+      // Self-heal instead of parking permanently in `error`.
+      return this.scheduleStartRetry(err, retryCount);
+    }
+  }
+
+  // A start() failure used to be a permanent dead-end (status stuck at `error`,
+  // nothing retries). A transient boot failure (DB blip, version fetch, socket
+  // handshake) is now retried with bounded backoff+jitter while the session is
+  // desired-running. Terminal failures (bad credentials) or an exhausted ladder
+  // settle in `error` for manual intervention. Single-flight: `_running` stays
+  // true during the wait so a concurrent start() is ignored, and `stop()`
+  // cancels the pending timer + flips status to `stopped`.
+  scheduleStartRetry(err, retryCount) {
+    const maxRetries = parseInt(process.env.STABILITY_START_MAX_RETRIES || '8', 10);
+    const classification = this._classifyStartError(err);
+
+    if (classification === 'permanent' || this._startRetryCount >= maxRetries) {
+      this._running = false;
+      this._startRetryCount = 0;
+      this.setStatus('error', classification === 'permanent' ? 'start_failed_permanent' : 'start_failed_exhausted');
+      this.log('error', 'boot',
+        `Baileys start not retrying (${classification === 'permanent' ? 'permanent' : `exhausted ${maxRetries} retries`}): ${err.message}`);
       return false;
     }
+    if (this._retryTimer) return false; // a retry is already scheduled (single-flight)
+
+    this._startRetryCount += 1;
+    const idx = Math.min(this._startRetryCount - 1, RECONNECT_DELAYS_MS.length - 1);
+    const delay = RECONNECT_DELAYS_MS[idx] + Math.floor(Math.random() * RETRY.JITTER_MAX_MS);
+    this.ready = false;
+    this.setStatus('reconnecting', 'start_retry');
+    this.log('warn', 'boot', `Baileys start failed; retry ${this._startRetryCount}/${maxRetries} in ${Math.round(delay / 1000)}s: ${err.message}`);
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
+      if (this.status === 'stopped') return; // stop() won the race
+      this._running = false;                 // release right before re-entering start()
+      this.start(retryCount + 1).catch((e) => {
+        this.log('error', 'boot', `Baileys start retry failed: ${e.message}`, e);
+      });
+    }, delay);
+    if (typeof this._retryTimer.unref === 'function') this._retryTimer.unref();
+    return false;
+  }
+
+  _classifyStartError(err) {
+    const msg = String((err && err.message) || '').toLowerCase();
+    if (/logged?\s*out|unauthorized|invalid credentials|forbidden|401|403/.test(msg)) return 'permanent';
+    return 'transient';
   }
 
   async stop() {
@@ -685,6 +747,15 @@ class BaileysConnectionManager extends EventEmitter {
         }
         return;
       }
+      // Active liveness: readyState says OPEN but no inbound frame has arrived
+      // for far longer than the keepalive interval → half-open zombie. Reconnect.
+      const idleMaxMs = parseInt(process.env.STABILITY_SOCKET_IDLE_MAX_MS || '90000', 10);
+      if (socketIdleExceeded({ ready: this.ready, lastActivityAt: this._lastActivityAt, now: Date.now(), idleMaxMs })) {
+        const silentMs = Date.now() - this._lastActivityAt;
+        this.log('warn', 'heartbeat', `socket silent for ${Math.round(silentMs / 1000)}s (readyState=${readyState}); forcing reconnect (zombie)`);
+        this.scheduleReconnect(0, 'heartbeat socket silent (zombie)');
+        return;
+      }
       this.heartbeatFailures = 0;
       this.emitState('heartbeat_ok');
     }, TIMERS.HEARTBEAT_INTERVAL_MS);
@@ -751,6 +822,8 @@ class BaileysConnectionManager extends EventEmitter {
       return;
     }
 
+    this._lastActivityAt = Date.now(); // any connection.update is proof of life
+
     // Linking-path trace: log every connection transition + the scan signal
     // (isNewLogin) so a live scan shows exactly how far pairing got.
     if (typeof update.connection === 'string' || update.isNewLogin) {
@@ -787,6 +860,8 @@ class BaileysConnectionManager extends EventEmitter {
       clearTimeout(this._qrStuckTimer);
       this._qrStuckTimer = null;
       this.ready = true;
+      this._startRetryCount = 0; // a successful connection clears the start-retry ladder
+      this._lastActivityAt = Date.now();
       this._hasEverConnected = true;
       this.lastProbeState = 'CONNECTED';
       this.phone = jidNormalizedUser(this.sock?.user?.id || '').split('@')[0].split(':')[0] || this.phone;
@@ -882,18 +957,22 @@ class BaileysConnectionManager extends EventEmitter {
         return;
       }
       // WhatsApp terminates an UNSCANNED pre-pairing socket with 428
-      // (connectionClosed) after ~30s. In the generic path below the reconnect
-      // backoff keeps climbing (the socket never stabilizes while waiting for a
-      // scan) until it maxes at ~60s — leaving a long window where the QR shown
-      // on screen is DEAD. A merchant who scans during that window gets
-      // "Check your connection and try again", while scanning during the brief
-      // live window succeeds. That intermittent behavior is the root cause of
-      // failed links. While still awaiting a scan (status is qr_ready), reset the
-      // backoff and reconnect immediately so a FRESH, live QR is always on screen.
-      if (statusCode === DisconnectReason.connectionClosed && this.status === 'qr_ready') {
+      // (connectionClosed) after ~30s, and — once the socket's finite QR refs
+      // are exhausted — with 408 (timedOut / connectionLost). In the generic
+      // path below the reconnect backoff keeps climbing (the socket never
+      // stabilizes while waiting for a scan) until it maxes at ~60s — leaving a
+      // long window where the QR shown on screen is DEAD. A merchant who scans
+      // during that window gets "Check your connection and try again". While
+      // still awaiting a scan (status is qr_ready), reset the backoff and
+      // reconnect immediately so a FRESH, live QR is always on screen. Covers
+      // BOTH close codes so no pre-pairing close path can strand a dead QR.
+      const isPrePairingClose = statusCode === DisconnectReason.connectionClosed
+        || statusCode === DisconnectReason.timedOut
+        || statusCode === DisconnectReason.connectionLost;
+      if (isPrePairingClose && this.status === 'qr_ready') {
         this.lastError = technicalMessage;
         this._effectiveRetryCount = 0;
-        this.log('info', 'connection', 'Baileys pre-pairing socket closed (428) while awaiting QR scan; refreshing QR immediately');
+        this.log('info', 'connection', `Baileys pre-pairing socket closed (code=${statusCode || 'unknown'}) while awaiting QR scan; refreshing QR immediately`);
         this.emit('disconnected', technicalMessage);
         this.scheduleReconnect(0, technicalMessage, socketGeneration);
         return;
@@ -1076,5 +1155,6 @@ module.exports = {
   toWhatsappWebMessage,
   quotedStanzaIdFromBaileysMessage,
   isSocketDeadReadyState,
+  socketIdleExceeded,
   shouldSyncEssentialHistoryMessage,
 };

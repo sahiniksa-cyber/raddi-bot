@@ -24,6 +24,9 @@ function isPrivateIp(ip) {
     if (a === 169 && b === 254) return true;         // 169.254.0.0/16
     if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
     if (a === 192 && b === 168) return true;         // 192.168.0.0/16
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT (often cloud-internal)
+    if (a === 192 && b === 0 && parts[2] === 0) return true; // 192.0.0.0/24 IETF protocol assignments
+    if (a === 198 && (b === 18 || b === 19)) return true;    // 198.18.0.0/15 benchmarking
     if (a === 0) return true;                        // 0.0.0.0/8
     if (a >= 224) return true;                       // multicast / reserved
     return false;
@@ -33,9 +36,19 @@ function isPrivateIp(ip) {
     if (lower === '::1' || lower === '::') return true;
     if (lower.startsWith('fe80')) return true;        // link-local
     if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // ULA fc00::/7
-    // IPv4-mapped IPv6: ::ffff:a.b.c.d
+    // IPv4-mapped IPv6, textual form: ::ffff:a.b.c.d
     const v4mapped = lower.match(/^::ffff:([0-9.]+)$/i);
     if (v4mapped) return isPrivateIp(v4mapped[1]);
+    // IPv4-mapped IPv6, hextet form: Node normalizes ::ffff:127.0.0.1 to
+    // ::ffff:7f00:1, so rebuild the dotted IPv4 from the two low hextets and
+    // re-check. Without this, a mapped loopback/private host slips through.
+    const v4mappedHex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (v4mappedHex) {
+      const hi = parseInt(v4mappedHex[1], 16);
+      const lo = parseInt(v4mappedHex[2], 16);
+      const dotted = [(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff].join('.');
+      return isPrivateIp(dotted);
+    }
     return false;
   }
 
@@ -56,7 +69,11 @@ async function assertPublicUrl(rawUrl) {
     err.code = 'UNSUPPORTED_PROTOCOL';
     throw err;
   }
-  const host = parsed.hostname.toLowerCase();
+  // parsed.hostname keeps the brackets for IPv6 literals ("[::1]"); strip them
+  // so net.isIP recognizes the literal and we classify it directly WITHOUT a
+  // DNS lookup — deterministic even where IPv6 resolution is unavailable (e.g.
+  // CI runners), and closes the mapped-literal (::ffff:127.0.0.1) bypass.
+  const host = parsed.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
 
   // Direct IP literals
   if (net.isIP(host)) {

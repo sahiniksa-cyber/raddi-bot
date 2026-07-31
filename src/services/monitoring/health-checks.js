@@ -81,6 +81,62 @@ async function checkWhatsappSessions({ database = db, staleMs = parseInt(process
   });
 }
 
+const GIB = 1024 * 1024 * 1024;
+
+// Best-effort largest-tables breakdown (for logs / the owner health endpoint).
+async function largestTables(database = db, limit = 5) {
+  try {
+    const r = await database.query(
+      `SELECT relname AS table, pg_total_relation_size(c.oid) AS bytes
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'r' AND n.nspname = 'public'
+        ORDER BY pg_total_relation_size(c.oid) DESC
+        LIMIT $1`,
+      [limit],
+    );
+    return (r.rows || []).map((row) => ({ table: row.table, bytes: Number(row.bytes) }));
+  } catch (_) {
+    return [];
+  }
+}
+
+// Phase 2: DB storage-size check. Opens a warning/critical incident (→ alert)
+// BEFORE the volume fills — the early warning that was missing in the
+// 2026-07-07 outage. Reports size only (no alert) until a capacity cap is set
+// via STABILITY_DB_SIZE_CAP_GB / _BYTES. On any query error it stays ok=true to
+// avoid false alarms.
+async function checkStorage({ database = db, env = process.env } = {}) {
+  const base = { key: 'storage', component: 'مساحة قاعدة البيانات', scope: 'global' };
+  try {
+    if (!database.isConfigured?.()) return { ...base, severity: 'warning', ok: true, detail: 'DATABASE_URL غير مضبوط' };
+    const r = await database.query('SELECT pg_database_size(current_database()) AS bytes');
+    const bytes = Number(r?.rows?.[0]?.bytes);
+    if (!Number.isFinite(bytes)) return { ...base, severity: 'warning', ok: true, detail: 'تعذّر قياس الحجم' };
+    const gb = (bytes / GIB).toFixed(2);
+
+    const capBytesEnv = parseInt(env.STABILITY_DB_SIZE_CAP_BYTES, 10);
+    const capGbEnv = parseFloat(env.STABILITY_DB_SIZE_CAP_GB);
+    const cap = Number.isFinite(capBytesEnv) && capBytesEnv > 0
+      ? capBytesEnv
+      : (Number.isFinite(capGbEnv) && capGbEnv > 0 ? Math.round(capGbEnv * GIB) : 0);
+    const warnPct = Number.isFinite(parseInt(env.STABILITY_DB_WARN_PCT, 10)) ? parseInt(env.STABILITY_DB_WARN_PCT, 10) : 70;
+    const critPct = Number.isFinite(parseInt(env.STABILITY_DB_CRITICAL_PCT, 10)) ? parseInt(env.STABILITY_DB_CRITICAL_PCT, 10) : 85;
+
+    const meta = { bytes, cap };
+    if (!cap) {
+      return { ...base, severity: 'warning', ok: true, detail: `الحجم ${gb}GB (اضبط STABILITY_DB_SIZE_CAP_GB لتنبيهات النسبة)`, meta };
+    }
+    const pct = Math.round((bytes / cap) * 100);
+    meta.pct = pct;
+    if (pct >= critPct) return { ...base, severity: 'critical', ok: false, detail: `قاعدة البيانات ${pct}% (${gb}GB) — حرج: قرب الامتلاء`, meta };
+    if (pct >= warnPct) return { ...base, severity: 'warning', ok: false, detail: `قاعدة البيانات ${pct}% (${gb}GB) — تحذير`, meta };
+    return { ...base, severity: 'warning', ok: true, detail: `قاعدة البيانات ${pct}% (${gb}GB)`, meta };
+  } catch (err) {
+    return { ...base, severity: 'warning', ok: true, detail: `تعذّر فحص الحجم: ${err.message}` };
+  }
+}
+
 async function collectHealthChecks({ database = db, redisModule = redis, getQueues = null, thresholds = {} } = {}) {
   const [database_, redis_, queues_] = await Promise.all([
     checkDatabase(database),
@@ -90,6 +146,11 @@ async function collectHealthChecks({ database = db, redisModule = redis, getQueu
   const checks = [database_, redis_, queues_];
   // WhatsApp checks need the DB; skip them when the DB itself is down to avoid noise.
   if (database_.ok) {
+    try {
+      checks.push(await checkStorage({ database }));
+    } catch (_) {
+      // storage probe is best-effort; never let it break the health pass.
+    }
     try {
       checks.push(...await checkWhatsappSessions({ database }));
     } catch (_) {
@@ -104,5 +165,7 @@ module.exports = {
   checkRedis,
   checkQueues,
   checkWhatsappSessions,
+  checkStorage,
+  largestTables,
   collectHealthChecks,
 };

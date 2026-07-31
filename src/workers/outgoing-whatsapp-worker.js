@@ -163,26 +163,46 @@ async function routePreSendEscalation({
 // The user_id filter is load-bearing: getMessage looks up by (user_id, key.id),
 // and we MUST guarantee the row we write under one user's key.id can never be
 // updated by a different user's worker even if they share a Postgres pool.
+// Phase 5: this write is the crash-safe DEDUP ANCHOR — the very first durable
+// mark after a successful send. isReplyAlreadySent (checked before every send)
+// treats a set whatsapp_message_id as "already delivered", so a reconnect/crash
+// requeue won't resend. The old code swallowed a single failure silently,
+// leaving no anchor → a requeue could resend a duplicate. Now it retries a
+// transient DB failure (the common case) before giving up, and returns whether
+// the anchor was persisted. Order/billing unchanged.
 async function recordWhatsappMessageId({
   userId,
   conversationId,
   sender,
   replyMessageId,
   whatsappMessageId,
+  database = db,
+  attempts = parseInt(process.env.STABILITY_RECORD_SENDID_RETRIES || '3', 10),
 }) {
-  if (!userId || !conversationId || !sender || !replyMessageId || !whatsappMessageId) return;
-  await db.query(
-    `UPDATE messages
-        SET whatsapp_message_id = $5
-      WHERE user_id = $1
-        AND conversation_id = $2
-        AND sender = $3
-        AND id = $4
-        AND channel_id = 'whatsapp'`,
-    [userId, conversationId, sender, replyMessageId, String(whatsappMessageId)],
-  ).catch((err) => {
-    console.warn(`${new Date().toISOString()} [${WORKER_NAME}] failed to record whatsapp_message_id: ${err.message}`);
-  });
+  if (!userId || !conversationId || !sender || !replyMessageId || !whatsappMessageId) return false;
+  const maxAttempts = Number.isFinite(attempts) && attempts > 0 ? attempts : 3;
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      await database.query(
+        `UPDATE messages
+            SET whatsapp_message_id = $5
+          WHERE user_id = $1
+            AND conversation_id = $2
+            AND sender = $3
+            AND id = $4
+            AND channel_id = 'whatsapp'`,
+        [userId, conversationId, sender, replyMessageId, String(whatsappMessageId)],
+      );
+      return true;
+    } catch (err) {
+      if (i >= maxAttempts) {
+        console.warn(`${new Date().toISOString()} [${WORKER_NAME}] failed to record whatsapp_message_id after ${maxAttempts} attempts (dedup anchor at risk): ${err.message}`);
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50 * i));
+    }
+  }
+  return false;
 }
 
 async function getPersistedJobCreatedAt(jobKey) {
@@ -1119,8 +1139,36 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
   return worker;
 }
 
+// Phase 4: periodically re-enqueue outgoing replies that were persisted but lost
+// their live BullMQ job (e.g. BullMQ retries exhausted during a WhatsApp
+// reconnect window). Previously they sat until the next process restart and then
+// expired → silent customer-reply loss. Additive only: it does NOT change the
+// send/dedup/quota logic — the per-send isReplyAlreadySent guard still prevents
+// double sends, and the stale-age expiry inside requeue prevents old-chat spam.
+function startOutgoingRequeueLoop({ logger = console, intervalMs, runner = requeuePersistedOutgoingJobs } = {}) {
+  if (process.env.STABILITY_OUTGOING_REQUEUE_ENABLED === 'false') return null;
+  const ms = intervalMs || parseInt(process.env.STABILITY_OUTGOING_REQUEUE_INTERVAL_MS || '60000', 10);
+  let inFlight = false;
+  const run = async () => {
+    if (inFlight) return;          // never overlap a slow requeue with the next tick
+    inFlight = true;
+    try {
+      await runner();
+    } catch (err) {
+      if (logger && logger.error) logger.error(`${new Date().toISOString()} [${WORKER_NAME}] periodic requeue failed: ${err.message}`);
+    } finally {
+      inFlight = false;
+    }
+  };
+  const timer = setInterval(run, ms);
+  if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
+
 module.exports = {
   cancelDisabledAutoReply,
+  startOutgoingRequeueLoop,
+  recordWhatsappMessageId,
   completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
