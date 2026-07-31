@@ -27,6 +27,10 @@ try { helmet = require('helmet'); } catch (_) {
 const { createBotResolver } = require('./runtime/bot-resolver');
 const { recoverRunningBots } = require('./runtime/boot-recovery');
 const requireSameOrigin = require('./middleware/require-same-origin');
+// Fallback keeps a stubbed/legacy middleware (no helper attached, e.g. in tests)
+// working: default to the legacy allowlist decision.
+const shouldEnforceSameOrigin = requireSameOrigin.shouldEnforceSameOrigin
+  || (({ path, protectedPrefixes = [] }) => protectedPrefixes.some((p) => String(path).startsWith(p)));
 const { assertPublicUrl } = require('./middleware/ssrf-guard');
 const { checkMessageQuota, decrementMessageQuota } = require('./services/billing/message-quota');
 
@@ -281,9 +285,19 @@ function createApp() {
   const CSRF_SKIP_PATHS = new Set([
     // Add explicit webhook paths here, e.g. '/api/billing/webhook/moyasar'
   ]);
+  // Phase 10: opt-in strict (default-deny) CSRF. When STABILITY_STRICT_CSRF=true
+  // EVERY mutating /api request is same-origin checked (except webhooks/skips),
+  // not just the allowlisted prefixes. Off by default so production behavior is
+  // unchanged until validated.
+  const STRICT_CSRF = process.env.STABILITY_STRICT_CSRF === 'true';
   app.use((req, res, next) => {
-    if (CSRF_SKIP_PATHS.has(req.path)) return next();
-    if (CSRF_PROTECTED_PREFIXES.some(p => req.path.startsWith(p))) {
+    if (shouldEnforceSameOrigin({
+      method: req.method,
+      path: req.path,
+      strict: STRICT_CSRF,
+      protectedPrefixes: CSRF_PROTECTED_PREFIXES,
+      skipPaths: CSRF_SKIP_PATHS,
+    })) {
       return requireSameOrigin(req, res, next);
     }
     return next();
