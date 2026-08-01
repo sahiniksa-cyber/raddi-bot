@@ -371,9 +371,20 @@ function cleanupFinalReplyDeterministically(text) {
   if (!input) return '';
   const kept = [];
   const seen = new Set();
+  const preserveBlanks = process.env.CLEAN_LINE_BREAKS_ENABLED === 'true';
   for (const rawLine of input.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line) continue;
+    if (!line) {
+      // Preserve the merchant's blank-line spacing (up to 2 consecutive), so
+      // the paragraph gaps set by the line-break formatter survive this dedup
+      // step instead of being flattened to single newlines. Legacy = strip.
+      if (preserveBlanks && kept.length) {
+        let trailingBlanks = 0;
+        for (let i = kept.length - 1; i >= 0 && kept[i] === ''; i--) trailingBlanks++;
+        if (trailingBlanks < 2) kept.push('');
+      }
+      continue;
+    }
     const key = normalizeForFacts(line).replace(/[^ء-يa-z0-9]+/gi, ' ').trim();
     const greetingAlreadyPresent = GREETING_PRESENT_RE.test(kept.join(' '));
     if (greetingAlreadyPresent && ORPHAN_GREETING_CONTINUATION_RE.test(line)) continue;
@@ -381,6 +392,7 @@ function cleanupFinalReplyDeterministically(text) {
     if (key) seen.add(key);
     kept.push(line);
   }
+  while (kept.length && kept[kept.length - 1] === '') kept.pop();
   return kept.join('\n').trim();
 }
 
