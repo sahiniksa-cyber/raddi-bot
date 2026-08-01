@@ -165,8 +165,41 @@ function needsRepairForCopOut(reply, matched = []) {
 // مقارنة بالخطة الأصلية، دون إضافة false positives (اختبر بشمول على 8+ حالات).
 const OFFER_HELP = /\s*،?\s*(?:كيف|كيفاش|وش)\s+(?:أقدر|اقدر|يمكنني|ممكن|تحب|تبي)?\s*(?:أ|ا|م)?(?:ساعد|خدم|عاون)\S*\s*(?:اليوم|حضرتك)?\s*[؟?]*/g;
 
+// خاتمة الحشو التي منعها المالك ("إذا تحتاج/عندك أي شي ثاني أنا هنا/موجود"،
+// "في خدمتك"، "تبي شي ثاني؟"). البرومنت وحده لا يمنعها (النموذج يعيد صياغتها —
+// إنتاج 2026-08-01: "إذا عندك أي استفسار ثاني، أنا هنا" أُرسلت رغم المنع). حذف
+// حتمي مثبّت في النهاية فقط، فلا يمسّ محتوى وسط الرسالة. خلف مفتاح. لا يمسّ
+// "المنتج موجود"/"الرابط هنا" لأنها بلا توقيع العرض (أنا / شرط / "شي ثاني").
+// ملاحظة: \b في JS للأحرف اللاتينية فقط ولا يعمل مع العربية، فنستخدم
+// (?![ء-ي]) = "غير متبوع بحرف عربي" كحدّ كلمة عربي صحيح.
+const CLOSING_FILLER_RES = [
+  /[\s،,.\-–—]*(?:إذا|اذا|لو)\s+(?:تحتاج|احتجت|احتجتي|عندك|عندكم|حاب|حابب|بغيت|ودك|في)[^\n]*?(?:أنا|انا)?\s*(?:هنا|موجود|حاضر|بخدمتك|خدمتك|تأمر|بلّغني|بلغني|خبّرني|خبرني|كلّمني|كلمني|تواصل)(?![ء-ي])[^\n]*$/u,
+  /[\s،,.\-–—]*(?:أنا|انا)\s*(?:هنا|موجود|حاضر)(?![ء-ي])(?:\s*(?:لو|إذا|اذا)\s*(?:تحتاج|احتجت|عندك)[^\n]*)?$/u,
+  /[\s،,.\-–—]*(?:أي|اي)\s*(?:شي|شيء)\s*(?:ثاني|آخر|اخر|إضافي|اضافي)(?![ء-ي])[^\n]*$/u,
+  /[\s،,.\-–—]*(?:تبي|تبغى|تبغي|تحب|تأمر|تريد|ودك)\s*(?:شي|شيء)?\s*(?:ثاني|آخر|اخر|إضافي|اضافي)(?![ء-ي])\s*[؟?]*\s*$/u,
+  /[\s،,.\-–—]*(?:أنا|انا)?\s*(?:في\s*خدمتك|بخدمتك|تحت\s*أمرك)(?![ء-ي])\s*[؟?]*\s*$/u,
+];
+
+function stripClosingFiller(reply) {
+  if (process.env.CLOSING_FILLER_STRIP_ENABLED !== 'true') return String(reply || '');
+  let out = String(reply || '');
+  for (let pass = 0; pass < 5; pass++) {
+    let cut = false;
+    for (const re of CLOSING_FILLER_RES) {
+      const m = re.exec(out);
+      if (m && m.index >= 0 && m[0].trim().length) {
+        const head = out.slice(0, m.index).replace(/[\s،,.\-–—]+$/u, '').trim();
+        if (head.length >= 2) { out = head; cut = true; break; } // never nuke whole reply
+      }
+    }
+    if (!cut) break;
+  }
+  return out.trim();
+}
+
 function stripStyleViolations(reply) {
   let out = String(reply || '').replace(OFFER_HELP, '');
+  out = stripClosingFiller(out);
   out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
   // نظّف علامة ترقيم متدلية في النهاية (مثل "! ," بعد الحذف)
   out = out.replace(/[،,]\s*$/, '').replace(/!\s*$/, '!').trim();
@@ -222,5 +255,5 @@ function enforceStyleRules(reply, config = {}) {
 module.exports = {
   enforceLength, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
-  enforceStyleRules, botSignalsTransfer, customerRequestedEscalation,
+  enforceStyleRules, botSignalsTransfer, customerRequestedEscalation, stripClosingFiller,
 };
