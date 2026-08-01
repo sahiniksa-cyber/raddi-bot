@@ -42,3 +42,9 @@ test('answer-all is qualified as brief under split', () => {
   const s = sysWithSplit(true);
   assert.ok(/بأقصر|باختصار|بإيجاز/.test(s), 'answer-all must be paired with brevity');
 });
+
+test('per-product isolation rule present under split', () => {
+  const s = sysWithSplit(true);
+  assert.ok(/كل منتج له خياراته/.test(s), 'must forbid borrowing options between products');
+  assert.ok(/ممنوع.*تنسب مدة أو سعر أو خيار من منتج/.test(s), 'explicit no cross-product attribution');
+});
