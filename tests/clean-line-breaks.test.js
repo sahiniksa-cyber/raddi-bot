@@ -13,31 +13,62 @@ function withFlag(on, fn) {
   }
 }
 
-test('clean topic mode NEVER breaks mid-phrase (no word-count mangling)', () => {
+const topic = (count = 2) => ({ replyStyle: { lineBreakMode: 'topic', lineBreakCount: count } });
+
+test('groups a topic together, gaps only between different topics (real example)', () => {
   withFlag(true, () => {
-    // A long unpunctuated phrase (owner disabled periods) must stay intact,
-    // NOT get chopped like "والذكاء / الاصطناعي".
-    const input = 'عشان تقدر تستفيد من كل المميزات والذكاء الاصطناعي اللي نوفره';
-    const out = applyLineBreakFormat(input, { replyStyle: { lineBreakMode: 'topic', lineBreakCount: 2 } });
-    assert.ok(!/والذكاء\s*\n\s*الاصطناعي/.test(out), 'must not split "والذكاء الاصطناعي"');
-    assert.strictEqual(out.trim(), input, 'no natural boundary → stays one clean line');
+    const input = [
+      'وعليكم السلام يـ هلا ومرحبا',
+      'اشتراك أدوبي كرييتف كلاود متاح',
+      'ومضمون لكامل المدة',
+      'اشتراك كانفا برو متاح',
+      'ومضمون لمدة سنتين',
+      'التفعيل على إيميلك الشخصي',
+      'وتوصلك دعوة على الإيميل',
+    ].join('\n');
+    const expected = [
+      'وعليكم السلام يـ هلا ومرحبا',
+      'اشتراك أدوبي كرييتف كلاود متاح ومضمون لكامل المدة',
+      'اشتراك كانفا برو متاح ومضمون لمدة سنتين',
+      'التفعيل على إيميلك الشخصي وتوصلك دعوة على الإيميل',
+    ].join('\n\n');
+    assert.strictEqual(applyLineBreakFormat(input, topic(2)), expected);
   });
 });
 
-test('clean topic mode breaks on comma + gives a blank-line gap (count=2)', () => {
+test('waw-prefixed line merges into the previous topic (not a new block)', () => {
   withFlag(true, () => {
-    const input = 'لا والله ما عندنا برنامج واحد، عندنا أدوبي كامل ويشمل فوتوشوب والإلستريتر';
-    const out = applyLineBreakFormat(input, { replyStyle: { lineBreakMode: 'topic', lineBreakCount: 2 } });
-    assert.match(out, /برنامج واحد،\n\nعندنا أدوبي/, 'break after ، with one blank line');
-    assert.ok(!/فوتوشوب\s*\n\s*والإلستريتر/.test(out), 'must not split "فوتوشوب والإلستريتر"');
+    const out = applyLineBreakFormat('المنتج متاح\nومضمون سنة كاملة', topic(2));
+    assert.strictEqual(out, 'المنتج متاح ومضمون سنة كاملة');
   });
 });
 
-test('gap size is the merchant choice (count=3 → two blank lines)', () => {
+test('a line with no connector starts a NEW block (blank line before it)', () => {
   withFlag(true, () => {
-    const input = 'السلام عليكم؟ عندنا أدوبي كامل';
-    const out = applyLineBreakFormat(input, { replyStyle: { lineBreakMode: 'topic', lineBreakCount: 3 } });
-    assert.match(out, /عليكم؟\n\n\nعندنا/, 'count=3 → two blank lines between blocks');
+    const out = applyLineBreakFormat('اشتراك أدوبي متاح\nاشتراك كانفا متاح', topic(2));
+    assert.strictEqual(out, 'اشتراك أدوبي متاح\n\nاشتراك كانفا متاح');
+  });
+});
+
+test('never breaks a phrase mid-way (كلاً على سطره كتلة واحدة)', () => {
+  withFlag(true, () => {
+    const out = applyLineBreakFormat('تستفيد من كل المميزات والذكاء الاصطناعي', topic(2));
+    assert.ok(!/والذكاء\s*\n/.test(out), 'must not split والذكاء الاصطناعي');
+    assert.strictEqual(out.trim(), 'تستفيد من كل المميزات والذكاء الاصطناعي');
+  });
+});
+
+test('gap size follows the merchant choice (count=3 → two blank lines)', () => {
+  withFlag(true, () => {
+    const out = applyLineBreakFormat('أدوبي متاح\nكانفا متاح', topic(3));
+    assert.strictEqual(out, 'أدوبي متاح\n\n\nكانفا متاح');
+  });
+});
+
+test('connector words (بس/عشان/ثم) also merge', () => {
+  withFlag(true, () => {
+    const out = applyLineBreakFormat('الشهري غير متوفر\nعشان يوقف أحياناً', topic(2));
+    assert.strictEqual(out, 'الشهري غير متوفر عشان يوقف أحياناً');
   });
 });
 
@@ -45,7 +76,6 @@ test('flag OFF → legacy topic behavior unchanged', () => {
   withFlag(false, () => {
     const input = 'واحد اثنان ثلاثة اربعة خمسة ستة سبعة ثمانية تسعة عشرة';
     const out = applyLineBreakFormat(input, { replyStyle: { lineBreakMode: 'topic', lineBreakCount: 2, lineBreakWords: 4 } });
-    // legacy path uses the word-count fallback → produces >1 line here
-    assert.ok(out.includes('\n'), 'legacy path still active when flag off');
+    assert.ok(out.includes('\n'), 'legacy word-count path still active when flag off');
   });
 });
