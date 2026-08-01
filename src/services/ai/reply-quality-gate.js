@@ -140,6 +140,41 @@ function buildAuthoritativeEvidence(config = {}, matchedPolicies = []) {
   return parts.map(v => String(v || '').trim()).filter(Boolean).join('\n');
 }
 
+// Distinctive name tokens of a product (len>=3). Used to tell which product a
+// message is about, so durations/prices from ANOTHER product don't legitimize
+// a claim (the cross-product "data mixing" the owner reported: an 8-month
+// option on product B let the bot claim "8 months" for product A).
+function productNameTokens(name) {
+  return (normalizeForFacts(name).match(/[\p{L}\p{N}]+/gu) || []).filter(t => t.length >= 3);
+}
+
+// Store-wide evidence (NOT product-specific) + only the product(s) the message
+// is actually about. Falls back to ALL products when no specific product is
+// identified — so this never OVER-flags a legitimately generic answer.
+function buildScopedEvidence(config = {}, matchedPolicies = [], customerText = '', reply = '') {
+  const products = Array.isArray(config.products) ? config.products : [];
+  const globalParts = [
+    config.storeName, config.storeDescription, config.workingHours,
+    config.botInstructions, ...selectedPolicyTexts(config, matchedPolicies),
+  ];
+  const join = (list) => [...globalParts, ...list.map(serializeProduct)]
+    .map(v => String(v || '').trim()).filter(Boolean).join('\n');
+  if (products.length <= 1) return join(products);
+
+  const freq = new Map();
+  const perProduct = products.map((p) => {
+    const toks = new Set(productNameTokens(p && p.name));
+    for (const t of toks) freq.set(t, (freq.get(t) || 0) + 1);
+    return toks;
+  });
+  const haystack = normalizeForFacts(`${customerText} ${reply}`);
+  const inContext = products.filter((p, i) => {
+    for (const t of perProduct[i]) if (freq.get(t) === 1 && haystack.includes(t)) return true;
+    return false;
+  });
+  return join(inContext.length ? inContext : products);
+}
+
 function buildMerchantGrounding(config = {}, matchedPolicies = []) {
   const products = Array.isArray(config.products) && config.products.length
     ? config.products.map((p, i) => `${i + 1}. ${serializeProduct(p) || 'منتج بلا تفاصيل'}`).join('\n')
@@ -230,10 +265,18 @@ function isAttributedCustomerClaim(reply, customerText, claimRaw) {
 }
 
 function findUnsupportedFacts(reply, { config = {}, matchedPolicies = [], customerText = '' } = {}) {
-  const evidence = buildAuthoritativeEvidence(config, matchedPolicies);
-  const evidenceClaims = new Set(extractNumericClaims(evidence).map(c => c.key));
-  const evidenceWordDurations = new Set(extractWordDurationClaims(evidence));
+  const fullEvidence = buildAuthoritativeEvidence(config, matchedPolicies);
+  // Product-scoped grounding (flagged): validate durations against the product
+  // the message is about, not the whole store — stops cross-product mixing.
+  // Currency and URLs stay store-wide (rarely mix, avoids over-flagging).
+  const scoped = process.env.PRODUCT_SCOPED_GROUNDING_ENABLED === 'true';
+  const durationEvidence = scoped
+    ? buildScopedEvidence(config, matchedPolicies, customerText, reply)
+    : fullEvidence;
+  const evidenceClaims = new Set(extractNumericClaims(durationEvidence).map(c => c.key));
+  const evidenceWordDurations = new Set(extractWordDurationClaims(durationEvidence));
   const priceValues = configuredPriceValues(config);
+  const evidence = fullEvidence;
   const issues = [];
 
   for (const claim of extractNumericClaims(reply)) {
