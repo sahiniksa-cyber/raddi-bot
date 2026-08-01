@@ -1,5 +1,10 @@
 'use strict';
 
+// Legacy-path lock: asserts the classic line-break modes (incl. word-count
+// topic behavior). Pin CLEAN_LINE_BREAKS_ENABLED off so it deterministically
+// tests the legacy path; the clean path is locked in tests/clean-line-breaks.test.js.
+delete process.env.CLEAN_LINE_BREAKS_ENABLED;
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
