@@ -37,3 +37,8 @@ test('default (flag off) keeps the original block verbatim', () => {
   const s = sysWithSplit(false);
   assert.ok(/🌷/.test(s), 'legacy block unchanged when flag off');
 });
+
+test('answer-all is qualified as brief under split', () => {
+  const s = sysWithSplit(true);
+  assert.ok(/بأقصر|باختصار|بإيجاز/.test(s), 'answer-all must be paired with brevity');
+});

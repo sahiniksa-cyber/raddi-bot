@@ -11,7 +11,12 @@ function scaledMaxLength(maxLen, customerText = '') {
   const text = String(customerText || '');
   const marks = (text.match(/[؟?]/g) || []).length;
   const batched = text.includes('رسائل العميل المتتالية') ? 1 : 0;
-  const signals = Math.min(3, Math.max(marks, 1) + batched);
+  // Brevity authority: the dashboard maxResponseLength is the ceiling. Multi-
+  // question messages still get room (so a 2nd question isn't truncated — the
+  // 2026-06-11 fix) but capped at 2x, not 3x, so replies stay near the owner's
+  // configured length instead of ballooning. Flag-gated (default keeps 3x).
+  const cap = process.env.BREVITY_AUTHORITY_ENABLED === 'true' ? 2 : 3;
+  const signals = Math.min(cap, Math.max(marks, 1) + batched);
   return base * signals;
 }
 
