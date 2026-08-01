@@ -560,6 +560,22 @@ async function reviewFinalReplyBeforeSend({
     logger?.warn?.('pre-send-review', 'review output suppressed by deterministic duplicate guard');
     return { reply: '', suppressed: true, audit };
   }
+  // Pass-through: a clean 'pass' must not be re-voiced into a generic tone.
+  // Only when the deterministic fact guard is clean (no fallback) and there is
+  // no hard duplicate — so no real violation is skipped. Returns the ORIGINAL
+  // cleaned draft, preserving the owner's voice.
+  if (process.env.REVIEW_PASSTHROUGH_ENABLED === 'true'
+      && parsed.decision === 'pass'
+      && !grounded.usedFallback
+      && !hardDuplicate.suppress) {
+    const passAudit = {
+      status: 'reviewed', decision: 'pass', reason: 'passthrough_clean_draft',
+      repeatedClaims: [], violations: parsed.violations,
+      unsupportedClaims: [], hardFallback: false, latencyMs: Date.now() - startedAt,
+    };
+    logger?.info?.('pre-send-review', 'decision=pass passthrough (draft kept)');
+    return { reply: cleanedDraft, suppressed: false, audit: passAudit };
+  }
   const audit = {
     status: 'reviewed',
     decision: parsed.decision,
@@ -676,6 +692,24 @@ async function reviewReplyQuality({
     matchedPolicies,
     customerText,
   });
+  // Pass-through: on a clean 'pass' with no deterministic fact fallback, keep
+  // the ORIGINAL draft rather than the reviewer's paraphrase, so the owner's
+  // voice is preserved. Any real violation (repair/clarify/escalate/fallback)
+  // still uses the reviewer's grounded rewrite.
+  if (process.env.REVIEW_PASSTHROUGH_ENABLED === 'true'
+      && parsed.decision === 'pass'
+      && !grounded.usedFallback) {
+    return {
+      reply: String(draft || '').trim(),
+      audit: {
+        status: 'reviewed', decision: 'pass', intent: parsed.intent,
+        unanswered: parsed.unanswered, violations: parsed.violations,
+        unsupportedClaims: [], deterministicIssuesBefore: deterministicIssues,
+        deterministicIssuesAfter: grounded.issues, hardFallback: false,
+        latencyMs: Date.now() - startedAt,
+      },
+    };
+  }
   const audit = {
     status: 'reviewed',
     decision: parsed.decision,

@@ -1,5 +1,11 @@
 'use strict';
 
+// Legacy-path regression lock: asserts the CURRENT (default) prompt wording.
+// Pin the style/brevity flags OFF so this file deterministically tests the
+// legacy path regardless of ambient env. New-path behavior is locked in
+// tests/reply-voice-newpath-locks.test.js.
+process.env.PROMPT_STYLE_SPLIT_ENABLED = "false";
+delete process.env.BREVITY_AUTHORITY_ENABLED;
 // ── WEEK-1 END-TO-END INTEGRATION SCENARIOS ─────────────────────────────────
 //
 // This file drives the REAL bot code (processAiReply, isConversationOwnerPaused,
