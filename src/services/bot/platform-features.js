@@ -47,6 +47,18 @@ function describeEmoji(level = 'none') {
 function describeReplyLength(config = {}) {
   const r = config.replyStyle || {};
   const maxLen = Math.max(80, parseInt(config.maxResponseLength, 10) || 300);
+  // Adaptive length (flag): length follows the customer's NEED, not a rigid
+  // sentence count — so a short setting never truncates a genuine multi-part
+  // question, and a simple question never gets padded. The dashboard level is
+  // a default LEAN, not a content ceiling.
+  if (process.env.ADAPTIVE_LENGTH_ENABLED === 'true') {
+    const lean = r.replyLength === 'long'
+      ? 'ووسّع فقط عند الحاجة الحقيقية'
+      : (r.replyLength === 'medium' && !r.useShortReplies)
+        ? 'واجعله موجزاً'
+        : 'واجعله أقصر ما يمكن';
+    return `طول الرد تكيّفي حسب حاجة العميل ${lean}: طابق الطول لِما سأله بالضبط — لا أكثر ولا أقل. سؤال بسيط → سطر واحد قصير. عدة أسئلة → جاوب على كلها بإيجاز، سطر مختصر لكل سؤال. طلب تفاصيل أو أسعار أو خطوات → اعطِ المطلوب منظّماً بدون حشو. لا تُسقط أي سؤال ولا تبتر تفصيلاً ضرورياً بحجة الاختصار، ولا تضِف حشواً بحجة الاكتمال. اجعل كل نقطة ضمن حدود ${maxLen} حرف كإرشاد.`;
+  }
   const map = {
     short: `جملة إلى جملتين قصيرتين فقط (لا تتجاوز ${maxLen} حرف). جاوب على قدّ السؤال تماماً مثل موظف بشري يكتب بسرعة على واتساب — بدون مقدمات، بدون شرح زائد، بدون تكرار. لا تعطِ معلومات ما طلبها العميل.`,
     medium: `جملتان إلى ثلاث جمل قصيرة كحد أقصى (لا تتجاوز ${maxLen} حرف). جاوب السؤال مباشرة بأسلوب بشري بدون حشو ولا تكرار.`,
