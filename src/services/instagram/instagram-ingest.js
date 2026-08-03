@@ -14,6 +14,20 @@ const { enqueueIncomingInstagram } = require('../../queues/instagram-queue');
 const defaultAccounts = require('./instagram-accounts');
 const defaultGraph = require('./instagram-graph');
 
+// Classify a raw messaging event so logs can explain WHY an event produced no
+// inbound text (echo / read receipt / reaction / attachment-only / postback),
+// instead of a bare inboundCount:0 that looks identical to "Meta sent nothing".
+function classifyEvent(m) {
+  const message = m.message || {};
+  if (message.is_echo) return 'echo';
+  if (m.reaction) return 'reaction';
+  if (m.read) return 'read';
+  if (m.postback) return 'postback';
+  if (message.text) return 'message';
+  if (Array.isArray(message.attachments) && message.attachments.length) return 'attachment';
+  return 'other';
+}
+
 function extractMessages(body) {
   const out = [];
   const entries = Array.isArray(body && body.entry) ? body.entry : [];
@@ -29,10 +43,22 @@ function extractMessages(body) {
         text: message.text || '',
         echo: Boolean(message.is_echo),
         timestamp: m.timestamp || null,
+        type: classifyEvent(m),
       });
     }
   }
   return out;
+}
+
+// Count normalized events by type — used for a compact, safe webhook log line
+// (no message content, no ids) that reveals what Meta is actually delivering.
+function summarizeEventTypes(items) {
+  const counts = {};
+  for (const it of (items || [])) {
+    const t = it && it.type ? it.type : 'other';
+    counts[t] = (counts[t] || 0) + 1;
+  }
+  return counts;
 }
 
 async function ingestWebhookEntry(userId, item, deps = {}) {
@@ -45,10 +71,14 @@ async function ingestWebhookEntry(userId, item, deps = {}) {
      VALUES ($1, $2, NOW(), NOW() + INTERVAL '24 hours', 'active')
      ON CONFLICT (user_id, participant_id) DO UPDATE
        SET last_message_at = NOW(), window_expires_at = NOW() + INTERVAL '24 hours'
-     RETURNING id, ai_paused`,
+     RETURNING id, ai_paused, (escalated_until IS NOT NULL AND escalated_until > NOW()) AS escalated`,
     [userId, item.participantId],
   );
   const conversationId = conv.rows[0].id;
+  // A conversation is off-limits to the bot when it's explicitly ai_paused OR
+  // currently under human takeover (escalated_until in the future) — a human
+  // agent replied manually and must not be talked over.
+  const aiPaused = Boolean(conv.rows[0].ai_paused || conv.rows[0].escalated);
 
   const inserted = await database.query(
     `INSERT INTO instagram_messages
@@ -69,7 +99,7 @@ async function ingestWebhookEntry(userId, item, deps = {}) {
       [userId, item.mid],
     );
     const row = existing.rows[0];
-    if (row && row.status === 'queued_for_ai' && !conv.rows[0].ai_paused) {
+    if (row && row.status === 'queued_for_ai' && !aiPaused) {
       await enqueueAi({
         userId,
         conversationId: row.conversation_id,
@@ -84,7 +114,7 @@ async function ingestWebhookEntry(userId, item, deps = {}) {
   }
   const messageId = inserted.rows[0].id;
 
-  if (conv.rows[0].ai_paused) {
+  if (aiPaused) {
     await database.query(
       `UPDATE instagram_messages SET status='ai_paused' WHERE id=$1 AND user_id=$2`,
       [messageId, userId],
@@ -139,4 +169,4 @@ async function ensureUsername(userId, participantId, deps = {}) {
   return null;
 }
 
-module.exports = { extractMessages, ingestWebhookEntry, ensureUsername };
+module.exports = { extractMessages, ingestWebhookEntry, ensureUsername, classifyEvent, summarizeEventTypes };

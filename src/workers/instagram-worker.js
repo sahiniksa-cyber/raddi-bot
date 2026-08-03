@@ -113,6 +113,22 @@ async function processIncoming(job, deps = {}) {
     return { skipped: 'ai_disabled' };
   }
 
+  // Race guard: a human agent may have replied (escalated the conversation)
+  // AFTER this job was enqueued but before it runs. Re-check the live state so
+  // the bot never talks over a human takeover. Mirrors the ingest-time check.
+  const convState = await database.query(
+    `SELECT (escalated_until IS NOT NULL AND escalated_until > NOW()) AS escalated, ai_paused
+       FROM instagram_conversations WHERE id=$1 AND user_id=$2`,
+    [conversationId, userId],
+  );
+  if (convState.rows[0] && (convState.rows[0].escalated || convState.rows[0].ai_paused)) {
+    await database.query(
+      `UPDATE instagram_messages SET status='ai_paused' WHERE id = ANY($1::uuid[]) AND user_id=$2`,
+      [pendingIds, userId],
+    );
+    return { skipped: 'ai_paused' };
+  }
+
   const quota = await quotaCheck(userId);
   if (shouldBlockSendForQuota(quota)) {
     await database.query(

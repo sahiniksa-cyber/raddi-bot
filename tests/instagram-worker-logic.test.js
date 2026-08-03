@@ -93,6 +93,35 @@ test('processIncoming strips internal WhatsApp escalation markers from Instagram
   assert.equal(insertedText, 'أبشر بحولك');
 });
 
+test('processIncoming skips generation when a human took over after the job was enqueued', async () => {
+  let aiCalls = 0;
+  const pausedUpdates = [];
+  const database = {
+    query: async (sql, params) => {
+      if (sql.includes("direction='inbound'") && sql.includes("status='queued_for_ai'") && sql.includes('SELECT id')) return { rows: [{ id: 'm1' }] };
+      if (sql.includes('escalated_until') && sql.includes('FROM instagram_conversations')) return { rows: [{ escalated: true, ai_paused: false }] };
+      if (sql.includes("SET status='ai_paused'")) { pausedUpdates.push(params); return { rows: [] }; }
+      return { rows: [] };
+    },
+  };
+  class FakeAI { async getReply() { aiCalls++; return 'should not run'; } }
+  const result = await processIncoming(
+    { id: 'mid.9', data: { userId: 'u1', conversationId: 'c1', participantId: 'p1' } },
+    {
+      database,
+      resolveInstagramConfig: async () => ({ enabled: true, config: {} }),
+      buildInstagramHistory: async () => [{ role: 'user', content: 'hi' }],
+      resolveConfigForAI: async () => ({ openaiApiKey: 'k', model: 'gpt-4o' }),
+      AIClient: FakeAI,
+      checkMessageQuota: async () => ({ canReply: true }),
+      enqueueOutgoingInstagram: async () => {},
+    },
+  );
+  assert.equal(result.skipped, 'ai_paused');
+  assert.equal(aiCalls, 0);
+  assert.deepStrictEqual(pausedUpdates, [[['m1'], 'u1']]);
+});
+
 test('processOutgoing never re-sends when quota bookkeeping fails after Meta accepted the message', async () => {
   const updates = [];
   let sends = 0;
