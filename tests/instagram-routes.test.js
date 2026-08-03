@@ -96,6 +96,38 @@ test('POST webhook waits for durable ingest before returning 200', async () => {
   assert.equal(ingested, 1);
 });
 
+test('POST webhook records an event-type summary so inboundCount:0 is explainable', async () => {
+  const secret = 'S';
+  const parsedLogs = [];
+  const payload = { object: 'instagram', entry: [{ id: 'A', messaging: [{ sender: { id: 'C' }, read: { mid: 'x' } }] }] };
+  const raw = Buffer.from(JSON.stringify(payload));
+  const sig = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true', INSTAGRAM_APP_SECRET: secret },
+    {
+      database: {
+        query: async (sql, params) => {
+          if (sql.includes("'webhook_parsed'")) parsedLogs.push(params);
+          return { rows: [], rowCount: 0 };
+        },
+      },
+      ingest: {
+        // Real classification: a read receipt → 0 inbound, type 'read'.
+        extractMessages: () => [{ igAccountId: 'A', participantId: 'C', mid: undefined, text: '', echo: false, type: 'read' }],
+        summarizeEventTypes: () => ({ read: 1 }),
+        ingestWebhookEntry: async () => {},
+      },
+      accounts: { findUserIdByIgAccount: async () => 'u1' },
+    },
+  );
+  const res = await req(app, 'POST', '/instagram/webhook', { headers: { 'X-Hub-Signature-256': sig }, body: raw });
+  assert.equal(res.status, 200);
+  assert.equal(parsedLogs.length, 1);
+  const detail = JSON.parse(parsedLogs[0][0]);
+  assert.deepEqual(detail.types, { read: 1 });
+  assert.equal(detail.inboundCount, 0);
+});
+
 test('POST webhook returns 503 when durable ingest fails so Meta retries the delivery', async () => {
   const secret = 'S';
   const raw = Buffer.from(JSON.stringify({ object: 'instagram' }));
@@ -234,8 +266,56 @@ test('manual reply stores and enqueues only while the 24-hour window is open', a
   );
   const res = await req(app, 'POST', '/api/instagram/conversations/c1/send', { body: { text: 'hello' } });
   assert.equal(res.status, 200);
-  assert.equal(calls.length, 3);
+  // SELECT window, INSERT reply, enqueue job, UPDATE escalated_until (human pause).
+  assert.equal(calls.length, 4);
   assert.equal(calls[2].replyMessageId, 'm1');
+});
+
+test('manual reply pauses the bot on that conversation (human takeover)', async () => {
+  const updates = [];
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    {
+      database: {
+        query: async (sql, params) => {
+          if (sql.includes('FROM instagram_conversations')) {
+            return { rows: [{ participant_id: 'p1', window_open: true }], rowCount: 1 };
+          }
+          if (sql.includes('escalated_until')) { updates.push({ sql, params }); return { rows: [], rowCount: 1 }; }
+          return { rows: [{ id: 'm1' }], rowCount: 1 };
+        },
+      },
+      enqueueOutgoingInstagram: async () => {},
+    },
+  );
+  const res = await req(app, 'POST', '/api/instagram/conversations/c1/send', { body: { text: 'hello' } });
+  assert.equal(res.status, 200);
+  assert.equal(updates.length, 1);
+  // Scoped to this conversation + merchant, with a future expiry timestamp.
+  assert.match(updates[0].sql, /UPDATE instagram_conversations/);
+  assert.ok(updates[0].params.includes('c1'));
+  assert.ok(updates[0].params.includes('u1'));
+  const expiry = updates[0].params.find((p) => p instanceof Date);
+  assert.ok(expiry instanceof Date && expiry.getTime() > Date.now());
+});
+
+test('manual reply still succeeds even if setting the pause fails', async () => {
+  const app = makeApp(
+    { INSTAGRAM_ENABLED: 'true' },
+    {
+      database: {
+        query: async (sql) => {
+          if (sql.includes('FROM instagram_conversations')) return { rows: [{ participant_id: 'p1', window_open: true }], rowCount: 1 };
+          if (sql.includes('escalated_until')) throw new Error('pause write failed');
+          return { rows: [{ id: 'm1' }], rowCount: 1 };
+        },
+      },
+      enqueueOutgoingInstagram: async () => {},
+    },
+  );
+  const res = await req(app, 'POST', '/api/instagram/conversations/c1/send', { body: { text: 'hello' } });
+  assert.equal(res.status, 200);
+  assert.equal(JSON.parse(res.body).success, true);
 });
 
 test('test-chat returns the generated reply and grows the sandbox memory', async () => {

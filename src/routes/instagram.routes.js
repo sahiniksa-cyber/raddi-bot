@@ -9,6 +9,7 @@ const defaultIngest = require('../services/instagram/instagram-ingest');
 const defaultGraph = require('../services/instagram/instagram-graph');
 const defaultConfig = require('../services/instagram/instagram-config');
 const { generateInstagramTestReply: defaultGenerateTestReply } = require('../services/instagram/instagram-test-reply');
+const { humanPauseExpiry, resolvePauseMinutes } = require('../services/instagram/instagram-pause');
 const defaultDb = require('../db/client');
 const { enqueueOutgoingInstagram: defaultEnqueueOutgoing } = require('../queues/instagram-queue');
 
@@ -73,11 +74,16 @@ function createInstagramRoutes(deps = {}) {
       const items = ingest.extractMessages(body);
       const inbound = items.filter((it) => !it.echo && it.text);
       const accountIds = [...new Set(items.map((i) => i.igAccountId))];
+      // Event-type breakdown (message/echo/read/reaction/attachment/postback):
+      // turns an opaque "inboundCount:0" into a diagnosable "these were read
+      // receipts" vs "Meta sent an actual text we failed to parse".
+      const types = typeof ingest.summarizeEventTypes === 'function'
+        ? ingest.summarizeEventTypes(items) : {};
       // Always log receipt so Railway logs prove whether Meta is delivering at all.
-      console.log(`${ts()} [instagram-webhook] received: ${items.length} event(s), ${inbound.length} inbound text — ids=${accountIds.join(',')}`);
+      console.log(`${ts()} [instagram-webhook] received: ${items.length} event(s), ${inbound.length} inbound text, types=${JSON.stringify(types)} — ids=${accountIds.join(',')}`);
       db.query(
         "INSERT INTO instagram_logs (user_id, level, event_type, detail) VALUES (NULL, 'info', 'webhook_parsed', $1::jsonb)",
-        [JSON.stringify({ itemCount: items.length, inboundCount: inbound.length, accountIds })],
+        [JSON.stringify({ itemCount: items.length, inboundCount: inbound.length, types, accountIds })],
       ).catch(() => {});
       for (const item of items) {
         if (item.echo || !item.text) continue;
@@ -386,6 +392,18 @@ function createInstagramRoutes(deps = {}) {
         text,
         replyMessageId: stored.rows[0].id,
       });
+      // A human agent just replied — pause the bot on this conversation so the
+      // customer isn't answered by two voices. Mirrors the WhatsApp owner-pause
+      // (conversations.escalated_until). Best-effort: never fail the send on it.
+      try {
+        const expiry = humanPauseExpiry(resolvePauseMinutes(env), Date.now());
+        if (expiry) {
+          await db.query(
+            `UPDATE instagram_conversations SET escalated_until = $3 WHERE id = $1 AND user_id = $2`,
+            [req.params.id, req.session.userId, expiry],
+          );
+        }
+      } catch (_) { /* pause is best-effort */ }
       res.json({ success: true });
     } catch (err) { next(err); }
   });
