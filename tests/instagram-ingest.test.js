@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { extractMessages, ingestWebhookEntry, ensureUsername } = require('../src/services/instagram/instagram-ingest');
+const { extractMessages, ingestWebhookEntry, ensureUsername, summarizeEventTypes } = require('../src/services/instagram/instagram-ingest');
 
 test('extractMessages flattens entry[].messaging[] into normalized items', () => {
   const body = {
@@ -17,8 +17,33 @@ test('extractMessages flattens entry[].messaging[] into normalized items', () =>
   const items = extractMessages(body);
   assert.strictEqual(items.length, 1);
   assert.deepStrictEqual(items[0], {
-    igAccountId: 'IGACC', participantId: 'CUST', mid: 'm1', text: 'hello', echo: false, timestamp: 1,
+    igAccountId: 'IGACC', participantId: 'CUST', mid: 'm1', text: 'hello', echo: false, timestamp: 1, type: 'message',
   });
+});
+
+test('extractMessages classifies each event type (observability)', () => {
+  const body = {
+    object: 'instagram',
+    entry: [{
+      id: 'IGACC',
+      messaging: [
+        { sender: { id: 'C' }, message: { mid: 'a', text: 'hi' } },                      // message
+        { sender: { id: 'IGACC' }, message: { mid: 'b', text: 'echo', is_echo: true } }, // echo
+        { sender: { id: 'C' }, message: { mid: 'c', attachments: [{ type: 'image' }] } },// attachment
+        { sender: { id: 'C' }, reaction: { mid: 'd', action: 'react' } },                // reaction
+        { sender: { id: 'C' }, read: { mid: 'e' } },                                     // read
+        { sender: { id: 'C' }, postback: { title: 'x' } },                               // postback
+        { sender: { id: 'C' } },                                                         // other
+      ],
+    }],
+  };
+  const types = extractMessages(body).map((i) => i.type);
+  assert.deepStrictEqual(types, ['message', 'echo', 'attachment', 'reaction', 'read', 'postback', 'other']);
+});
+
+test('summarizeEventTypes counts events by type for logging', () => {
+  const items = [{ type: 'message' }, { type: 'message' }, { type: 'read' }, { type: 'echo' }];
+  assert.deepStrictEqual(summarizeEventTypes(items), { message: 2, read: 1, echo: 1 });
 });
 
 test('extractMessages marks echoes and empty text (filterable)', () => {
@@ -78,6 +103,38 @@ test('ingestWebhookEntry does NOT enqueue AI when conversation ai_paused', async
   const r = await ingestWebhookEntry('u1', { participantId: 'C', mid: 'm', text: 'hi', echo: false }, { database, enqueueAi: async () => { enqueued++; } });
   assert.strictEqual(enqueued, 0);
   assert.strictEqual(r.aiPaused, true);
+});
+
+test('ingestWebhookEntry does NOT enqueue AI while the conversation is under human-takeover (escalated)', async () => {
+  let enqueued = 0;
+  const updates = [];
+  const database = {
+    query: async (sql, params) => {
+      if (sql.includes('INSERT INTO instagram_conversations')) return { rows: [{ id: 'conv1', ai_paused: false, escalated: true }] };
+      if (sql.includes('INSERT INTO instagram_messages')) return { rows: [{ id: 'msg1' }] };
+      if (sql.includes("SET status='ai_paused'")) { updates.push(params); return { rows: [] }; }
+      return { rows: [] };
+    },
+  };
+  const r = await ingestWebhookEntry('u1', { participantId: 'C', mid: 'm', text: 'hi', echo: false }, { database, enqueueAi: async () => { enqueued++; } });
+  assert.strictEqual(enqueued, 0);
+  assert.strictEqual(r.aiPaused, true);
+  assert.deepStrictEqual(updates, [['msg1', 'u1']]);
+});
+
+test('ingestWebhookEntry conversation upsert reads the live escalation state', async () => {
+  let convSql = '';
+  const database = {
+    query: async (sql) => {
+      if (sql.includes('INSERT INTO instagram_conversations')) { convSql = sql; return { rows: [{ id: 'conv1', ai_paused: false, escalated: false }] }; }
+      if (sql.includes('INSERT INTO instagram_messages')) return { rows: [{ id: 'msg1' }] };
+      return { rows: [] };
+    },
+  };
+  await ingestWebhookEntry('u1', { participantId: 'C', mid: 'm', text: 'hi', echo: false }, { database, enqueueAi: async () => {} });
+  // The upsert must surface whether the conversation is currently escalated so a
+  // human takeover silences the bot without a separate query.
+  assert.match(convSql, /escalated_until/);
 });
 
 test('ensureUsername fetches + stores the @username when missing', async () => {
