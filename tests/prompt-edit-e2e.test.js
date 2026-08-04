@@ -18,12 +18,19 @@ const GROUP = '120363999@g.us';
 function statefulDb(initialConfig) {
   let config = { ...initialConfig };
   const edits = [];
+  const claimed = new Set(); // models whatsapp_group_action_dedup (ON CONFLICT DO NOTHING)
   let seq = 0;
   return {
     get config() { return config; },
     get edits() { return edits; },
     isConfigured: () => true,
     async query(sql, params = []) {
+      if (/INSERT INTO whatsapp_group_action_dedup/.test(sql)) {
+        const key = `${params[0]}::${params[1]}`;
+        if (claimed.has(key)) return { rows: [] };       // conflict → no row
+        claimed.add(key);
+        return { rows: [{ message_id: params[1] }] };     // first delivery
+      }
       if (/SELECT config FROM bot_configs/.test(sql)) {
         return { rows: [{ config }] };
       }
@@ -131,6 +138,50 @@ test('FULL FLOW: edit command -> proposal -> نعم -> bot_configs.botInstructio
   assert.match(db.config.botInstructions, /ساعات العمل/, 'the original instructions were preserved');
   assert.equal(db.edits.find(e => e.id === 'pe-1').status, 'applied', 'the pending row is marked applied');
   assert.equal(aiEnqueued, 0, 'still no customer-AI involvement across the whole flow');
+});
+
+test('FULL FLOW: WhatsApp re-delivering the same edit + نعم does not loop (idempotent)', async () => {
+  const db = statefulDb({
+    escalationContacts: [{ name: 'الفريق', phone: GROUP }],
+    botInstructions: 'تعليمات حالية كافية الطول لتكون برومنت سليم بدون أي مشاكل إطلاقاً.',
+    whatsappPromptEditEnabled: true,
+  });
+  const sent = [];
+  const service = new MessageIngestService({
+    database: db, logger: silentLogger, bridge: fakeBridge(),
+    queue: { enqueueAiReply: async () => {} },
+    enqueueOutgoing: async (p) => { sent.push(p); },
+    buildPromptEditAiClient: async () => ({
+      planConfigEdit: async () => ({ target: 'prompt' }),
+      proposePromptEdit: async (current) => ({ newInstructions: current + '\nإضافة.', summary: 'إضافة معلومة.' }),
+    }),
+  });
+  const editMsg = { id: { id: 'DUP_EDIT' }, from: GROUP, author: '96650@s.whatsapp.net', fromMe: false, body: 'تعديل: ضيف معلومة' };
+  const yesMsg = { id: { id: 'DUP_YES' }, from: GROUP, author: '96650@s.whatsapp.net', fromMe: false, body: 'نعم' };
+
+  // Edit delivered 3× (reconnect re-sync), then نعم delivered 3×.
+  const e1 = await service.ingestWhatsappMessage({ userId: 'u1', msg: editMsg, source: 'baileys' });
+  const e2 = await service.ingestWhatsappMessage({ userId: 'u1', msg: editMsg, source: 'baileys' });
+  const e3 = await service.ingestWhatsappMessage({ userId: 'u1', msg: editMsg, source: 'baileys' });
+  const y1 = await service.ingestWhatsappMessage({ userId: 'u1', msg: yesMsg, source: 'baileys' });
+  const y2 = await service.ingestWhatsappMessage({ userId: 'u1', msg: yesMsg, source: 'baileys' });
+  const y3 = await service.ingestWhatsappMessage({ userId: 'u1', msg: yesMsg, source: 'baileys' });
+
+  // The re-delivered edit is a silent duplicate (no NEW pending created).
+  assert.equal(e1.promptEdit, 'proposed');
+  assert.equal(e2.promptEdit, 'duplicate');
+  assert.equal(e3.promptEdit, 'duplicate');
+  // نعم applies exactly once; re-deliveries must NOT apply again. (After the
+  // apply there is no pending left, so a duplicate نعم safely does nothing.)
+  assert.equal(y1.promptEdit, 'applied');
+  assert.notEqual(y2.promptEdit, 'applied');
+  assert.notEqual(y3.promptEdit, 'applied');
+
+  // The real proof against the production loop: exactly ONE proposal + ONE
+  // confirmation sent (not six), one pending ever created, applied once.
+  assert.equal(sent.length, 2, 'one propose + one apply message, no repeats');
+  assert.equal(db.edits.length, 1, 'only one pending edit ever created');
+  assert.equal(db.edits.filter(e => e.status === 'applied').length, 1, 'applied exactly once');
 });
 
 test('FULL FLOW: لا after a proposal leaves bot_configs untouched', async () => {
