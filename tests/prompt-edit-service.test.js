@@ -88,6 +88,55 @@ test('tryHandle: an edit command proposes a change, stores pending, replies a su
   assert.match(sent[0].reply, /إضافة معلومة/);
 });
 
+// A claim stub that dedups by (userId, messageId): first call true, then false.
+function claimStub() {
+  const seen = new Set();
+  const fn = async (_db, userId, messageId) => {
+    const k = `${userId}::${messageId}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  };
+  return fn;
+}
+
+test('tryHandle: a RE-DELIVERED edit command does not propose twice (idempotent)', async () => {
+  const claimGroupAction = claimStub();
+  const msg = { from: GROUP, author: '96650@s.whatsapp.net', body: 'تعديل: أضف إننا نوصل للرياض مجاناً', id: { _serialized: 'EDIT_MSG_1' } };
+
+  const db1 = fakeDb({ config: CONFIG_WITH_GROUP });
+  const d1 = makeDeps({ database: db1 });
+  const r1 = await svc.tryHandle({ ...d1.deps, claimGroupAction, userId: 'u1', msg });
+  assert.equal(r1.promptEdit, 'proposed');
+  assert.equal(d1.sent.length, 1);
+
+  // Same message id arrives again (WhatsApp re-sync) → must be a silent no-op.
+  const db2 = fakeDb({ config: CONFIG_WITH_GROUP });
+  const d2 = makeDeps({ database: db2 });
+  const r2 = await svc.tryHandle({ ...d2.deps, claimGroupAction, userId: 'u1', msg });
+  assert.equal(r2.promptEdit, 'duplicate');
+  assert.equal(d2.sent.length, 0, 'no second proposal sent');
+  assert.ok(!db2.writes.some(w => /INSERT INTO prompt_edit_requests/.test(w.sql)), 'no second pending inserted');
+});
+
+test('tryHandle: a RE-DELIVERED نعم does not apply the edit twice', async () => {
+  const claimGroupAction = claimStub();
+  const pending = { id: 'pe-1', proposed_instructions: 'النص النهائي', change_summary: 'تغيير', created_at: new Date(1_000_000 - 1000).toISOString() };
+  const msg = { from: GROUP, body: 'نعم', id: { _serialized: 'YES_MSG_1' } };
+
+  const db1 = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+  const d1 = makeDeps({ database: db1 });
+  const r1 = await svc.tryHandle({ ...d1.deps, claimGroupAction, userId: 'u1', msg });
+  assert.equal(r1.promptEdit, 'applied');
+
+  const db2 = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+  const d2 = makeDeps({ database: db2 });
+  const r2 = await svc.tryHandle({ ...d2.deps, claimGroupAction, userId: 'u1', msg });
+  assert.equal(r2.promptEdit, 'duplicate');
+  assert.ok(!db2.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config NOT written a second time');
+  assert.equal(d2.sent.length, 0, 'no second confirmation sent');
+});
+
 test('tryHandle: نعم with a pending edit applies it to bot_configs and confirms', async () => {
   const pending = { id: 'pe-1', proposed_instructions: 'النص النهائي', change_summary: 'تغيير', created_at: new Date(1_000_000 - 1000).toISOString() };
   const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });

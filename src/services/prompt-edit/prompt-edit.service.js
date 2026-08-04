@@ -3,6 +3,7 @@
 const { detectEditCommand, isYes, isNo, normalizeArabic } = require('../../../lib/prompt-edit-keywords');
 const { normalizeEscalationTarget } = require('../../workers/escalation-routing');
 const { applyProductOp, applyInstantReplyOp, applyDoNotReplyOp } = require('../../../lib/config-edit-appliers');
+const { claimGroupAction: defaultClaimGroupAction } = require('../whatsapp/group-action-dedup');
 
 const TARGET_FIELD = { prompt: 'botInstructions', products: 'products', instant_replies: 'autoReplyKeywords', do_not_reply: 'doNotReplyList' };
 const APPLIERS = { products: applyProductOp, instant_replies: applyInstantReplyOp, do_not_reply: applyDoNotReplyOp };
@@ -143,7 +144,7 @@ async function send(enqueue, userId, groupJid, reply) {
  * null to let normal group handling continue. Never throws on model failure —
  * it reports the failure to the group and returns a handled result.
  */
-async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger, now = Date.now, ttlMinutes = 10 }) {
+async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger, now = Date.now, ttlMinutes = 10, claimGroupAction = defaultClaimGroupAction }) {
   const groupJid = msg?.from;
   const text = String(msg?.body || '').trim();
   if (!groupJid || !String(groupJid).includes('@g.us') || !text) return null;
@@ -154,6 +155,20 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
 
   const nowMs = now();
   const pending = await findPendingEdit(database, userId, groupJid, nowMs, ttlMinutes);
+
+  // Idempotency: a WhatsApp re-delivery (connection churn) must NOT re-run the
+  // action. Group messages skip the messages-table provider_message_id dedup, so
+  // claim the message id here. Only actionable messages (an edit command, or any
+  // reply while an edit is pending) are claimed; a duplicate is a silent no-op.
+  const { matched, body } = detectEditCommand(text);
+  const messageId = msg?.id?._serialized || msg?.id?.id || null;
+  if (messageId && (matched || pending)) {
+    const firstDelivery = await claimGroupAction(database, userId, messageId, 'prompt_edit');
+    if (!firstDelivery) {
+      logger?.info?.('prompt-edit', `duplicate delivery ${messageId} ignored`);
+      return { accepted: true, statusCode: 200, promptEdit: 'duplicate' };
+    }
+  }
 
   const applyPending = async () => {
     const target = pending.target || 'prompt';
@@ -181,7 +196,6 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     // Neither obvious yes nor no — fall through; maybe it's a brand-new edit command.
   }
 
-  const { matched, body } = detectEditCommand(text);
   if (!matched) {
     if (pending) {
       const wordCount = text.split(/\s+/).filter(Boolean).length;

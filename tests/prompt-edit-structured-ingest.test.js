@@ -24,6 +24,7 @@ function statefulDb() {
     get config() { return config; },
     isConfigured: () => true,
     async query(sql, params = []) {
+      if (/INSERT INTO whatsapp_group_action_dedup/.test(sql)) return { rows: [{ message_id: params[1] }] };
       if (/SELECT config FROM bot_configs/.test(sql)) return { rows: [{ config }] };
       if (/FROM escalation_threads/.test(sql)) return { rows: [{ ok: 1 }] };
       if (/FROM prompt_edit_requests[\s\S]*status = 'pending'/.test(sql)) {

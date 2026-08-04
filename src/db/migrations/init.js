@@ -423,6 +423,20 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_prompt_edits_user_status
     ON prompt_edit_requests (user_id, source_jid, status, created_at DESC)`,
 
+  // ── Added 2026-08-04: idempotency for escalation-GROUP actions (prompt-edit,
+  //    group status query). Group messages are handled BEFORE the normal
+  //    messages insert, so they lack the provider_message_id dedup that protects
+  //    customer messages. WhatsApp re-delivering a message (connection churn)
+  //    made the prompt-edit confirmation loop for ~10 minutes. Claiming the
+  //    message id once here makes each group action run exactly once.
+  `CREATE TABLE IF NOT EXISTS whatsapp_group_action_dedup (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    action TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, message_id)
+  )`,
+
   // Added 2026-07-02: structured config edits (products / instant replies /
   // do-not-reply) reuse this table. `target` names the section; `proposed_value`
   // holds the computed new value for that section (applied on confirm).

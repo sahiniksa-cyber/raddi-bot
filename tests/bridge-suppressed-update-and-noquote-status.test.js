@@ -60,7 +60,7 @@ test('ingest answers a no-quote status question in a thread-target group', async
     relayResolutionToCustomer: async () => { throw new Error('must not relay a status question'); },
   };
   const service = new MessageIngestService({
-    database: { isConfigured: () => true, query: async () => ({ rows: [] }), transaction: async (fn) => fn({ query: async () => ({ rows: [] }) }) },
+    database: { isConfigured: () => true, query: async (sql, params) => (/whatsapp_group_action_dedup/.test(sql) ? { rows: [{ message_id: params?.[1] }] } : { rows: [] }), transaction: async (fn) => fn({ query: async () => ({ rows: [] }) }) },
     logger: { info: () => {}, warn: () => {} },
     bridge,
     queue: { enqueueAiReply: async () => {} },

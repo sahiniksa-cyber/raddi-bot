@@ -6,6 +6,7 @@ const db = require('../../db/client');
 const { enqueueAiReply, enqueueOutgoingWhatsapp, resolveDebounceMs } = require('../../queues/message-queue');
 const escalationBridge = require('../escalation/escalation-bridge');
 const promptEditService = require('../prompt-edit/prompt-edit.service');
+const { claimGroupAction } = require('./group-action-dedup');
 const { isCustomerBlocked } = require('./do-not-reply');
 const { isAutoReplyEnabled } = require('../bot/auto-reply-control');
 
@@ -261,6 +262,12 @@ class MessageIngestService {
   async tryGroupStatusQuery({ userId, msg }) {
     const text = textFromWhatsappMessage(msg);
     if (!text || !this.bridge.isThreadStatusQuery(text)) return null;
+    // Idempotency: a re-delivered "وش صار" must not re-answer the team. Same class
+    // as the prompt-edit loop — group messages skip the messages-table dedup.
+    const messageId = messageIdFromWhatsappMessage(msg);
+    if (messageId && !(await claimGroupAction(this.db, userId, messageId, 'group_status'))) {
+      return null;
+    }
     const thread = await this.bridge.findLatestThreadForTarget({
       database: this.db,
       userId,
