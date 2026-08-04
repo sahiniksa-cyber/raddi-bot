@@ -9,6 +9,18 @@ test('queue names are separate from WhatsApp queues', () => {
   assert.strictEqual(iq.QUEUE_NAMES.outgoingInstagram, 'outgoing-instagram');
 });
 
+test('job options bound retries so a permanent failure never loops forever', () => {
+  const opts = iq.buildJobOptions({});
+  assert.strictEqual(opts.attempts, 3);                 // finite retry ceiling
+  assert.strictEqual(opts.backoff.type, 'exponential'); // spaced, not hammering
+  assert.ok(opts.backoff.delay >= 1000);
+  assert.ok(opts.removeOnFail);                          // failed jobs are reaped, not kept forever
+});
+
+test('buildJobOptions honors an env-configured attempts ceiling', () => {
+  assert.strictEqual(iq.buildJobOptions({ QUEUE_JOB_ATTEMPTS: '5' }).attempts, 5);
+});
+
 test('enqueueIncomingInstagram adds job with dedup jobId + correct name', async () => {
   const added = [];
   iq.__setQueuesForTest({

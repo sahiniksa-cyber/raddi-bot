@@ -24,21 +24,27 @@ function getConnection() {
   return connection;
 }
 
+// Default BullMQ job options — extracted as a pure function so the retry ceiling
+// (a permanent failure must NOT loop forever) is unit-testable without Redis.
+function buildJobOptions(env = process.env) {
+  return {
+    attempts: parseInt(env.QUEUE_JOB_ATTEMPTS || '3', 10),
+    backoff: { type: 'exponential', delay: parseInt(env.QUEUE_BACKOFF_DELAY_MS || '15000', 10) },
+    removeOnComplete: {
+      age: parseInt(env.QUEUE_REMOVE_COMPLETE_AGE_SECONDS || '86400', 10),
+      count: parseInt(env.QUEUE_REMOVE_COMPLETE_COUNT || '1000', 10),
+    },
+    removeOnFail: {
+      age: parseInt(env.QUEUE_REMOVE_FAIL_AGE_SECONDS || '604800', 10),
+      count: parseInt(env.QUEUE_REMOVE_FAIL_COUNT || '5000', 10),
+    },
+  };
+}
+
 function createQueue(name) {
   return new Queue(name, {
     connection: getConnection(),
-    defaultJobOptions: {
-      attempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS || '3', 10),
-      backoff: { type: 'exponential', delay: parseInt(process.env.QUEUE_BACKOFF_DELAY_MS || '15000', 10) },
-      removeOnComplete: {
-        age: parseInt(process.env.QUEUE_REMOVE_COMPLETE_AGE_SECONDS || '86400', 10),
-        count: parseInt(process.env.QUEUE_REMOVE_COMPLETE_COUNT || '1000', 10),
-      },
-      removeOnFail: {
-        age: parseInt(process.env.QUEUE_REMOVE_FAIL_AGE_SECONDS || '604800', 10),
-        count: parseInt(process.env.QUEUE_REMOVE_FAIL_COUNT || '5000', 10),
-      },
-    },
+    defaultJobOptions: buildJobOptions(),
   });
 }
 
@@ -84,6 +90,7 @@ async function enqueueOutgoingInstagram(payload, options = {}) {
 module.exports = {
   QUEUE_NAMES,
   getQueues,
+  buildJobOptions,
   enqueueIncomingInstagram,
   enqueueOutgoingInstagram,
   __setQueuesForTest,

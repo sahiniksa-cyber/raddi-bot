@@ -137,6 +137,31 @@ test('ingestWebhookEntry conversation upsert reads the live escalation state', a
   assert.match(convSql, /escalated_until/);
 });
 
+test('two customers messaging at once are ingested into separate conversations (no mixing)', async () => {
+  const convUpserts = [];
+  const enqueued = [];
+  const database = {
+    query: async (sql, params) => {
+      if (sql.includes('INSERT INTO instagram_conversations')) {
+        convUpserts.push(params); // [userId, participantId]
+        // Distinct conversation id per participant proves the (user, participant) key.
+        return { rows: [{ id: `conv-${params[1]}`, ai_paused: false, escalated: false }] };
+      }
+      if (sql.includes('INSERT INTO instagram_messages')) return { rows: [{ id: `msg-${params[2]}` }] };
+      return { rows: [] };
+    },
+  };
+  const enqueueAi = async (payload) => { enqueued.push(payload); };
+  await ingestWebhookEntry('u1', { participantId: 'CUST_A', mid: 'a1', text: 'hi from A', echo: false }, { database, enqueueAi });
+  await ingestWebhookEntry('u1', { participantId: 'CUST_B', mid: 'b1', text: 'hi from B', echo: false }, { database, enqueueAi });
+  assert.deepStrictEqual(convUpserts, [['u1', 'CUST_A'], ['u1', 'CUST_B']]);
+  // Each AI job carries its OWN customer + conversation — never crossed.
+  assert.strictEqual(enqueued[0].participantId, 'CUST_A');
+  assert.strictEqual(enqueued[0].conversationId, 'conv-CUST_A');
+  assert.strictEqual(enqueued[1].participantId, 'CUST_B');
+  assert.strictEqual(enqueued[1].conversationId, 'conv-CUST_B');
+});
+
 test('ensureUsername fetches + stores the @username when missing', async () => {
   const updates = [];
   const database = {
