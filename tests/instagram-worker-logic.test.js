@@ -150,6 +150,64 @@ test('processOutgoing never re-sends when quota bookkeeping fails after Meta acc
   assert.equal(updates.length, 1);
 });
 
+test('processOutgoing marks failed and rethrows on a transient Graph error (so BullMQ retries)', async () => {
+  const statuses = [];
+  let decremented = 0;
+  const database = {
+    query: async (sql, params) => {
+      if (sql.startsWith('SELECT status')) return { rows: [{ status: 'queued_for_send', provider_message_id: null }] };
+      if (sql.includes('window_expires_at > NOW()')) return { rows: [{ window_open: true }] };
+      if (sql.includes("SET status='sending'")) return { rows: [{ id: 'r1' }] };
+      if (sql.includes("SET status='failed'")) statuses.push('failed');
+      return { rows: [] };
+    },
+  };
+  await assert.rejects(
+    processOutgoing(
+      { data: { userId: 'u1', conversationId: 'c1', recipientId: 'p1', text: 'hi', replyMessageId: 'r1' } },
+      {
+        database,
+        checkMessageQuota: async () => ({ canReply: true }),
+        getAccountToken: async () => 'token',
+        sendDirectMessage: async () => { throw new Error('ig_send_failed: 500'); },
+        decrementMessageQuota: async () => { decremented++; },
+        logInstagram: async () => {},
+      },
+    ),
+    /ig_send_failed/,
+  );
+  assert.deepStrictEqual(statuses, ['failed']);
+  assert.strictEqual(decremented, 0); // never bill a failed send
+});
+
+test('processOutgoing retry re-claims a previously failed reply and sends it exactly once', async () => {
+  let sends = 0; let sentUpdate = null;
+  const database = {
+    query: async (sql, params) => {
+      if (sql.startsWith('SELECT status')) return { rows: [{ status: 'failed', provider_message_id: null }] }; // not alreadySent
+      if (sql.includes('window_expires_at > NOW()')) return { rows: [{ window_open: true }] };
+      // Claim allows re-sending a 'failed' row (status IN queued_for_send,failed).
+      if (sql.includes("SET status='sending'")) return { rows: [{ id: 'r1' }] };
+      if (sql.includes("SET status='sent'")) { sentUpdate = params; return { rows: [] }; }
+      return { rows: [] };
+    },
+  };
+  const result = await processOutgoing(
+    { data: { userId: 'u1', conversationId: 'c1', recipientId: 'p1', text: 'hi', replyMessageId: 'r1' } },
+    {
+      database,
+      checkMessageQuota: async () => ({ canReply: true }),
+      getAccountToken: async () => 'token',
+      sendDirectMessage: async () => { sends++; return { messageId: 'ig-retry' }; },
+      decrementMessageQuota: async () => ({ success: true }),
+      logInstagram: async () => {},
+    },
+  );
+  assert.strictEqual(result.sent, true);
+  assert.strictEqual(sends, 1);
+  assert.ok(sentUpdate.includes('ig-retry')); // provider id persisted
+});
+
 test('processOutgoing expires a queued reply outside the 24-hour messaging window', async () => {
   let sends = 0;
   const database = {
