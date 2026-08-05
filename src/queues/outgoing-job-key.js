@@ -1,10 +1,24 @@
 'use strict';
 
+const { randomUUID } = require('crypto');
+
 // BullMQ rejects job IDs that contain ":". Strip them unconditionally before
 // returning any key so that legacy persisted keys (e.g. "ai-worker:jobid:uuid")
 // cannot cause a "Custom Id cannot contain :" error during requeue.
 function sanitize(k) {
   return String(k || '').trim().replace(/:/g, '-');
+}
+
+// A keyless outgoing job persists with job_key = NULL, which the worker can
+// NEVER mark 'completed' (status updates key on job_key) — so the Phase-4
+// requeue loop resends the same message every ~60s forever. Real customer
+// replies always carry a replyMessageId, so only keyless CONTROL sends (e.g.
+// prompt-edit systemNotice messages to the escalation group) hit this. Force a
+// stable, non-null key at enqueue time so every outgoing job can complete.
+// (Root cause of the 2026-08 confirm/menu repeat loop.)
+function ensureNonEmptyOutgoingJobKey(key) {
+  const k = String(key || '').trim();
+  return k || `sys-${randomUUID()}`;
 }
 
 function buildEscalationJobKey(replyMessageId) {
@@ -36,4 +50,5 @@ function normalizeOutgoingJobKey(jobKey, payload = {}) {
 module.exports = {
   buildEscalationJobKey,
   normalizeOutgoingJobKey,
+  ensureNonEmptyOutgoingJobKey,
 };

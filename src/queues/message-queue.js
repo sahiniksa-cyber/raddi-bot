@@ -6,7 +6,7 @@ const { Queue, QueueEvents } = require('bullmq');
 
 const db = require('../db/client');
 const { createRedisConnection } = require('./redis');
-const { normalizeOutgoingJobKey } = require('./outgoing-job-key');
+const { normalizeOutgoingJobKey, ensureNonEmptyOutgoingJobKey } = require('./outgoing-job-key');
 
 const QUEUE_NAMES = Object.freeze({
   incomingMessages: process.env.INCOMING_MESSAGES_QUEUE || 'incoming-messages',
@@ -207,7 +207,9 @@ async function ensureReusableQueueJobId(queue, jobId, desiredDelayMs) {
 
 async function enqueueOutgoingWhatsapp(payload, options = {}) {
   const { outgoingWhatsapp } = getQueues();
-  const jobKey = normalizeOutgoingJobKey(options.jobKey || payload.replyMessageId || payload.messageId, payload);
+  const jobKey = ensureNonEmptyOutgoingJobKey(
+    normalizeOutgoingJobKey(options.jobKey || payload.replyMessageId || payload.messageId, payload),
+  );
   await recordJob(QUEUE_NAMES.outgoingWhatsapp, jobKey, payload, payload);
   return outgoingWhatsapp.add('send-whatsapp-message', payload, {
     jobId: jobKey || undefined,
