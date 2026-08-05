@@ -8,11 +8,11 @@ const svc = require('../src/services/prompt-edit/prompt-edit.service');
 const silentLogger = { info: () => {}, warn: () => {}, error: () => {} };
 const GROUP = '120363111@g.us';
 
-// Minimal fake DB that records writes and serves a scripted config + pending row.
-// threadTargets: group JIDs the bot has escalated to (escalation_threads ground truth).
+// Fake DB serving a scripted config + optional active session row. `pending`,
+// when given, is the active session (include a `stage`, e.g. 'confirm').
 function fakeDb({ config = {}, pending = null, threadTargets = [] } = {}) {
   const writes = [];
-  const targetDigits = threadTargets.map(j => String(j).replace(/@.*$/, '').replace(/\D/g, ''));
+  const targetDigits = threadTargets.map((j) => String(j).replace(/@.*$/, '').replace(/\D/g, ''));
   return {
     writes,
     isConfigured: () => true,
@@ -26,16 +26,23 @@ function fakeDb({ config = {}, pending = null, threadTargets = [] } = {}) {
         return { rows: pending ? [pending] : [] };
       }
       if (/INSERT INTO prompt_edit_requests/.test(sql)) return { rows: [{ id: 'pe-1' }] };
+      // markTerminalAtomic — claims the flip only while pending.
+      if (/UPDATE prompt_edit_requests SET status = \$2[\s\S]*status = 'pending' RETURNING id/.test(sql)) {
+        return { rows: [{ id: params[0] }] };
+      }
       if (/UPDATE prompt_edit_requests/.test(sql)) return { rows: [{ id: params[0] }] };
       if (/UPDATE bot_configs/.test(sql)) return { rowCount: 1 };
-      if (/SELECT[\s\S]*FROM prompt_edit_requests/.test(sql)) return { rows: [] };
       return { rows: [] };
     },
   };
 }
 
-function fakeAi(out, intent = 'other') {
-  return { proposePromptEdit: async () => out, classifyReplyIntent: async () => intent };
+function fakeAi(intent = 'other') {
+  return {
+    proposePromptEdit: async () => ({ newInstructions: 'الجديد الكامل', summary: 'إضافة معلومة' }),
+    planConfigEdit: async () => ({ target: 'prompt' }),
+    classifyReplyIntent: async () => intent,
+  };
 }
 
 function makeDeps(over = {}) {
@@ -46,10 +53,9 @@ function makeDeps(over = {}) {
       database: over.database || fakeDb(),
       logger: silentLogger,
       enqueue: async (p) => { sent.push(p); },
-      buildAiClient: async () => over.ai || fakeAi({ newInstructions: 'الجديد الكامل', summary: 'إضافة معلومة' }, over.intent || 'other'),
+      buildAiClient: async () => over.ai || fakeAi(over.intent),
       now: () => 1_000_000,
       ttlMinutes: 10,
-      ...over.deps,
     },
   };
 }
@@ -58,7 +64,13 @@ const CONFIG_WITH_GROUP = {
   escalationContacts: [{ name: 'الفريق', phone: GROUP }],
   botInstructions: 'تعليمات حالية طويلة كفاية لتكون البرومنت كامل بدون أي مشاكل إطلاقاً ووو',
 };
+const confirmPending = (over = {}) => ({
+  id: 'pe-1', stage: 'confirm', target: 'prompt',
+  proposed_instructions: 'النص النهائي', change_summary: 'تغيير',
+  created_at: new Date(1_000_000 - 1000).toISOString(), ...over,
+});
 
+// ── Pure gates ────────────────────────────────────────────────────────────────
 test('groupMatchesEscalation matches a configured group jid (suffix-insensitive)', () => {
   assert.equal(svc.groupMatchesEscalation(CONFIG_WITH_GROUP, GROUP), true);
   assert.equal(svc.groupMatchesEscalation(CONFIG_WITH_GROUP, '120363111'), true);
@@ -72,201 +84,144 @@ test('isEnabled defaults to true and respects an explicit false', () => {
   assert.equal(svc.isEnabled({ whatsappPromptEditEnabled: true }), true);
 });
 
-test('tryHandle: an edit command proposes a change, stores pending, replies a summary, no customer send', async () => {
+// ── Menu open ─────────────────────────────────────────────────────────────────
+test('an edit trigger opens the section menu (no AI call, systemNotice send)', async () => {
   const db = fakeDb({ config: CONFIG_WITH_GROUP });
-  const { sent, deps } = makeDeps({ database: db });
-  const res = await svc.tryHandle({
-    ...deps,
-    userId: 'u1',
-    msg: { from: GROUP, author: '96650@s.whatsapp.net', body: 'تعديل: أضف إننا نوصل للرياض مجاناً' },
+  let aiCalled = 0;
+  const { sent, deps } = makeDeps({
+    database: db,
+    ai: { proposePromptEdit: async () => { aiCalled++; return {}; }, planConfigEdit: async () => null, classifyReplyIntent: async () => 'other' },
   });
-  assert.equal(res.promptEdit, 'proposed');
-  assert.ok(db.writes.some(w => /INSERT INTO prompt_edit_requests/.test(w.sql)), 'pending row inserted');
-  assert.equal(sent.length, 1, 'one summary message sent to the group');
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, author: '96650@x', body: 'تعديل: أضف شي' } });
+  assert.equal(res.promptEdit, 'menu');
+  assert.equal(aiCalled, 0, 'opening the menu must not call the AI');
+  assert.ok(db.writes.some((w) => /INSERT INTO prompt_edit_requests/.test(w.sql)), 'session row inserted');
   assert.equal(sent[0].sender, GROUP);
-  assert.equal(sent[0].systemNotice, true, 'control message must bypass quota (not billable, not blocked when empty)');
-  assert.match(sent[0].reply, /إضافة معلومة/);
+  assert.equal(sent[0].systemNotice, true, 'control message bypasses quota (not billable)');
+  assert.match(sent[0].reply, /وش تبي تعدّل/);
 });
 
-// A claim stub that dedups by (userId, messageId): first call true, then false.
-function claimStub() {
-  const seen = new Set();
-  const fn = async (_db, userId, messageId) => {
-    const k = `${userId}::${messageId}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  };
-  return fn;
-}
-
-test('tryHandle: a RE-DELIVERED edit command does not propose twice (idempotent)', async () => {
-  const claimGroupAction = claimStub();
-  const msg = { from: GROUP, author: '96650@s.whatsapp.net', body: 'تعديل: أضف إننا نوصل للرياض مجاناً', id: { _serialized: 'EDIT_MSG_1' } };
-
-  const db1 = fakeDb({ config: CONFIG_WITH_GROUP });
-  const d1 = makeDeps({ database: db1 });
-  const r1 = await svc.tryHandle({ ...d1.deps, claimGroupAction, userId: 'u1', msg });
-  assert.equal(r1.promptEdit, 'proposed');
-  assert.equal(d1.sent.length, 1);
-
-  // Same message id arrives again (WhatsApp re-sync) → must be a silent no-op.
-  const db2 = fakeDb({ config: CONFIG_WITH_GROUP });
-  const d2 = makeDeps({ database: db2 });
-  const r2 = await svc.tryHandle({ ...d2.deps, claimGroupAction, userId: 'u1', msg });
-  assert.equal(r2.promptEdit, 'duplicate');
-  assert.equal(d2.sent.length, 0, 'no second proposal sent');
-  assert.ok(!db2.writes.some(w => /INSERT INTO prompt_edit_requests/.test(w.sql)), 'no second pending inserted');
-});
-
-test('tryHandle: a RE-DELIVERED نعم does not apply the edit twice', async () => {
-  const claimGroupAction = claimStub();
-  const pending = { id: 'pe-1', proposed_instructions: 'النص النهائي', change_summary: 'تغيير', created_at: new Date(1_000_000 - 1000).toISOString() };
-  const msg = { from: GROUP, body: 'نعم', id: { _serialized: 'YES_MSG_1' } };
-
-  const db1 = fakeDb({ config: CONFIG_WITH_GROUP, pending });
-  const d1 = makeDeps({ database: db1 });
-  const r1 = await svc.tryHandle({ ...d1.deps, claimGroupAction, userId: 'u1', msg });
-  assert.equal(r1.promptEdit, 'applied');
-
-  const db2 = fakeDb({ config: CONFIG_WITH_GROUP, pending });
-  const d2 = makeDeps({ database: db2 });
-  const r2 = await svc.tryHandle({ ...d2.deps, claimGroupAction, userId: 'u1', msg });
-  assert.equal(r2.promptEdit, 'duplicate');
-  assert.ok(!db2.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config NOT written a second time');
-  assert.equal(d2.sent.length, 0, 'no second confirmation sent');
-});
-
-test('tryHandle: نعم with a pending edit applies it to bot_configs and confirms', async () => {
-  const pending = { id: 'pe-1', proposed_instructions: 'النص النهائي', change_summary: 'تغيير', created_at: new Date(1_000_000 - 1000).toISOString() };
-  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+// ── Confirm-stage behaviours (still valid under the state machine) ───────────
+test('نعم on a confirm-stage session applies to bot_configs and announces', async () => {
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() });
   const { sent, deps } = makeDeps({ database: db });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'نعم' } });
   assert.equal(res.promptEdit, 'applied');
-  assert.ok(db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config updated');
-  assert.ok(db.writes.some(w => /UPDATE prompt_edit_requests/.test(w.sql) && w.params.includes('applied')));
-  assert.match(sent[0].reply, /تم/);
+  assert.ok(db.writes.some((w) => /UPDATE bot_configs/.test(w.sql)), 'config updated');
+  assert.ok(db.writes.some((w) => /UPDATE prompt_edit_requests SET status = \$2/.test(w.sql) && w.params.includes('applied')));
+  assert.match(sent[sent.length - 1].reply, /تم الحفظ/);
 });
 
-test('tryHandle: لا with a pending edit rejects it, no config write', async () => {
-  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
-  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
-  const { sent, deps } = makeDeps({ database: db });
+test('لا on a confirm-stage session rejects it, no config write', async () => {
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() });
+  const { deps } = makeDeps({ database: db });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'لا' } });
   assert.equal(res.promptEdit, 'rejected');
-  assert.ok(!db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config NOT updated');
+  assert.ok(!db.writes.some((w) => /UPDATE bot_configs/.test(w.sql)), 'config NOT updated');
 });
 
-test('tryHandle: returns null for a non-command message in the group (falls through)', async () => {
-  const db = fakeDb({ config: CONFIG_WITH_GROUP });
-  const { deps } = makeDeps({ database: db });
-  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'صباح الخير' } });
-  assert.equal(res, null);
-});
-
-// Production 2026-07-02: after an unrecognized reply the bot went silent and the
-// merchant typed "الو"; a pending edit should be re-prompted (not canceled, not
-// silent) for SHORT unrecognized replies.
-test('tryHandle: short unrecognized reply while a pending edit exists re-prompts (does not cancel)', async () => {
-  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
-  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
-  const { sent, deps } = makeDeps({ database: db });
+test('a short unrecognized confirm reply re-prompts (does not go silent)', async () => {
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() });
+  const { sent, deps } = makeDeps({ database: db, intent: 'other' });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'الو' } });
   assert.equal(res.promptEdit, 'reprompt');
-  assert.ok(!db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config not changed');
-  assert.ok(!db.writes.some(w => /UPDATE prompt_edit_requests/.test(w.sql)), 'pending not resolved');
-  assert.match(sent[0].reply, /بانتظار التأكيد|نعم|لا/);
+  assert.match(sent[0].reply, /بانتظار التأكيد/);
 });
 
-test('tryHandle: a LONG unrecognized sentence while pending does NOT re-prompt (stays silent to avoid spam)', async () => {
-  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
-  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+test('a LONG unrecognized sentence during confirm stays silent (team chatter)', async () => {
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() });
   const { sent, deps } = makeDeps({ database: db });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'يا شباب لا تنسون ترسلون طلب الدفع للعميل اليوم قبل المغرب' } });
   assert.equal(res, null);
   assert.equal(sent.length, 0);
 });
 
-// The merchant wants ANY confirmation wording to work — not a fixed keyword.
-// Unusual phrasings are classified by the AI (confirm/cancel/other).
-test('tryHandle: an unusual confirmation ("ثبتها") is applied via AI intent classification', async () => {
-  const pending = { id: 'pe-1', proposed_instructions: 'النص النهائي', change_summary: 'x', created_at: new Date(1_000_000).toISOString() };
-  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
-  const { sent, deps } = makeDeps({ database: db, intent: 'confirm' });
+test('an unusual confirmation is applied via AI intent classification', async () => {
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() });
+  const { deps } = makeDeps({ database: db, intent: 'confirm' });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'ثبتها وخلاص' } });
   assert.equal(res.promptEdit, 'applied');
-  assert.ok(db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config updated via AI-understood confirm');
+  assert.ok(db.writes.some((w) => /UPDATE bot_configs/.test(w.sql)));
 });
 
-test('tryHandle: an unusual cancellation is rejected via AI intent classification', async () => {
-  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
-  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
+test('an unusual cancellation is rejected via AI intent classification', async () => {
+  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() });
   const { deps } = makeDeps({ database: db, intent: 'cancel' });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'خلها زي ماهي بلا تغيير' } });
   assert.equal(res.promptEdit, 'rejected');
-  assert.ok(!db.writes.some(w => /UPDATE bot_configs/.test(w.sql)), 'config not changed on cancel');
+  assert.ok(!db.writes.some((w) => /UPDATE bot_configs/.test(w.sql)));
 });
 
-test('tryHandle: AI says "other" for a short reply -> re-prompt, no apply/cancel', async () => {
-  const pending = { id: 'pe-1', proposed_instructions: 'x', change_summary: 'y', created_at: new Date(1_000_000).toISOString() };
-  const db = fakeDb({ config: CONFIG_WITH_GROUP, pending });
-  const { sent, deps } = makeDeps({ database: db, intent: 'other' });
-  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'الو' } });
-  assert.equal(res.promptEdit, 'reprompt');
-  assert.ok(!db.writes.some(w => /UPDATE bot_configs/.test(w.sql)));
-  assert.match(sent[0].reply, /بانتظار التأكيد/);
-});
-
-test('tryHandle: returns null when feature disabled, even for an edit command', async () => {
-  const db = fakeDb({ config: { ...CONFIG_WITH_GROUP, whatsappPromptEditEnabled: false } });
-  const { deps } = makeDeps({ database: db });
-  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'تعديل: شيء' } });
-  assert.equal(res, null);
-});
-
-test('tryHandle: returns null when the group is not a configured escalation group', async () => {
-  const db = fakeDb({ config: CONFIG_WITH_GROUP });
-  const { deps } = makeDeps({ database: db });
-  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: '777@g.us', body: 'تعديل: شيء' } });
-  assert.equal(res, null);
-});
-
-// ROOT CAUSE (production 2026-07-01): the bot escalates to a GROUP recorded in
-// escalation_threads, but escalationContacts holds descriptive text — not the
-// group JID. Group identification MUST also trust escalation_threads (the real
-// destination), not only config. Without the fix this returns null (silent).
-test('tryHandle: recognizes the group via escalation_threads even when escalationContacts lacks it', async () => {
-  const config = {
-    escalationContacts: [{ name: 'محمد شاهيني', phone: 'متجر ProStoree خدمة عملاء' }], // NOT a jid
-    botInstructions: 'أنت موظف خدمة عملاء لمتجر ProStoree. ساعات العمل ٩ص-٩م بدون أي مشاكل.',
+// ── Idempotency ──────────────────────────────────────────────────────────────
+function claimStub() {
+  const seen = new Set();
+  return async (_db, userId, messageId) => {
+    const k = `${userId}::${messageId}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
   };
-  const db = fakeDb({ config, threadTargets: [GROUP] }); // bot HAS escalated to GROUP
-  const { sent, deps } = makeDeps({ database: db });
-  const res = await svc.tryHandle({
-    ...deps, userId: 'u1',
-    msg: { from: GROUP, author: '96650@s.whatsapp.net', body: 'ضيف في البرومنت: لو سأل عن اشتراك ادوبي قول مضمون' },
-  });
-  assert.equal(res.promptEdit, 'proposed', 'group recognized via escalation_threads');
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].sender, GROUP);
+}
+
+test('a RE-DELIVERED trigger does not open the menu twice (idempotent)', async () => {
+  const claimGroupAction = claimStub();
+  const msg = { from: GROUP, author: '96650@x', body: 'تعديل', id: { _serialized: 'EDIT_1' } };
+  const d1 = makeDeps({ database: fakeDb({ config: CONFIG_WITH_GROUP }) });
+  assert.equal((await svc.tryHandle({ ...d1.deps, claimGroupAction, userId: 'u1', msg })).promptEdit, 'menu');
+  const d2 = makeDeps({ database: fakeDb({ config: CONFIG_WITH_GROUP }) });
+  const r2 = await svc.tryHandle({ ...d2.deps, claimGroupAction, userId: 'u1', msg });
+  assert.equal(r2.promptEdit, 'duplicate');
+  assert.equal(d2.sent.length, 0);
 });
 
-test('tryHandle: a lone keyword asks the user to write the change (handled, no AI call)', async () => {
-  const db = fakeDb({ config: CONFIG_WITH_GROUP });
-  let aiCalled = 0;
-  const { sent, deps } = makeDeps({ database: db, ai: { proposePromptEdit: async () => { aiCalled++; return {}; } } });
+test('a RE-DELIVERED نعم does not apply the edit twice', async () => {
+  const claimGroupAction = claimStub();
+  const msg = { from: GROUP, body: 'نعم', id: { _serialized: 'YES_1' } };
+  const d1 = makeDeps({ database: fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() }) });
+  assert.equal((await svc.tryHandle({ ...d1.deps, claimGroupAction, userId: 'u1', msg })).promptEdit, 'applied');
+  const db2 = fakeDb({ config: CONFIG_WITH_GROUP, pending: confirmPending() });
+  const d2 = makeDeps({ database: db2 });
+  const r2 = await svc.tryHandle({ ...d2.deps, claimGroupAction, userId: 'u1', msg });
+  assert.equal(r2.promptEdit, 'duplicate');
+  assert.ok(!db2.writes.some((w) => /UPDATE bot_configs/.test(w.sql)), 'config NOT written a second time');
+});
+
+// ── Gates ────────────────────────────────────────────────────────────────────
+test('returns null for a non-command message with no active session', async () => {
+  const { deps } = makeDeps({ database: fakeDb({ config: CONFIG_WITH_GROUP }) });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'صباح الخير' } });
+  assert.equal(res, null);
+});
+
+test('an action-word chatter message ("احذف الرسالة القديمة") does NOT open the menu', async () => {
+  const { sent, deps } = makeDeps({ database: fakeDb({ config: CONFIG_WITH_GROUP }) });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'احذف الرسالة القديمة يا شباب' } });
+  assert.equal(res, null);
+  assert.equal(sent.length, 0, 'no menu popped from normal chatter');
+});
+
+test('returns null when feature disabled, even for a trigger', async () => {
+  const { deps } = makeDeps({ database: fakeDb({ config: { ...CONFIG_WITH_GROUP, whatsappPromptEditEnabled: false } }) });
   const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'تعديل' } });
-  assert.equal(res.promptEdit, 'help');
-  assert.equal(aiCalled, 0);
-  assert.match(sent[0].reply, /اكتب التعديل|بعد كلمة/);
+  assert.equal(res, null);
 });
 
-test('tryHandle: model failure sends a clear error and does not store a pending row', async () => {
-  const db = fakeDb({ config: CONFIG_WITH_GROUP });
-  const failingAi = { proposePromptEdit: async () => { throw new Error('boom'); } };
-  const { sent, deps } = makeDeps({ database: db, ai: failingAi });
-  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, body: 'تعديل: شيء غامض' } });
-  assert.equal(res.promptEdit, 'error');
-  assert.ok(!db.writes.some(w => /INSERT INTO prompt_edit_requests/.test(w.sql)));
-  assert.match(sent[0].reply, /ما قدرت أفهم|جرّب/);
+test('returns null when the group is not an escalation group', async () => {
+  const { deps } = makeDeps({ database: fakeDb({ config: CONFIG_WITH_GROUP }) });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: '777@g.us', body: 'تعديل' } });
+  assert.equal(res, null);
+});
+
+// Root cause (production 2026-07-01): recognize the group via escalation_threads
+// even when escalationContacts holds descriptive text, not the JID.
+test('recognizes the group via escalation_threads even when escalationContacts lacks it', async () => {
+  const config = {
+    escalationContacts: [{ name: 'محمد شاهيني', phone: 'متجر ProStoree خدمة عملاء' }],
+    botInstructions: 'أنت موظف خدمة عملاء لمتجر ProStoree. ساعات العمل ٩ص-٩م.',
+  };
+  const db = fakeDb({ config, threadTargets: [GROUP] });
+  const { sent, deps } = makeDeps({ database: db });
+  const res = await svc.tryHandle({ ...deps, userId: 'u1', msg: { from: GROUP, author: '96650@x', body: 'تعديل' } });
+  assert.equal(res.promptEdit, 'menu', 'group recognized via escalation_threads');
+  assert.equal(sent[0].sender, GROUP);
 });

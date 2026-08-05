@@ -443,6 +443,17 @@ const statements = [
   `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS target TEXT NOT NULL DEFAULT 'prompt'`,
   `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS proposed_value JSONB`,
 
+  // Added 2026-08-05: guided edit-menu state machine. A single active
+  // (status='pending') row per (user, group) now carries the navigation stage
+  // so the interaction survives across separate inbound messages/processes.
+  // Old rows default to 'confirm' and behave exactly as before.
+  //   stage   — menu | input | input_keyword | input_reply | subattr | subvalue | confirm
+  //   section — chosen section key (prompt/products/…); null until picked
+  //   context — per-stage scratch (e.g. {attr:'tone'}, or a pending delta op)
+  `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS stage TEXT NOT NULL DEFAULT 'confirm'`,
+  `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS section TEXT`,
+  `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS context JSONB`,
+
   `CREATE TABLE IF NOT EXISTS pre_activations (
     id BIGSERIAL PRIMARY KEY,
     email TEXT NOT NULL,
