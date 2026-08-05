@@ -1005,6 +1005,20 @@ async function requeuePersistedOutgoingJobs(limit = 200) {
   if (!db.isConfigured()) return;
   const maxAgeMs = outgoingStaleMaxAgeMs();
 
+  // A persisted outgoing job with a NULL job_key can never be marked 'completed'
+  // (updateJobStatus keys on job_key), so requeuing it resends the same message
+  // every cycle forever. This only affects legacy keyless CONTROL sends — new
+  // enqueues always get a non-null key (ensureNonEmptyOutgoingJobKey). Expire any
+  // such rows so the loop can't resurrect them. (Root of the 2026-08 repeat loop.)
+  await db.query(
+    `UPDATE jobs
+        SET status = 'expired', updated_at = NOW(),
+            last_error = COALESCE(last_error, '') || ' [expired: null job_key not requeueable]'
+      WHERE queue_name = $1 AND job_key IS NULL
+        AND status IN ('queued', 'processing')`,
+    [QUEUE_NAMES.outgoingWhatsapp],
+  ).catch((err) => console.warn(`${new Date().toISOString()} [${WORKER_NAME}] expire-nullkey failed: ${err.message}`));
+
   // Expire outgoing jobs older than the staleness window so a (re)start never
   // resurrects and sends day-old replies to customers. The requeue used to pick
   // up ANY pending job regardless of age, then re-add it with a fresh BullMQ
