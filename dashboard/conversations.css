@@ -55,11 +55,13 @@
 .cv-bubble-wrap { display: flex; flex-direction: column; margin-bottom: 5px; max-width: 70%; }
 .cv-bubble-wrap.customer { align-self: flex-start; align-items: flex-start; }
 .cv-bubble-wrap.ai { align-self: flex-end; align-items: flex-end; }
-.cv-bubble { padding: 8px 12px 17px; border-radius: 12px; font-size: 13px; line-height: 1.55; word-break: break-word; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+.cv-bubble { padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.55; word-break: break-word; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 .cv-bubble-wrap.customer .cv-bubble { background: #ffffff; color: var(--text); border-top-right-radius: 4px; }
 .cv-bubble-wrap.ai .cv-bubble { background: #e9f5eb; color: var(--text); border-top-left-radius: 4px; }
-.cv-bubble-time { position: absolute; bottom: 4px; left: 10px; font-size: 10px; color: var(--text-dim); white-space: nowrap; display: flex; align-items: center; gap: 3px; font-weight: 500; }
-.cv-bubble-wrap.customer .cv-bubble-time { right: 10px; left: auto; }
+/* Time sits in normal flow directly under each bubble (one per message),
+   aligned to the correct side. (Was absolute + a sibling of the bubble, so
+   every timestamp collapsed into the panel corner and overlapped.) */
+.cv-bubble-time { font-size: 10px; color: var(--text-dim); white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; font-weight: 500; margin-top: 2px; padding: 0 4px; }
 .cv-bubble-status { font-size: 10.5px; color: #53bdeb; line-height: 1; }
 .cv-bubble-status.muted { color: rgba(0,0,0,0.35); }
 
@@ -139,6 +141,8 @@
 .cv-bubble-wrap.ai { flex-direction: row-reverse; display: flex; gap: 7px; align-items: flex-end; }
 .cv-bubble-wrap.customer { display: flex; }
 .cv-bubble-content { display: flex; flex-direction: column; max-width: 100%; }
+.cv-bubble-wrap.customer .cv-bubble-content { align-items: flex-start; }
+.cv-bubble-wrap.ai .cv-bubble-content { align-items: flex-end; }
 .cv-bot-avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--green-bg); border: 1px solid var(--green-border); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 4px; }
 .cv-bot-avatar i[data-lucide] { width: 13px; height: 13px; color: var(--green); stroke-width: 1.5; }
 
