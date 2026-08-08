@@ -1173,21 +1173,6 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 <div class="view" id="view-settings">
 <div class="sw">
 
-  <!-- قوة رد البوت — عدّاد جاهزية يرتفع تلقائياً كل ما تكمل قسماً -->
-  <div class="readiness wa-only" id="botStrength">
-    <div class="rd-gauge">
-      <svg class="rd-ring" viewBox="0 0 120 120" aria-hidden="true">
-        <circle class="rd-track" cx="60" cy="60" r="52"></circle>
-        <circle class="rd-prog" id="strRing" cx="60" cy="60" r="52"></circle>
-      </svg>
-      <div class="rd-gauge-center"><span class="rd-pct" id="strPct">0%</span></div>
-    </div>
-    <div class="rd-info">
-      <div class="rd-title"><i data-lucide="gauge"></i> قوة رد البوت <span class="rd-badge" id="strBadge">—</span></div>
-      <div class="rd-hint" id="strHint">كل ما تكمّل قسماً في الإعدادات، ترتفع قوة ردود البوت.</div>
-    </div>
-  </div>
-
   <!-- Instagram-only: ONE clean full-width control bar (mirrors the WhatsApp
        "متصل / إيقاف" bar) — connection status + auto-reply toggle + disconnect +
        back-to-WhatsApp. Replaces the old cramped pink #igCfgBanner (which was
@@ -1254,11 +1239,25 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     </div>
   </div>
 
-  <div class="stats-row wa-only" style="grid-template-columns:repeat(4,1fr)">
+  <!-- قوة رد البوت — عدّاد جاهزية تحت حالة الاتصال، يرتفع كل ما تكمل قسماً -->
+  <div class="readiness wa-only" id="botStrength">
+    <div class="rd-gauge">
+      <svg class="rd-ring" viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="rd-track" cx="60" cy="60" r="52"></circle>
+        <circle class="rd-prog" id="strRing" cx="60" cy="60" r="52"></circle>
+      </svg>
+      <div class="rd-gauge-center"><span class="rd-pct" id="strPct">0%</span></div>
+    </div>
+    <div class="rd-info">
+      <div class="rd-title"><i data-lucide="gauge"></i> قوة رد البوت <span class="rd-badge" id="strBadge">—</span></div>
+      <div class="rd-hint" id="strHint">كل ما تكمّل قسماً في الإعدادات، ترتفع قوة ردود البوت.</div>
+    </div>
+  </div>
+
+  <div class="stats-row wa-only" style="grid-template-columns:repeat(3,1fr)">
     <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
     <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
     <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
-    <div class="stat"><div class="v" id="stMdl">—</div><div class="l">النموذج</div></div>
   </div>
 
   <!-- ═══ FULL SERVICE HEALTH CHECK ═══ -->
@@ -2481,7 +2480,7 @@ function selModel(card){
   const m=card.dataset.model;
   document.getElementById('mdlSel').value=m;
   const short=m.split('/').pop().replace(/:free$/,'').split('-').slice(0,2).join('-');
-  document.getElementById('stMdl').textContent=short.substring(0,10);
+  {const _m=document.getElementById('stMdl');if(_m)_m.textContent=short.substring(0,10);}
   // Show only the relevant key section
   ['googleKeySection','anthropicKeySection','openaiKeySection'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
