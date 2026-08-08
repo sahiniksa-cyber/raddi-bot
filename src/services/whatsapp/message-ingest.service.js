@@ -392,6 +392,16 @@ class MessageIngestService {
       throw new Error('DATABASE_URL is required for message ingest');
     }
 
+    // Prompt-edit from a 1:1 escalation NUMBER (escalation isn't always a group —
+    // a team member's direct line counts too). Runs BEFORE the customer insert so
+    // a team edit command isn't logged as a customer message / answered by the AI.
+    // tryHandle authorizes team/owner only (isEscalationChat); a customer's 1:1
+    // returns null and falls through to normal handling. Fail-open on any error.
+    const directEdit = await Promise.resolve()
+      .then(() => this.promptEdit({ userId, msg }))
+      .catch((e) => { this.logger.warn?.('prompt-edit', `1:1 handler failed: ${e.message}`); return null; });
+    if (directEdit) return directEdit;
+
     const sender = senderFromWhatsappMessage(msg);
     const phoneNumber = phoneNumberFromWhatsappMessage(msg);
     const text = contentFromWhatsappMessage(msg);

@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 
 const svc = require('../src/services/prompt-edit/prompt-edit.service');
 
@@ -69,8 +71,24 @@ function makeDb({ config = {}, threadGroups = [GROUP] } = {}) {
     }
     if (/UPDATE prompt_edit_requests SET status = \$2[\s\S]*status = 'pending' RETURNING id/.test(sql)) {
       const row = state.rows.get(params[0]);
-      if (row && row.status === 'pending') { row.status = params[1]; return { rows: [{ id: row.id }] }; }
+      if (row && row.status === 'pending') { row.status = params[1]; row.decided_at = ++state.seq; return { rows: [{ id: row.id }] }; }
       return { rows: [] };
+    }
+    if (/UPDATE prompt_edit_requests SET previous_value =/.test(sql)) {
+      const row = state.rows.get(params[0]);
+      if (row) row.previous_value = params[1] == null ? null : JSON.parse(params[1]);
+      return { rows: [] };
+    }
+    if (/UPDATE prompt_edit_requests SET status = \$2 WHERE id = \$1/.test(sql)) {
+      const row = state.rows.get(params[0]);
+      if (row) row.status = params[1];
+      return { rows: [] };
+    }
+    if (/SELECT[\s\S]*FROM prompt_edit_requests[\s\S]*status = 'applied'[\s\S]*previous_value IS NOT NULL/.test(sql)) {
+      const applied = [...state.rows.values()]
+        .filter((r) => r.status === 'applied' && r.target !== 'undo' && r.previous_value != null)
+        .sort((a, b) => (b.decided_at || b.created_at) - (a.decided_at || a.created_at))[0];
+      return { rows: applied ? [{ ...applied }] : [] };
     }
     if (/UPDATE bot_configs[\s\S]*jsonb_set/.test(sql)) {
       const field = String(params[1]).replace(/[{}]/g, '');
@@ -358,4 +376,78 @@ test('a stale session (older than TTL) is expired and ignored', async () => {
   const r = await d.send('6');
   assert.equal(r, null);
   assert.equal(row.status, 'expired');
+});
+
+// ── Undo (تراجع) ──────────────────────────────────────────────────────────────
+test('undo: تراجع after an applied edit restores the previous value', async () => {
+  const db = makeDb({ config: { replyStyle: { closingPhrases: ['تأمر شي؟'] } } });
+  const d = driver(db);
+  await d.send('تعديل'); await d.send('6'); await d.send('شكراً'); await d.send('نعم');
+  assert.deepEqual(db.state.config.replyStyle.closingPhrases, ['تأمر شي؟', 'شكراً']);
+
+  const proposed = await d.send('تراجع');
+  assert.equal(proposed.promptEdit, 'undo_proposed');
+  assert.match(d.lastOut(), /آخر تعديل/);
+  const done = await d.send('نعم');
+  assert.equal(done.promptEdit, 'undone');
+  assert.deepEqual(db.state.config.replyStyle.closingPhrases, ['تأمر شي؟'], 'previous value restored');
+});
+
+test('undo: تراجع with no prior applied edit says there is nothing to revert', async () => {
+  const db = makeDb();
+  const d = driver(db);
+  const r = await d.send('تراجع');
+  assert.equal(r.promptEdit, 'undo_none');
+  assert.match(d.lastOut(), /ما فيه تعديل سابق/);
+});
+
+test('undo can be cancelled with لا (nothing restored)', async () => {
+  const db = makeDb({ config: { replyStyle: { closingPhrases: ['أ'] } } });
+  const d = driver(db);
+  await d.send('تعديل'); await d.send('6'); await d.send('ب'); await d.send('نعم');
+  await d.send('تراجع');
+  const r = await d.send('لا');
+  assert.equal(r.promptEdit, 'rejected');
+  assert.deepEqual(db.state.config.replyStyle.closingPhrases, ['أ', 'ب'], 'edit stays; undo cancelled');
+});
+
+// ── 1:1 escalation number (escalation isn't always a group) ───────────────────
+function directDriver(db, from) {
+  const outbox = [];
+  let seq = 0;
+  const enqueue = async (job) => { outbox.push(job.reply); };
+  const send = (text) => svc.tryHandle({
+    database: db, userId: USER,
+    msg: { from, body: text, id: { _serialized: `d${++seq}` }, author: from },
+    enqueue, buildAiClient: makeAi()(), logger: silentLogger,
+  });
+  return { send, outbox, lastOut: () => outbox[outbox.length - 1] };
+}
+
+test('1:1 escalation NUMBER: a team member can edit from their direct chat', async () => {
+  const NUM = '966555000111@s.whatsapp.net';
+  const db = makeDb({
+    config: { escalationContacts: [{ name: 'أحمد', phone: '966555000111' }], replyStyle: { closingPhrases: [] } },
+    threadGroups: [],
+  });
+  const d = directDriver(db, NUM);
+  const r = await d.send('تعديل');
+  assert.equal(r.promptEdit, 'menu', 'edit menu opens for a configured 1:1 escalation number');
+});
+
+test('1:1 from a CUSTOMER (not an escalation number) can NEVER edit', async () => {
+  const CUST = '966500999888@s.whatsapp.net';
+  const db = makeDb({
+    config: { escalationContacts: [{ name: 'أحمد', phone: '966555000111' }] },
+    threadGroups: [],
+  });
+  const d = directDriver(db, CUST);
+  assert.equal(await d.send('تعديل'), null, 'a customer 1:1 is not authorized to edit');
+});
+
+// ── Conflict-aware merge (prompt-engineering guard) ───────────────────────────
+test('proposePromptEdit instructions are conflict-aware (reconcile contradictions)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ai-client.js'), 'utf8');
+  assert.match(src, /يعارض أو يكرّر معلومة موجودة/);
+  assert.match(src, /احذف أو استبدل السطر القديم المتعارض/);
 });

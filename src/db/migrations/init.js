@@ -454,6 +454,11 @@ const statements = [
   `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS section TEXT`,
   `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS context JSONB`,
 
+  // Added 2026-08-06: undo support. On apply we snapshot the section's PRIOR
+  // value here as {field, value} so a later "تراجع" can restore the last applied
+  // edit for that chat. (field is the top-level config key that was written.)
+  `ALTER TABLE prompt_edit_requests ADD COLUMN IF NOT EXISTS previous_value JSONB`,
+
   `CREATE TABLE IF NOT EXISTS pre_activations (
     id BIGSERIAL PRIMARY KEY,
     email TEXT NOT NULL,

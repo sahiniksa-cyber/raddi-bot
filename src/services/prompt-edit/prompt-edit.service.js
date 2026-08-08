@@ -10,11 +10,27 @@ const { claimGroupAction: defaultClaimGroupAction } = require('../whatsapp/group
 // full computed section value in proposed_value and write it verbatim on apply.
 const SNAPSHOT_FIELD = { products: 'products', instant_replies: 'autoReplyKeywords' };
 
+// The TOP-LEVEL config field each target ultimately writes. Used to snapshot the
+// prior value on apply (for undo) and to restore it on undo.
+const TARGET_TOPFIELD = {
+  prompt: 'botInstructions',
+  products: 'products',
+  instant_replies: 'autoReplyKeywords',
+  do_not_reply: 'doNotReplyList',
+  reply_style_field: 'replyStyle',
+  reply_style_phrases: 'replyStyle',
+};
+
 function digitsOf(jid) {
   return String(jid || '').replace(/@.*$/, '').replace(/[^\d]/g, '');
 }
 
-// ── Escalation-group gate (unchanged from prior behaviour) ──────────────────
+// ── Escalation-chat gate ─────────────────────────────────────────────────────
+// A chat is authorized to edit when it is an escalation destination — a GROUP
+// or a 1:1 NUMBER (escalation isn't always a group). Authorization is strictly
+// team/owner: a configured escalationContact, or a jid the bot actually
+// escalated to (escalation_threads). A customer's chat matches none of these,
+// so a customer can NEVER trigger an edit.
 function groupMatchesEscalation(config, jid) {
   const target = digitsOf(jid);
   if (!target) return false;
@@ -22,6 +38,20 @@ function groupMatchesEscalation(config, jid) {
   for (const c of contacts) {
     const norm = normalizeEscalationTarget(c?.phone || c?.target || c?.jid);
     if (norm && norm.endsWith('@g.us') && digitsOf(norm) === target) return true;
+  }
+  return false;
+}
+
+// A 1:1 escalation NUMBER configured in escalationContacts (non-group contact
+// whose digits match the sender). Lets a team member edit from their direct chat.
+function contactMatchesEscalation(config, jid) {
+  const target = digitsOf(jid);
+  if (!target || String(jid).includes('@g.us')) return false;
+  const contacts = Array.isArray(config?.escalationContacts) ? config.escalationContacts : [];
+  for (const c of contacts) {
+    const norm = normalizeEscalationTarget(c?.phone || c?.target || c?.jid);
+    if (!norm || norm.endsWith('@g.us')) continue;
+    if (digitsOf(norm) === target) return true;
   }
   return false;
 }
@@ -46,10 +76,15 @@ async function isKnownEscalationTarget(database, userId, jid) {
   }
 }
 
-async function isEscalationGroup(database, config, userId, jid) {
+// Group OR 1:1 escalation number — the authorization for editing.
+async function isEscalationChat(database, config, userId, jid) {
   if (groupMatchesEscalation(config, jid)) return true;
+  if (contactMatchesEscalation(config, jid)) return true;
   return isKnownEscalationTarget(database, userId, jid);
 }
+
+// Back-compat alias (older callers/tests import isEscalationGroup).
+const isEscalationGroup = isEscalationChat;
 
 async function loadConfig(database, userId) {
   const r = await database.query('SELECT config FROM bot_configs WHERE user_id = $1', [userId]);
@@ -138,6 +173,37 @@ async function markTerminalAtomic(database, id, status) {
   return (r?.rows?.length || 0) > 0;
 }
 
+// Snapshot the section's PRIOR value onto the applied row so a later "تراجع" can
+// restore it. { field: <top-level config key>, value: <prior content> }.
+async function savePreviousValue(database, id, previous) {
+  await database.query(
+    `UPDATE prompt_edit_requests SET previous_value = $2::jsonb WHERE id = $1`,
+    [id, JSON.stringify(previous)],
+  );
+}
+
+// The most recent APPLIED edit for this chat that carries a restorable prior
+// value (and isn't itself an undo). Returns null when there's nothing to revert.
+async function findLastUndoableEdit(database, userId, sourceJid) {
+  const r = await database.query(
+    `SELECT id, target, change_summary, previous_value, proposed_value, proposed_instructions
+       FROM prompt_edit_requests
+      WHERE user_id = $1 AND source_jid = $2 AND status = 'applied'
+        AND target <> 'undo' AND previous_value IS NOT NULL
+      ORDER BY decided_at DESC NULLS LAST, created_at DESC
+      LIMIT 1`,
+    [userId, sourceJid],
+  );
+  return r?.rows?.[0] || null;
+}
+
+async function markRowStatus(database, id, status) {
+  await database.query(
+    `UPDATE prompt_edit_requests SET status = $2 WHERE id = $1`,
+    [id, status],
+  );
+}
+
 // ── Config writers ──────────────────────────────────────────────────────────
 async function applySectionValue(database, userId, field, value) {
   await database.query(
@@ -196,13 +262,15 @@ async function tryHandle({
   database, userId, msg, enqueue, buildAiClient, logger,
   now = Date.now, ttlMinutes = 10, claimGroupAction = defaultClaimGroupAction,
 }) {
+  // `groupJid` holds the CHAT jid — a group (@g.us) OR a 1:1 escalation number.
   const groupJid = msg?.from;
   const text = String(msg?.body || '').trim();
-  if (!groupJid || !String(groupJid).includes('@g.us') || !text) return null;
+  if (!groupJid || !text) return null;
 
   const config = await loadConfig(database, userId);
   if (!isEnabled(config)) return null;
-  if (!(await isEscalationGroup(database, config, userId, groupJid))) return null;
+  // Authorization: group OR 1:1 escalation number, team/owner only (never a customer).
+  if (!(await isEscalationChat(database, config, userId, groupJid))) return null;
 
   const nowMs = now();
   const session = await findActiveSession(database, userId, groupJid, nowMs, ttlMinutes);
@@ -215,8 +283,12 @@ async function tryHandle({
   const isForcePrompt = (firstTok === normalizeArabic('برومنت') || firstTok === normalizeArabic('البرومنت')) && !!body;
   const isTriggerWord = menu.isMenuTrigger(firstTok)
     || firstTok === normalizeArabic('برومنت') || firstTok === normalizeArabic('البرومنت');
+  // Undo the last applied edit — only meaningful when NO session is active (with
+  // an active session, "تراجع" cancels it via the isNo path below).
+  const isUndoTrigger = ['تراجع', 'رجع', 'ارجع', 'استرجاع', 'undo']
+    .map((w) => normalizeArabic(w)).includes(firstTok);
 
-  const willAct = !!session || isTriggerWord || isForcePrompt;
+  const willAct = !!session || isTriggerWord || isForcePrompt || isUndoTrigger;
   if (!willAct) return null;
 
   // Layer 1 — message-id idempotency on EVERY advancing message. A WhatsApp
@@ -259,6 +331,31 @@ async function tryHandle({
   // ── Terminal actions ──────────────────────────────────────────────────────
   const applyPending = async (s) => {
     const target = s.target || 'prompt';
+
+    // Undo: restore a past edit's snapshotted prior value.
+    if (target === 'undo') {
+      const field = s.context?.field;
+      try {
+        if (field) await applySectionValue(database, userId, field, s.context?.value ?? null);
+      } catch (err) {
+        logger?.error?.('prompt-edit', `undo apply failed: ${err.message}`);
+        await send(enqueue, userId, groupJid, '⚠️ صار خطأ أثناء التراجع. جرّب مرة ثانية.');
+        return ok('error');
+      }
+      const claimedUndo = await markTerminalAtomic(database, s.id, 'applied');
+      if (claimedUndo) {
+        if (s.context?.origId) await markRowStatus(database, s.context.origId, 'undone').catch(() => {});
+        await send(enqueue, userId, groupJid, '↩️ رجّعت آخر تعديل — القيمة رجعت مثل ما كانت قبله.');
+        logger?.info?.('prompt-edit', `undo applied ${s.id} for ${userId}`);
+      }
+      return ok('undone');
+    }
+
+    // Snapshot the section's PRIOR value (from the config loaded before any write
+    // this call) so a future "تراجع" can restore it.
+    const topField = TARGET_TOPFIELD[target];
+    const previous = topField ? { field: topField, value: config?.[topField] ?? null } : null;
+
     try {
       if (target === 'prompt') {
         await applyInstructions(database, userId, s.proposed_instructions);
@@ -284,7 +381,8 @@ async function tryHandle({
     }
     const claimed = await markTerminalAtomic(database, s.id, 'applied');
     if (claimed) {
-      await send(enqueue, userId, groupJid, '✅ تم الحفظ. أمشي على التعديل من الحين.');
+      if (previous) await savePreviousValue(database, s.id, previous).catch(() => {});
+      await send(enqueue, userId, groupJid, '✅ تم الحفظ. أمشي على التعديل من الحين. (تبي ترجع؟ اكتب: تراجع)');
       logger?.info?.('prompt-edit', `applied ${target} ${s.id} for ${userId}`);
     }
     return ok('applied');
@@ -478,6 +576,41 @@ async function tryHandle({
     return ok('menu');
   };
 
+  // Undo: propose restoring the last applied edit's prior value (confirm-gated).
+  const openUndo = async () => {
+    const last = await findLastUndoableEdit(database, userId, groupJid);
+    if (!last || !last.previous_value?.field) {
+      await send(enqueue, userId, groupJid, 'ما فيه تعديل سابق أقدر أرجّعه.');
+      return ok('undo_none');
+    }
+    const field = last.previous_value.field;
+    // "Changed since?" safety: if the current value no longer equals what this
+    // edit applied, something changed afterwards (e.g. the dashboard) — warn.
+    let warn = '';
+    try {
+      const afterVal = last.target === 'prompt' ? last.proposed_instructions : last.proposed_value;
+      if (afterVal != null) {
+        const cur = field === 'botInstructions' ? (config.botInstructions || '') : config[field];
+        if (JSON.stringify(cur ?? null) !== JSON.stringify(afterVal ?? null)) {
+          warn = '⚠️ تنبيه: الإعداد تغيّر بعد هذا التعديل — التراجع بيرجّع النسخة اللي قبله.\n';
+        }
+      }
+    } catch (_) { /* best-effort */ }
+    await expireGroupPendings(database, userId, groupJid);
+    await insertSession(database, {
+      userId, sourceJid: groupJid, requesterJid: msg.author || msg.from || null,
+      stage: 'confirm', target: 'undo',
+      changeSummary: `تراجع عن: ${last.change_summary || 'آخر تعديل'}`,
+      context: { origId: last.id, field, value: last.previous_value.value ?? null },
+    });
+    await send(enqueue, userId, groupJid, [
+      `${warn}↩️ آخر تعديل مطبّق:`,
+      `• ${last.change_summary || '(بدون وصف)'}`,
+      'أرجّعه للوضع اللي قبله؟ رد بـ (نعم) أو (لا).',
+    ].join('\n'));
+    return ok('undo_proposed');
+  };
+
   // ── Routing ───────────────────────────────────────────────────────────────
 
   // Explicit "برومنت …" shortcut: section is unambiguous → straight to confirm.
@@ -496,6 +629,9 @@ async function tryHandle({
 
   // Cancel escape hatch — works at any stage.
   if (session && isNo(text)) return cancelSession(session);
+
+  // Undo the last applied edit (only when nothing is mid-flow).
+  if (isUndoTrigger && !session) return openUndo();
 
   // A trigger word (re)opens the menu — except while we're waiting for free-text
   // input, where the trigger word is legitimately part of the content.
@@ -536,11 +672,14 @@ async function listRecentEdits(database, userId, limit = 10) {
 module.exports = {
   tryHandle,
   groupMatchesEscalation,
+  contactMatchesEscalation,
   isKnownEscalationTarget,
   isEscalationGroup,
+  isEscalationChat,
   isEnabled,
   findPendingEdit,
   findActiveSession,
+  findLastUndoableEdit,
   applyInstructions,
   applySectionValue,
   listRecentEdits,
