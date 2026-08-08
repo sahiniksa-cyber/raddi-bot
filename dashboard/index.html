@@ -284,6 +284,21 @@ label{display:flex;align-items:center;gap:8px}
 .test-send:hover{background:var(--green2)}
 .test-send:disabled{opacity:.5;cursor:wait}
 .test-send i[data-lucide]{width:18px;height:18px;stroke-width:2}
+/* تجربة البوت كنافذة دردشة واتساب متكاملة */
+#testBotPanel{background:#fff!important;padding:0;overflow:hidden}
+#testBotPanel .wa-head{display:flex;align-items:center;gap:11px;padding:11px 16px;background:#fff;border-bottom:1px solid var(--border)}
+.wa-head-avatar{width:40px;height:40px;border-radius:50%;background:var(--green);color:#fff;display:grid;place-items:center;flex:none}
+.wa-head-avatar i[data-lucide]{width:20px;height:20px;stroke-width:2}
+.wa-head-id{flex:1;min-width:0}
+.wa-head-id b{display:block;font-size:14px;font-weight:700;color:var(--text)}
+.wa-head-id span{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--green2);font-weight:500;margin-top:2px}
+.wa-head-id .wa-dot{width:7px;height:7px;border-radius:50%;background:var(--green-light);flex:none}
+.wa-head-reset{display:flex;align-items:center;gap:6px;background:var(--bg-soft);border:1px solid var(--border);border-radius:9px;padding:7px 12px;font-family:var(--font);font-size:12px;font-weight:600;color:var(--text-soft);cursor:pointer;flex:none;transition:all .15s}
+.wa-head-reset:hover{background:#fff;color:var(--text-2);border-color:var(--border-strong)}
+.wa-head-reset i[data-lucide]{width:14px;height:14px;stroke-width:2}
+#testBotPanel .test-chat{border:none;border-radius:0;margin:0;min-height:300px;max-height:430px;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;background-color:#f0f2f5!important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'%3E%3Cpath fill='%23dde1e6' fill-opacity='0.45' d='M20 20c2-2 4-4 4-6s-2-4-4-4-4 2-4 4 2 4 4 6z'/%3E%3C/svg%3E")!important}
+#testBotPanel .test-input{padding:11px 14px;background:#fff;border-top:1px solid var(--border)}
+@media(max-width:560px){.wa-head-reset span{display:none}.wa-head-reset{padding:8px}}
 
 /* TOAST */
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:#fff;padding:12px 24px;border-radius:12px;font-family:var(--font);font-weight:700;font-size:14px;opacity:0;transition:all .3s;pointer-events:none;z-index:9999;white-space:nowrap;box-shadow:0 8px 16px rgba(15,23,42,.15),0 4px 8px rgba(15,23,42,.1)}
@@ -603,26 +618,29 @@ body{
 #view-account .panel{background:var(--card)!important}
 #view-account .phdr{background:var(--card-soft);cursor:default}
 #view-account .phdr .acc-arrow{display:none}
-/* ── قوة رد البوت (مقياس الجاهزية في صفحة الإعدادات) ── */
-.readiness{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:14px;box-shadow:var(--shadow-xs)}
-.readiness-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px}
-.readiness-title{font-size:14px;font-weight:800;color:var(--text);display:flex;align-items:center;gap:8px}
-.readiness-title i[data-lucide]{width:17px;height:17px;color:var(--green);stroke-width:2}
-.readiness-badge{font-size:11px;font-weight:800;padding:3px 12px;border-radius:999px;background:var(--bg-soft);color:var(--text-soft)}
-.readiness-pct{font-size:20px;font-weight:900;letter-spacing:-.02em;color:var(--text-soft)}
-.readiness-bar{height:10px;border-radius:999px;background:var(--bg-soft);border:1px solid var(--border);overflow:hidden}
-.readiness-fill{height:100%;width:0;border-radius:999px;background:var(--border-strong);transition:width .55s cubic-bezier(.4,0,.2,1)}
-.readiness-hint{font-size:12px;color:var(--text-soft);margin-top:9px;line-height:1.65}
-.readiness.lvl-weak .readiness-fill{background:linear-gradient(90deg,#f87171,#ef4444)}
-.readiness.lvl-mid .readiness-fill{background:linear-gradient(90deg,#fbbf24,#f59e0b)}
-.readiness.lvl-good .readiness-fill{background:linear-gradient(90deg,#4ade80,#22c55e)}
-.readiness.lvl-strong .readiness-fill{background:linear-gradient(90deg,var(--green-light),var(--green))}
-.readiness.lvl-weak .readiness-pct{color:var(--red)}
-.readiness.lvl-mid .readiness-pct{color:var(--amber)}
-.readiness.lvl-good .readiness-pct,.readiness.lvl-strong .readiness-pct{color:var(--green2)}
-.readiness.lvl-weak .readiness-badge{background:var(--red-bg);color:var(--red)}
-.readiness.lvl-mid .readiness-badge{background:var(--amber-bg);color:var(--amber)}
-.readiness.lvl-good .readiness-badge,.readiness.lvl-strong .readiness-badge{background:var(--green-bg);color:var(--green2)}
+/* ── قوة رد البوت: عدّاد جاهزية دائري احترافي ── */
+.readiness{display:flex;align-items:center;gap:18px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:var(--shadow-sm)}
+.rd-gauge{position:relative;width:92px;height:92px;flex:none}
+.rd-ring{width:100%;height:100%;transform:rotate(-90deg)}
+.rd-track{fill:none;stroke:var(--bg-soft);stroke-width:9}
+.rd-prog{fill:none;stroke:var(--border-strong);stroke-width:9;stroke-linecap:round;stroke-dasharray:326.7;stroke-dashoffset:326.7;transition:stroke-dashoffset .65s cubic-bezier(.4,0,.2,1),stroke .3s}
+.rd-gauge-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.rd-pct{font-size:22px;font-weight:900;letter-spacing:-.03em;color:var(--text-soft)}
+.rd-info{flex:1;min-width:0}
+.rd-title{font-size:15px;font-weight:800;color:var(--text);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rd-title i[data-lucide]{width:18px;height:18px;color:var(--green);stroke-width:2}
+.rd-badge{font-size:12px;font-weight:800;padding:3px 13px;border-radius:999px;background:var(--bg-soft);color:var(--text-soft)}
+.rd-hint{font-size:12.5px;color:var(--text-soft);line-height:1.65;margin-top:8px}
+.readiness.lvl-weak .rd-prog{stroke:#ef4444}
+.readiness.lvl-mid .rd-prog{stroke:#f59e0b}
+.readiness.lvl-good .rd-prog{stroke:var(--green-light)}
+.readiness.lvl-strong .rd-prog{stroke:var(--green)}
+.readiness.lvl-weak .rd-pct{color:var(--red)}
+.readiness.lvl-mid .rd-pct{color:#d97706}
+.readiness.lvl-good .rd-pct,.readiness.lvl-strong .rd-pct{color:var(--green2)}
+.readiness.lvl-weak .rd-badge{background:var(--red-bg);color:var(--red)}
+.readiness.lvl-mid .rd-badge{background:var(--amber-bg);color:#b45309}
+.readiness.lvl-good .rd-badge,.readiness.lvl-strong .rd-badge{background:var(--green-bg);color:var(--green2)}
 
 .phdr{
   min-height:68px;
@@ -965,7 +983,6 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   <div class="sidebar-brand">
     <img class="sidebar-logo-img" src="/assets/logo.png" alt="جواب" width="120" height="55">
     <div class="sidebar-brand-copy"><span>خدمة العملاء الذكية</span></div>
-    <button class="sidebar-collapse" id="sidebarCollapseBtn" onclick="toggleMainNav()" title="تصغير القائمة" aria-label="تصغير القائمة"><i data-lucide="panel-right-close"></i></button>
   </div>
 
   <!-- Hidden by default; instagram.js reveals it only when the feature is on. -->
@@ -1156,14 +1173,19 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 <div class="view" id="view-settings">
 <div class="sw">
 
-  <!-- قوة رد البوت — يرتفع تلقائياً كل ما تكمل قسماً في الإعدادات -->
+  <!-- قوة رد البوت — عدّاد جاهزية يرتفع تلقائياً كل ما تكمل قسماً -->
   <div class="readiness wa-only" id="botStrength">
-    <div class="readiness-top">
-      <div class="readiness-title"><i data-lucide="gauge"></i> قوة رد البوت <span class="readiness-badge" id="strBadge">—</span></div>
-      <div class="readiness-pct" id="strPct">0%</div>
+    <div class="rd-gauge">
+      <svg class="rd-ring" viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="rd-track" cx="60" cy="60" r="52"></circle>
+        <circle class="rd-prog" id="strRing" cx="60" cy="60" r="52"></circle>
+      </svg>
+      <div class="rd-gauge-center"><span class="rd-pct" id="strPct">0%</span></div>
     </div>
-    <div class="readiness-bar"><div class="readiness-fill" id="strFill"></div></div>
-    <div class="readiness-hint" id="strHint">كل ما تكمّل قسماً في الإعدادات، تزيد قوة ردود البوت.</div>
+    <div class="rd-info">
+      <div class="rd-title"><i data-lucide="gauge"></i> قوة رد البوت <span class="rd-badge" id="strBadge">—</span></div>
+      <div class="rd-hint" id="strHint">كل ما تكمّل قسماً في الإعدادات، ترتفع قوة ردود البوت.</div>
+    </div>
   </div>
 
   <!-- Instagram-only: ONE clean full-width control bar (mirrors the WhatsApp
@@ -1246,19 +1268,20 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     <div id="healthBody"></div>
   </div>
 
-  <!-- ═══ TEST BOT LIVE ═══ -->
-  <div class="panel wa-only no-acc">
-    <div class="phdr">
-      <span>جرّب البوت الآن — قبل ما يرد على عملاء حقيقيين</span>
-      <button class="add-btn" onclick="resetTestChat()">محادثة جديدة</button>
-    </div>
-    <div class="pbdy">
-      <p class="hint" style="margin:0 0 10px">اكتب رسالة كأنك عميل وشف كيف يرد البوت — يستخدم نفس الإعدادات + الذاكرة</p>
-      <div class="test-chat wa" id="testChat"></div>
-      <div class="test-input">
-        <input type="text" id="testInput" placeholder="اكتب رسالة…" onkeydown="if(event.key==='Enter'){event.preventDefault();sendTestMsg()}">
-        <button class="test-send" onclick="sendTestMsg()" id="testSendBtn" aria-label="إرسال"><i data-lucide="send"></i></button>
+  <!-- ═══ TEST BOT LIVE — نافذة دردشة واتساب ═══ -->
+  <div class="panel wa-only no-acc chat-panel" id="testBotPanel">
+    <div class="wa-head">
+      <div class="wa-head-avatar"><i data-lucide="bot"></i></div>
+      <div class="wa-head-id">
+        <b>تجربة البوت</b>
+        <span><span class="wa-dot"></span> معاينة — لا يُرسل للعميل ولا يخصم رصيد</span>
       </div>
+      <button class="wa-head-reset" onclick="resetTestChat()" title="محادثة جديدة"><i data-lucide="refresh-cw"></i><span>محادثة جديدة</span></button>
+    </div>
+    <div class="test-chat wa" id="testChat"></div>
+    <div class="test-input">
+      <input type="text" id="testInput" placeholder="اكتب رسالة…" onkeydown="if(event.key==='Enter'){event.preventDefault();sendTestMsg()}">
+      <button class="test-send" onclick="sendTestMsg()" id="testSendBtn" aria-label="إرسال"><i data-lucide="send"></i></button>
     </div>
   </div>
 
@@ -2765,7 +2788,8 @@ function computeBotStrength(){
   else if(score<95){lvl='strong';label='قوي';}
   else {lvl='strong';label='ممتاز';}
   el.className='readiness wa-only lvl-'+lvl;
-  const fill=document.getElementById('strFill');   if(fill) fill.style.width=score+'%';
+  const CIRC=2*Math.PI*52; // محيط دائرة العدّاد (r=52)
+  const ring=document.getElementById('strRing');    if(ring){ring.style.strokeDasharray=CIRC.toFixed(1);ring.style.strokeDashoffset=(CIRC*(1-score/100)).toFixed(1);}
   const pct=document.getElementById('strPct');      if(pct) pct.textContent=score+'%';
   const badge=document.getElementById('strBadge');  if(badge) badge.textContent=label;
   const missing=parts.filter(p=>!p.ok).map(p=>p.label);
