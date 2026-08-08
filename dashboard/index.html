@@ -1911,9 +1911,28 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-note{font-size:12px;padding:10px 12px;line-height:1.65;margin:10px 0}
   /* توحيد حجم الإدخال داخل بطاقة الحملة */
   .campaign-card input,.campaign-card textarea,.campaign-card select{font-size:13px}
+  /* ═══ Stepper احترافي: أرقام دائرية → علامة ✓ للمكتمل + خط رابط + حالة نشطة واضحة ═══ */
+  .campaign-steps{position:relative;padding:8px 6px;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+  .campaign-steps::before{content:'';position:absolute;z-index:0;right:32px;top:36px;bottom:36px;width:2px;background:#e6eaf0}
+  .campaign-step{position:relative;z-index:1;gap:11px;padding:11px 12px;border-radius:12px;margin-bottom:2px;transition:background .15s}
+  .campaign-step:hover:not(.active){background:#f6f8fa}
+  .campaign-step-number{position:relative;z-index:1;width:28px;height:28px;font-size:12.5px;font-weight:700;border:2px solid #e2e8f0;background:#fff;color:var(--text-dim);transition:background .18s,border-color .18s,color .18s}
+  .campaign-step.visited .campaign-step-number,.campaign-step.active .campaign-step-number{background:var(--green);border-color:var(--green);color:#fff;box-shadow:0 2px 6px rgba(22,163,74,.28)}
+  .campaign-step.visited:not(.active) .campaign-step-number{font-size:0}
+  .campaign-step.visited:not(.active) .campaign-step-number::after{content:'✓';font-size:14px;font-weight:800}
+  .campaign-step.active{background:var(--green-bg)}
+  .campaign-step.active::after{content:'';position:absolute;z-index:2;top:11px;bottom:11px;right:0;width:3px;border-radius:0 3px 3px 0;background:var(--green)}
+  .campaign-step.active .campaign-step-copy b{color:var(--green2);font-weight:700}
+  /* ═══ لمسات احترافية على الأسطح ═══ */
+  .campaign-card{box-shadow:0 1px 3px rgba(15,23,42,.05)}
+  .campaign-hero{padding-bottom:14px;border-bottom:1px solid var(--border);margin-bottom:16px}
+  .campaign-hero h2{display:flex;align-items:center;gap:9px}
+  .campaign-source-option{transition:border-color .15s,background .15s,box-shadow .15s}
+  .campaign-source-option:has(input:checked){box-shadow:0 0 0 3px rgba(22,163,74,.12)}
+  .campaign-metric{box-shadow:0 1px 2px rgba(15,23,42,.03)}
   @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{margin-right:236px}}
   @media(max-width:920px){.campaign-archive-layout{grid-template-columns:1fr}.campaign-archive-items{max-height:330px}.campaign-archive-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
-  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-progress-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-source-option{min-height:108px}.campaign-saved-card{margin-right:0}.campaign-saved-actions,.campaign-keyword-entry{grid-template-columns:1fr}.campaign-saved-actions .campaign-btn,.campaign-keyword-entry .campaign-btn{width:100%}.campaign-segment-head{align-items:flex-start;flex-direction:column}.campaign-history-head{flex-direction:column}.campaign-history-stats{grid-template-columns:1fr}.campaign-mode-switch{display:grid;grid-template-columns:1fr 1fr;width:100%}.campaign-recipient-tools{grid-template-columns:1fr}.campaign-archive-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-archive-title-row{flex-direction:column}}
+  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-steps::before{display:none}.campaign-step{min-width:175px}.campaign-step.active::after{display:none}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-progress-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-source-option{min-height:108px}.campaign-saved-card{margin-right:0}.campaign-saved-actions,.campaign-keyword-entry{grid-template-columns:1fr}.campaign-saved-actions .campaign-btn,.campaign-keyword-entry .campaign-btn{width:100%}.campaign-segment-head{align-items:flex-start;flex-direction:column}.campaign-history-head{flex-direction:column}.campaign-history-stats{grid-template-columns:1fr}.campaign-mode-switch{display:grid;grid-template-columns:1fr 1fr;width:100%}.campaign-recipient-tools{grid-template-columns:1fr}.campaign-archive-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-archive-title-row{flex-direction:column}}
 </style>
 <div class="campaign-shell">
   <div class="campaign-hero">
