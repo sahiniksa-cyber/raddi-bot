@@ -641,18 +641,28 @@ body{
 .readiness.lvl-weak .rd-badge{background:var(--red-bg);color:var(--red)}
 .readiness.lvl-mid .rd-badge{background:var(--amber-bg);color:#b45309}
 .readiness.lvl-good .rd-badge,.readiness.lvl-strong .rd-badge{background:var(--green-bg);color:var(--green2)}
-/* صف الحالة: التقييم (يمين) + إحصائيات مصغّرة (يساره) */
-.status-band{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;margin-bottom:18px}
-.status-band .readiness{flex:1 1 320px;min-width:280px;margin-bottom:0;gap:14px;padding:14px 16px}
-.status-band .rd-gauge{width:72px;height:72px}
-.status-band .rd-pct{font-size:18px}
-.status-band .rd-title{font-size:14px}
-.status-band .stats-row{flex:1.3 1 330px;margin-bottom:0;gap:10px}
-/* بطاقات إحصائية مسطّحة نظيفة: بلا تدرّج ملوّن، العنوان فوق والرقم تحته */
-.status-band .stat{display:flex;flex-direction:column-reverse;align-items:center;justify-content:center;gap:5px;padding:12px 8px;border-radius:12px;background:var(--card)!important;border:1px solid var(--border);box-shadow:none!important;background-image:none!important}
-.status-band .stat .v{font-size:20px;line-height:1}
-.status-band .stat .l{font-size:11px;color:var(--text-soft);margin:0}
-@media(max-width:820px){.status-band .readiness,.status-band .stats-row{flex-basis:100%}}
+/* ── بطاقة الحالة الموحّدة: عدّاد القوة (يمين) | فاصل | إحصائيات (يسار) ── */
+.status-card{display:flex;align-items:stretch;flex-wrap:wrap;background:#fff!important;border:1px solid var(--border);border-radius:16px;box-shadow:0 1px 3px rgba(15,23,42,.05);overflow:hidden;margin-bottom:18px;backdrop-filter:none;-webkit-backdrop-filter:none}
+.status-card .readiness{flex:0 0 auto;min-width:216px;display:flex;align-items:center;gap:14px;padding:16px 20px;margin:0;background:none!important;border:none!important;border-radius:0;box-shadow:none!important}
+.status-card .rd-gauge{width:62px;height:62px}
+.status-card .rd-track{stroke-width:9}
+.status-card .rd-prog{stroke-width:9}
+.status-card .rd-pct{font-size:16px;font-weight:800}
+.status-card .rd-info{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-width:0}
+.status-card .rd-title{font-size:14px;font-weight:800;color:var(--text)}
+.status-card .rd-badge{font-size:11.5px;font-weight:800;padding:3px 12px;border-radius:999px;background:var(--bg-soft);color:var(--text-soft)}
+.sc-divider{flex:none;width:1px;background:var(--border);align-self:stretch;margin:16px 0}
+.status-card .sc-stats{flex:1 1 300px;display:grid;grid-template-columns:repeat(3,1fr);margin:0;gap:0;background:none!important}
+.status-card .sc-stats .stat{display:flex;flex-direction:column-reverse;align-items:center;justify-content:center;gap:6px;min-height:0!important;padding:16px 10px!important;background:none!important;background-image:none!important;border:none!important;border-radius:0;box-shadow:none!important}
+.status-card .sc-stats .stat + .stat{border-inline-start:1px solid var(--border)!important}
+.status-card .sc-stats .stat .v{font-size:22px;font-weight:800;line-height:1}
+.status-card .sc-stats .stat .l{font-size:11.5px;color:var(--text-soft);font-weight:600;margin:0}
+@media(max-width:760px){
+  .status-card{flex-direction:column}
+  .status-card .readiness{justify-content:center}
+  .sc-divider{width:auto;height:1px;margin:0}
+  .status-card .sc-stats .stat{padding:14px 8px}
+}
 
 .phdr{
   min-height:68px;
@@ -850,6 +860,7 @@ body{background-attachment:scroll}
   #view-settings>.sw{max-width:1160px;columns:2;column-gap:16px}
   #view-settings>.sw>.panel{break-inside:avoid;margin-bottom:16px;width:100%}
   #view-settings>.sw>.bot-ctrl,
+  #view-settings>.sw>.status-card,
   #view-settings>.sw>.stats-row,
   #view-settings>.sw>.health-btn,
   #view-settings>.sw>.health-results,
@@ -1251,8 +1262,8 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     </div>
   </div>
 
-  <!-- صف واحد: عدّاد قوة الرد (يمين) + إحصائيات مصغّرة (يساره) -->
-  <div class="status-band wa-only">
+  <!-- بطاقة الحالة الموحّدة: عدّاد قوة الرد (يمين) | فاصل | إحصائيات (يسار) -->
+  <div class="status-card wa-only">
     <div class="readiness" id="botStrength">
       <div class="rd-gauge">
         <svg class="rd-ring" viewBox="0 0 120 120" aria-hidden="true">
@@ -1262,15 +1273,17 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
         <div class="rd-gauge-center"><span class="rd-pct" id="strPct">0%</span></div>
       </div>
       <div class="rd-info">
-        <div class="rd-title"><i data-lucide="gauge"></i> قوة رد البوت <span class="rd-badge" id="strBadge">—</span></div>
-        <div class="rd-hint" id="strHint">كل ما تكمّل قسماً في الإعدادات، ترتفع قوة ردود البوت.</div>
+        <div class="rd-title">قوة رد البوت</div>
+        <span class="rd-badge" id="strBadge">—</span>
       </div>
     </div>
-    <div class="stats-row wa-only" style="grid-template-columns:repeat(3,1fr)">
+    <div class="sc-divider" aria-hidden="true"></div>
+    <div class="stats-row wa-only sc-stats">
       <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
       <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:var(--purple)">0</div><div class="l">ردود AI</div></div>
       <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
     </div>
+    <div class="rd-hint" id="strHint" hidden></div>
   </div>
 
   <!-- ═══ FULL SERVICE HEALTH CHECK ═══ -->
@@ -2799,16 +2812,19 @@ function computeBotStrength(){
   else if(score<80){lvl='good';label='جيد';}
   else if(score<95){lvl='strong';label='قوي';}
   else {lvl='strong';label='ممتاز';}
-  el.className='readiness lvl-'+lvl;
+  // حافظ على بقية كلاسات العنصر، بدّل مستوى القوة فقط
+  el.classList.remove('lvl-weak','lvl-mid','lvl-good','lvl-strong');
+  el.classList.add('lvl-'+lvl);
   const CIRC=2*Math.PI*52; // محيط دائرة العدّاد (r=52)
   const ring=document.getElementById('strRing');    if(ring){ring.style.strokeDasharray=CIRC.toFixed(1);ring.style.strokeDashoffset=(CIRC*(1-score/100)).toFixed(1);}
   const pct=document.getElementById('strPct');      if(pct) pct.textContent=score+'%';
   const badge=document.getElementById('strBadge');  if(badge) badge.textContent=label;
   const missing=parts.filter(p=>!p.ok).map(p=>p.label);
-  const hint=document.getElementById('strHint');
-  if(hint) hint.textContent = missing.length
-    ? ('لرفع القوة، أكمل: '+missing.slice(0,3).join('، ')+(missing.length>3?'…':''))
-    : 'ممتاز — كل الأقسام الأساسية مكتملة، ردود البوت في أقوى حالاتها.';
+  const guide = missing.length
+    ? ('لرفع القوة، أكمل: '+missing.join('، '))
+    : 'كل الأقسام الأساسية مكتملة — ردود البوت في أقوى حالاتها.';
+  el.title = guide;                                 // إرشاد عند المرور بالفأرة (يبقى الشكل نظيفاً)
+  const hint=document.getElementById('strHint');    if(hint) hint.textContent = guide;
 }
 // تحديث حيّ كل ما عدّل التاجر أي حقل أو أضاف/حذف عنصراً في صفحة الإعدادات
 (function bindBotStrength(){
