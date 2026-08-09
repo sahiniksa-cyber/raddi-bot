@@ -11,7 +11,12 @@ function scaledMaxLength(maxLen, customerText = '') {
   const text = String(customerText || '');
   const marks = (text.match(/[؟?]/g) || []).length;
   const batched = text.includes('رسائل العميل المتتالية') ? 1 : 0;
-  const signals = Math.min(3, Math.max(marks, 1) + batched);
+  // Brevity authority: the dashboard maxResponseLength is the ceiling. Multi-
+  // question messages still get room (so a 2nd question isn't truncated — the
+  // 2026-06-11 fix) but capped at 2x, not 3x, so replies stay near the owner's
+  // configured length instead of ballooning. Flag-gated (default keeps 3x).
+  const cap = process.env.BREVITY_AUTHORITY_ENABLED === 'true' ? 2 : 3;
+  const signals = Math.min(cap, Math.max(marks, 1) + batched);
   return base * signals;
 }
 
@@ -160,39 +165,48 @@ function needsRepairForCopOut(reply, matched = []) {
 // مقارنة بالخطة الأصلية، دون إضافة false positives (اختبر بشمول على 8+ حالات).
 const OFFER_HELP = /\s*،?\s*(?:كيف|كيفاش|وش)\s+(?:أقدر|اقدر|يمكنني|ممكن|تحب|تبي)?\s*(?:أ|ا|م)?(?:ساعد|خدم|عاون)\S*\s*(?:اليوم|حضرتك)?\s*[؟?]*/g;
 
-// عائلة "الخاتمة / عرض التواصل": "إذا تحتاج شي قولي / خبرني / لا تتردد / أنا موجود /
-// تواصل معنا". النموذج يغيّر صياغتها كل مرة، فنمسحها حتمياً كـ*جملة ختامية أخيرة*
-// دون المساس بالمحتوى المشروع (عروض منتجات، أرقام تواصل حقيقية، سياسات إرجاع).
-// كل نمط مثبّت على نهاية النص ($) ويبدأ من حدّ جملة، ويشترط نبرة تواصل/توفّر ذاتي:
-//  1) شرط (إذا/لو/أي وقت) + فعل تواصل (قولي/خبرني/كلّمني/تواصل/راسل/اسأل/اطلب/تتردد)
-//  2) شرط + توفّر ذاتي صريح (أنا/إحنا/نحن + موجود/حاضر/جاهز/في خدمتك/تحت أمرك)
-//  3) "لا تتردد ..."
-//  4) توفّر ذاتي كجملة مستقلة (أنا/نحن + موجود/في خدمتك ...)
-//  5) "تواصل/راسل معنا ..." بشرط ألا يتبعها رقم (الرقم = تواصل حقيقي فنُبقيه)
-const CLOSING_OFFER_PATTERNS = [
-  /(?:^|[.،!؟\n]\s*)و?\s*(?:إذا|اذا|لو|أي\s*وقت|في\s*أي\s*وقت|متى\s*ما|وقت\s*ما)\s+[^.،!؟\n]{0,45}?(?:قوّ?ل|خبّ?ر|كلّ?م|تواصل|راسل|اسأل|اطلب|تر[دّ]+د)\S*[^.،!؟\n]{0,20}[\s.،!؟]*$/u,
-  /(?:^|[.،!؟\n]\s*)و?\s*(?:إذا|اذا|لو|أي\s*وقت|متى\s*ما)\s+[^.،!؟\n]{0,45}?(?:أنا|انا|احنا|إحنا|نحن)\s+(?:موجود|حاضر|جاهز|في\s*خدمت\S*|في\s*الخدمة|تحت\s*أمر)\S*[^.،!؟\n]{0,20}[\s.،!؟]*$/u,
-  /(?:^|[.،!؟\n]\s*)و?\s*لا\s*تتر[دّ]+د[^.،!؟\n]{0,45}[\s.،!؟]*$/u,
-  /(?:^|[.،!؟\n]\s*)و?\s*(?:أنا|انا|احنا|إحنا|نحن)\s+(?:موجود(?:ين|ون)?|حاضر(?:ين|ون)?|جاهز(?:ين|ون)?|في\s*خدمت\S*|في\s*الخدمة|تحت\s*أمر\S*)[^.،!؟\n]{0,30}[\s.،!؟]*$/u,
-  /(?:^|[.،!؟\n]\s*)و?\s*(?:تواصل|تواصلوا|راسل\S*|كلّ?م\S*)\s+مع\S*[^.،!؟\n0-9]{0,25}[\s.،!؟]*$/u,
+// خاتمة الحشو التي منعها المالك ("إذا تحتاج/عندك أي شي ثاني أنا هنا/موجود"،
+// "في خدمتك"، "تبي شي ثاني؟"). البرومنت وحده لا يمنعها (النموذج يعيد صياغتها —
+// إنتاج 2026-08-01: "إذا عندك أي استفسار ثاني، أنا هنا" أُرسلت رغم المنع). حذف
+// حتمي مثبّت في النهاية فقط، فلا يمسّ محتوى وسط الرسالة. خلف مفتاح. لا يمسّ
+// "المنتج موجود"/"الرابط هنا" لأنها بلا توقيع العرض (أنا / شرط / "شي ثاني").
+// ملاحظة: \b في JS للأحرف اللاتينية فقط ولا يعمل مع العربية، فنستخدم
+// (?![ء-ي]) = "غير متبوع بحرف عربي" كحدّ كلمة عربي صحيح.
+const CLOSING_FILLER_RES = [
+  // شرط (إذا/لو/أي وقت/متى ما) + ... + فعل تواصل أو توفّر ذاتي في النهاية.
+  // وُسِّعت أفعال الذيل لتشمل: قولي/قوللي/راسلني/اسألني (كانت تفوت النموذج).
+  /[\s،,.\-–—]*و?\s*(?:إذا|اذا|لو|أي\s*وقت|متى\s*ما)\s+(?:تحتاج|تحتاجني|احتجت|احتجتي|عندك|عندكم|حاب|حابب|بغيت|ودك|حبيت|رغبت|في)[^\n]*?(?:أنا|انا)?\s*(?:هنا|موجود|حاضر|بخدمتك|خدمتك|تأمر|بلّغني|بلغني|خبّرني|خبرني|كلّمني|كلمني|تواصل|قوّلي|قوللي|قولي|راسلني|راسليني|اسألني|اسأليني|تراسل)(?![ء-ي])[^\n]*$/u,
+  // "أنا/نحن هنا/موجود/حاضر/جاهز ..." (خاتمة توفّر ذاتي — يشترط ضمير المتكلّم)
+  /[\s،,.\-–—]*و?\s*(?:أنا|انا|نحن|احنا|إحنا)\s*(?:هنا|موجود|موجودين|حاضر|حاضرين|جاهز|جاهزين)(?![ء-ي])[^\n]*$/u,
+  /[\s،,.\-–—]*(?:أي|اي)\s*(?:شي|شيء)\s*(?:ثاني|آخر|اخر|إضافي|اضافي)(?![ء-ي])[^\n]*$/u,
+  /[\s،,.\-–—]*(?:تبي|تبغى|تبغي|تحب|تأمر|تريد|ودك)\s*(?:شي|شيء)?\s*(?:ثاني|آخر|اخر|إضافي|اضافي)(?![ء-ي])\s*[؟?]*\s*$/u,
+  /[\s،,.\-–—]*(?:أنا|انا|نحن|احنا|إحنا)?\s*(?:في\s*خدمتك|بخدمتك|تحت\s*أمرك)(?![ء-ي])[^\n]*$/u,
+  // "لا تتردد ..." خاتمة (يسمح بـ"و" قبلها: "ولا تتردد")
+  /[\s،,.\-–—]*و?\s*لا\s*تتر[دّ]+د(?![ء-ي])[^\n]*$/u,
+  // "تواصل/راسل معنا ..." خاتمة مستقلة، بشرط ألا يتبعها رقم (الرقم = تواصل حقيقي فنُبقيه)
+  /[\s،,.\-–—]*(?:تواصل|تواصلوا|راسلنا|كلّمنا|كلمنا)\s+مع\S*[^\n0-9]*$/u,
 ];
 
-function stripClosingOffers(reply) {
+function stripClosingFiller(reply) {
+  if (process.env.CLOSING_FILLER_STRIP_ENABLED !== 'true') return String(reply || '');
   let out = String(reply || '');
-  const original = out;
-  for (const re of CLOSING_OFFER_PATTERNS) {
-    const stripped = out.replace(re, '');
-    // لا نقبل حذفاً يفرّغ الرد (لو كان الرد كلّه خاتمة) — نُبقي الأصل.
-    if (stripped.trim().length >= 2) out = stripped;
+  for (let pass = 0; pass < 5; pass++) {
+    let cut = false;
+    for (const re of CLOSING_FILLER_RES) {
+      const m = re.exec(out);
+      if (m && m.index >= 0 && m[0].trim().length) {
+        const head = out.slice(0, m.index).replace(/[\s،,.\-–—]+$/u, '').trim();
+        if (head.length >= 2) { out = head; cut = true; break; } // never nuke whole reply
+      }
+    }
+    if (!cut) break;
   }
-  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
-  out = out.replace(/[،,]\s*$/, '').trim();
-  return out.trim().length >= 2 ? out : original.trim();
+  return out.trim();
 }
 
 function stripStyleViolations(reply) {
   let out = String(reply || '').replace(OFFER_HELP, '');
-  out = stripClosingOffers(out);
+  out = stripClosingFiller(out);
   out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
   // نظّف علامة ترقيم متدلية في النهاية (مثل "! ," بعد الحذف)
   out = out.replace(/[،,]\s*$/, '').replace(/!\s*$/, '!').trim();
@@ -248,5 +262,5 @@ function enforceStyleRules(reply, config = {}) {
 module.exports = {
   enforceLength, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
-  stripClosingOffers, enforceStyleRules, botSignalsTransfer, customerRequestedEscalation,
+  enforceStyleRules, botSignalsTransfer, customerRequestedEscalation, stripClosingFiller,
 };
