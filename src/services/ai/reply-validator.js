@@ -160,8 +160,39 @@ function needsRepairForCopOut(reply, matched = []) {
 // مقارنة بالخطة الأصلية، دون إضافة false positives (اختبر بشمول على 8+ حالات).
 const OFFER_HELP = /\s*،?\s*(?:كيف|كيفاش|وش)\s+(?:أقدر|اقدر|يمكنني|ممكن|تحب|تبي)?\s*(?:أ|ا|م)?(?:ساعد|خدم|عاون)\S*\s*(?:اليوم|حضرتك)?\s*[؟?]*/g;
 
+// عائلة "الخاتمة / عرض التواصل": "إذا تحتاج شي قولي / خبرني / لا تتردد / أنا موجود /
+// تواصل معنا". النموذج يغيّر صياغتها كل مرة، فنمسحها حتمياً كـ*جملة ختامية أخيرة*
+// دون المساس بالمحتوى المشروع (عروض منتجات، أرقام تواصل حقيقية، سياسات إرجاع).
+// كل نمط مثبّت على نهاية النص ($) ويبدأ من حدّ جملة، ويشترط نبرة تواصل/توفّر ذاتي:
+//  1) شرط (إذا/لو/أي وقت) + فعل تواصل (قولي/خبرني/كلّمني/تواصل/راسل/اسأل/اطلب/تتردد)
+//  2) شرط + توفّر ذاتي صريح (أنا/إحنا/نحن + موجود/حاضر/جاهز/في خدمتك/تحت أمرك)
+//  3) "لا تتردد ..."
+//  4) توفّر ذاتي كجملة مستقلة (أنا/نحن + موجود/في خدمتك ...)
+//  5) "تواصل/راسل معنا ..." بشرط ألا يتبعها رقم (الرقم = تواصل حقيقي فنُبقيه)
+const CLOSING_OFFER_PATTERNS = [
+  /(?:^|[.،!؟\n]\s*)و?\s*(?:إذا|اذا|لو|أي\s*وقت|في\s*أي\s*وقت|متى\s*ما|وقت\s*ما)\s+[^.،!؟\n]{0,45}?(?:قوّ?ل|خبّ?ر|كلّ?م|تواصل|راسل|اسأل|اطلب|تر[دّ]+د)\S*[^.،!؟\n]{0,20}[\s.،!؟]*$/u,
+  /(?:^|[.،!؟\n]\s*)و?\s*(?:إذا|اذا|لو|أي\s*وقت|متى\s*ما)\s+[^.،!؟\n]{0,45}?(?:أنا|انا|احنا|إحنا|نحن)\s+(?:موجود|حاضر|جاهز|في\s*خدمت\S*|في\s*الخدمة|تحت\s*أمر)\S*[^.،!؟\n]{0,20}[\s.،!؟]*$/u,
+  /(?:^|[.،!؟\n]\s*)و?\s*لا\s*تتر[دّ]+د[^.،!؟\n]{0,45}[\s.،!؟]*$/u,
+  /(?:^|[.،!؟\n]\s*)و?\s*(?:أنا|انا|احنا|إحنا|نحن)\s+(?:موجود(?:ين|ون)?|حاضر(?:ين|ون)?|جاهز(?:ين|ون)?|في\s*خدمت\S*|في\s*الخدمة|تحت\s*أمر\S*)[^.،!؟\n]{0,30}[\s.،!؟]*$/u,
+  /(?:^|[.،!؟\n]\s*)و?\s*(?:تواصل|تواصلوا|راسل\S*|كلّ?م\S*)\s+مع\S*[^.،!؟\n0-9]{0,25}[\s.،!؟]*$/u,
+];
+
+function stripClosingOffers(reply) {
+  let out = String(reply || '');
+  const original = out;
+  for (const re of CLOSING_OFFER_PATTERNS) {
+    const stripped = out.replace(re, '');
+    // لا نقبل حذفاً يفرّغ الرد (لو كان الرد كلّه خاتمة) — نُبقي الأصل.
+    if (stripped.trim().length >= 2) out = stripped;
+  }
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
+  out = out.replace(/[،,]\s*$/, '').trim();
+  return out.trim().length >= 2 ? out : original.trim();
+}
+
 function stripStyleViolations(reply) {
   let out = String(reply || '').replace(OFFER_HELP, '');
+  out = stripClosingOffers(out);
   out = out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([،.!؟])/g, '$1').trim();
   // نظّف علامة ترقيم متدلية في النهاية (مثل "! ," بعد الحذف)
   out = out.replace(/[،,]\s*$/, '').replace(/!\s*$/, '!').trim();
@@ -217,5 +248,5 @@ function enforceStyleRules(reply, config = {}) {
 module.exports = {
   enforceLength, scaledMaxLength, detectEscalationIntent, enforceEscalationTag,
   isCopOut, needsRepairForCopOut, validateAndRepair, stripStyleViolations,
-  enforceStyleRules, botSignalsTransfer, customerRequestedEscalation,
+  stripClosingOffers, enforceStyleRules, botSignalsTransfer, customerRequestedEscalation,
 };
