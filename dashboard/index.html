@@ -1930,6 +1930,25 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-source-option{transition:border-color .15s,background .15s,box-shadow .15s}
   .campaign-source-option:has(input:checked){box-shadow:0 0 0 3px rgba(22,163,74,.12)}
   .campaign-metric{box-shadow:0 1px 2px rgba(15,23,42,.03)}
+  /* ═══ حملات — تبسيط وتخطيط أنظف (v2) ═══ */
+  /* مصادر الاستهداف: قائمة صفوف مدمجة بدل بطاقات طويلة مزدحمة */
+  .campaign-source-list{grid-template-columns:1fr;gap:8px;margin-top:14px}
+  .campaign-source-option{min-height:0;padding:12px 14px;border-radius:11px;align-items:center;gap:12px}
+  .campaign-source-option b{font-size:13px}
+  .campaign-source-option .hint{margin-top:2px;font-size:11.5px;line-height:1.55}
+  .campaign-source-open{display:none}
+  /* مقاييس الأقسام: بطاقات مدمجة بلا نص زائد */
+  .campaign-metrics{gap:9px;margin:12px 0}
+  .campaign-metric{padding:12px 14px}
+  .campaign-metric strong{font-size:19px}
+  .campaign-metric b{margin-top:1px}
+  .campaign-metric span{display:none}
+  /* شرح أهدأ وأقصر بصريّاً */
+  .campaign-sub{font-size:12px}
+  .campaign-card .hint{font-size:11.5px;line-height:1.55}
+  /* أسطح موحّدة الاستدارة */
+  .campaign-source-panel{border-radius:12px;padding:14px}
+  .campaign-target-box{border-radius:11px}
   @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{margin-right:236px}}
   @media(max-width:920px){.campaign-archive-layout{grid-template-columns:1fr}.campaign-archive-items{max-height:330px}.campaign-archive-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
   @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-steps::before{display:none}.campaign-step{min-width:175px}.campaign-step.active::after{display:none}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-progress-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-source-option{min-height:108px}.campaign-saved-card{margin-right:0}.campaign-saved-actions,.campaign-keyword-entry{grid-template-columns:1fr}.campaign-saved-actions .campaign-btn,.campaign-keyword-entry .campaign-btn{width:100%}.campaign-segment-head{align-items:flex-start;flex-direction:column}.campaign-history-head{flex-direction:column}.campaign-history-stats{grid-template-columns:1fr}.campaign-mode-switch{display:grid;grid-template-columns:1fr 1fr;width:100%}.campaign-recipient-tools{grid-template-columns:1fr}.campaign-archive-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-archive-title-row{flex-direction:column}}
