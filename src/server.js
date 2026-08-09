@@ -42,6 +42,7 @@ const { createHealthRoutes } = require('./routes/health.routes');
 const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { createInstagramRoutes } = require('./routes/instagram.routes');
+const { createSallaRoutes } = require('./routes/salla.routes');
 const { createCampaignRoutes } = require('./routes/campaign.routes');
 const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
@@ -237,6 +238,7 @@ function createApp() {
   const RAW_BODY_PATHS = new Set([
     '/billing/moyasar/webhook',
     '/instagram/webhook',
+    '/salla/webhook',
   ]);
   app.use((req, res, next) => {
     if (RAW_BODY_PATHS.has(req.path)) return next();
@@ -378,6 +380,9 @@ function createApp() {
   // Instagram module (isolated; every route self-guards on INSTAGRAM_ENABLED).
   // The webhook is in RAW_BODY_PATHS above and mounts its own express.raw.
   app.use(createInstagramRoutes(routeDeps));
+  // Salla Partner-app webhook (captures OAuth tokens via Easy Mode). Inert until
+  // SALLA_WEBHOOK_SECRET is set. Path is in RAW_BODY_PATHS; mounts own express.raw.
+  app.use(createSallaRoutes(routeDeps));
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup, database: db });
   const configControllerModule = require('./controllers/config.controller');

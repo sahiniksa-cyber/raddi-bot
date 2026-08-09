@@ -772,6 +772,56 @@ const statements = [
     BEFORE UPDATE ON instagram_conversations
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Salla Partner-app integration (added 2026-08-09). Captures the merchant's
+  // OAuth tokens delivered via the `app.store.authorize` webhook ("Easy Mode"),
+  // encrypted at rest, so the AI can later read the store's data (products,
+  // orders, customers). Keyed by Salla merchant_id — the authorize webhook has
+  // no logged-in session — with a nullable user_id linked separately. Inert
+  // until SALLA_WEBHOOK_SECRET is configured.
+  // ─────────────────────────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS salla_stores (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merchant_id TEXT NOT NULL UNIQUE,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    store_name TEXT,
+    access_token_encrypted TEXT,
+    access_token_iv TEXT,
+    access_token_tag TEXT,
+    access_token_plain TEXT,
+    refresh_token_encrypted TEXT,
+    refresh_token_iv TEXT,
+    refresh_token_tag TEXT,
+    refresh_token_plain TEXT,
+    token_expires_at TIMESTAMPTZ,
+    scope TEXT,
+    status TEXT NOT NULL DEFAULT 'authorized',
+    installed_at TIMESTAMPTZ,
+    uninstalled_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // Breadcrumb of every received webhook (signature outcome + small detail).
+  // Proves delivery without Railway logs, and lets us decide later what the bot
+  // does with store events (orders, products, customers).
+  `CREATE TABLE IF NOT EXISTS salla_webhook_events (
+    id BIGSERIAL PRIMARY KEY,
+    merchant_id TEXT,
+    event TEXT,
+    signature_ok BOOLEAN NOT NULL DEFAULT FALSE,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_salla_webhook_events_merchant
+    ON salla_webhook_events (merchant_id, created_at DESC)`,
+
+  `DROP TRIGGER IF EXISTS trg_salla_stores_updated_at ON salla_stores`,
+  `CREATE TRIGGER trg_salla_stores_updated_at
+    BEFORE UPDATE ON salla_stores
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
   // ── Campaign center: durable drafts, smart customer segmentation, imported
   //    contacts, multiple media assets, approval snapshots and per-recipient
   //    delivery state. Campaign delivery intentionally has its own queue/worker
