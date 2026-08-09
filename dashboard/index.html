@@ -1937,6 +1937,9 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-source-option b{font-size:13px}
   .campaign-source-option .hint{margin-top:2px;font-size:11.5px;line-height:1.55}
   .campaign-source-open{display:none}
+  /* زر الاختيار: دائري، ويُملأ بالأخضر عند الضغط */
+  .campaign-source-option input{border-radius:50%!important;width:21px!important;height:21px!important;transition:background .15s,border-color .15s}
+  .campaign-source-option input:checked{background:var(--green)!important;border-color:var(--green)!important}
   /* مقاييس الأقسام: بطاقات مدمجة بلا نص زائد */
   .campaign-metrics{gap:9px;margin:12px 0}
   .campaign-metric{padding:12px 14px}
@@ -1981,10 +1984,6 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     </aside>
     <main class="campaign-card">
       <section class="campaign-page active" data-campaign-page="audience">
-        <div class="campaign-saved-card">
-          <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
-          <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button id="campaignReuseAudienceBtn" class="campaign-btn secondary" onclick="campaignReuseAudience()" disabled>إعادة بنفس الجمهور</button><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
-        </div>
         <h3 class="campaign-title">من تريد أن تصله الحملة؟</h3>
         <p class="campaign-sub">اختر طريقة استهداف واحدة من البطاقات التالية. الضغط على البطاقة يفتح إعداداتها، ويُحذف أي رقم مكرر تلقائياً.</p>
         <div class="campaign-grid">
@@ -2044,6 +2043,10 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
           </div>
         </div>
         <div class="campaign-actions"><button class="campaign-btn" onclick="campaignSaveAndNext('content')">حفظ والمتابعة</button></div>
+        <div class="campaign-saved-card">
+          <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
+          <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button id="campaignReuseAudienceBtn" class="campaign-btn secondary" onclick="campaignReuseAudience()" disabled>إعادة بنفس الجمهور</button></div>
+        </div>
       </section>
 
       <section class="campaign-page" data-campaign-page="content">
