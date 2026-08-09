@@ -1937,9 +1937,10 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-source-option b{font-size:13px}
   .campaign-source-option .hint{margin-top:2px;font-size:11.5px;line-height:1.55}
   .campaign-source-open{display:none}
-  /* زر الاختيار: دائري، ويُملأ بالأخضر عند الضغط */
-  .campaign-source-option input{border-radius:50%!important;width:21px!important;height:21px!important;transition:background .15s,border-color .15s}
+  /* زر الاختيار: دائرة مضبوطة تُملأ بالأخضر عند الاختيار (حشوة صفر تمنع البيضاوية) */
+  .campaign-source-option input{-webkit-appearance:none!important;appearance:none!important;flex:none!important;box-sizing:border-box!important;display:block!important;width:20px!important;height:20px!important;min-width:20px!important;min-height:20px!important;padding:0!important;margin:0!important;border:2px solid var(--border-strong)!important;border-radius:50%!important;background:#fff!important;transition:background .15s,border-color .15s}
   .campaign-source-option input:checked{background:var(--green)!important;border-color:var(--green)!important}
+  .campaign-source-option input::after{content:''!important;display:none!important}
   /* مقاييس الأقسام: بطاقات مدمجة بلا نص زائد */
   .campaign-metrics{gap:9px;margin:12px 0}
   .campaign-metric{padding:12px 14px}
