@@ -239,15 +239,17 @@ test('saving campaign content uploads pending media before moving to the next st
   assert.match(flash.textContent, /رفع 1 مرفق بنجاح/);
 });
 
-test('saved campaigns are explained below the campaign workflow', () => {
+test('saved campaigns live inside the first (audience) step, not repeated on every step', () => {
   const savedIndex = campaignMarkup.indexOf('class="campaign-saved-card"');
-  const workflowStart = campaignMarkup.indexOf('class="campaign-card"');
-  const workflowEnd = campaignMarkup.indexOf('</main>', workflowStart);
-  assert.ok(savedIndex > workflowEnd);
+  const audienceStart = campaignMarkup.indexOf('data-campaign-page="audience"');
+  const contentStart = campaignMarkup.indexOf('data-campaign-page="content"');
+  // The saved-campaigns bar now sits inside the first step only (so it no longer
+  // repeats under every wizard step). It must appear after the audience step opens
+  // and before the content step begins.
+  assert.ok(savedIndex > audienceStart, 'saved-card should be inside the audience step');
+  assert.ok(savedIndex < contentStart, 'saved-card should be within the first step, before the content step');
   assert.match(campaignMarkup, /افتح حملة سابقة لإكمالها أو تعديلها/);
   assert.equal((campaignMarkup.match(/id="campaignPicker"/g) || []).length, 1);
-  assert.match(campaignMarkup, /campaign-saved-actions\{display:grid/);
-  assert.match(campaignMarkup, /campaign-saved-card\{margin:16px 236px 0 0/);
 });
 
 test('campaign archive shows outcomes and paginated customer numbers', () => {

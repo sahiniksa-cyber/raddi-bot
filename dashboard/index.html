@@ -1949,6 +1949,15 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   /* أسطح موحّدة الاستدارة */
   .campaign-source-panel{border-radius:12px;padding:14px}
   .campaign-target-box{border-radius:11px}
+  /* شريط «الحملات المحفوظة»: نظيف ومدمج، في أول قسم فقط */
+  .campaign-saved-card{margin:0 0 18px!important;padding:12px 14px;border-radius:12px;background:var(--bg-soft);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  .campaign-saved-copy{align-items:center;gap:10px}
+  .campaign-saved-copy i{margin-top:0}
+  .campaign-saved-copy b{font-size:13px}
+  .campaign-saved-copy p{display:none}
+  .campaign-saved-actions{margin-top:0!important;display:flex;flex-wrap:wrap;gap:8px;grid-template-columns:none!important}
+  .campaign-saved-actions select{width:auto!important;min-width:190px;max-width:260px}
+  .campaign-saved-actions .campaign-btn.secondary{background:#fff}
   @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{margin-right:236px}}
   @media(max-width:920px){.campaign-archive-layout{grid-template-columns:1fr}.campaign-archive-items{max-height:330px}.campaign-archive-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
   @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-steps::before{display:none}.campaign-step{min-width:175px}.campaign-step.active::after{display:none}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-progress-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-source-option{min-height:108px}.campaign-saved-card{margin-right:0}.campaign-saved-actions,.campaign-keyword-entry{grid-template-columns:1fr}.campaign-saved-actions .campaign-btn,.campaign-keyword-entry .campaign-btn{width:100%}.campaign-segment-head{align-items:flex-start;flex-direction:column}.campaign-history-head{flex-direction:column}.campaign-history-stats{grid-template-columns:1fr}.campaign-mode-switch{display:grid;grid-template-columns:1fr 1fr;width:100%}.campaign-recipient-tools{grid-template-columns:1fr}.campaign-archive-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-archive-title-row{flex-direction:column}}
@@ -1972,6 +1981,10 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     </aside>
     <main class="campaign-card">
       <section class="campaign-page active" data-campaign-page="audience">
+        <div class="campaign-saved-card">
+          <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
+          <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button id="campaignReuseAudienceBtn" class="campaign-btn secondary" onclick="campaignReuseAudience()" disabled>إعادة بنفس الجمهور</button><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
+        </div>
         <h3 class="campaign-title">من تريد أن تصله الحملة؟</h3>
         <p class="campaign-sub">اختر طريقة استهداف واحدة من البطاقات التالية. الضغط على البطاقة يفتح إعداداتها، ويُحذف أي رقم مكرر تلقائياً.</p>
         <div class="campaign-grid">
@@ -2097,10 +2110,6 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
       </section>
     </main>
   </div>
-  <section class="campaign-saved-card">
-    <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
-    <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button id="campaignReuseAudienceBtn" class="campaign-btn secondary" onclick="campaignReuseAudience()" disabled>إعادة بنفس الجمهور</button><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
-  </section>
   </div>
   <section id="campaignArchiveWorkspace" class="campaign-archive" hidden>
     <div class="campaign-archive-layout">
