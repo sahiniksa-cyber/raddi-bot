@@ -41,6 +41,8 @@ body::after{content:'';position:fixed;bottom:-30%;right:-10%;width:600px;height:
 .logo{font-size:42px;font-weight:700;background:none;color:#16a34a;
   -webkit-background-clip:initial;-webkit-text-fill-color:#16a34a;letter-spacing:-.03em;display:block}
 .logo-sub{font-size:14px;color:var(--text-soft);margin-top:6px;font-weight:500}
+.logo-img{height:66px;width:auto;display:inline-block;object-fit:contain}
+@media(max-width:520px){.logo-img{height:54px}}
 
 .card{background:var(--card);border:1px solid var(--border);
   border-radius:18px;padding:36px;width:100%;max-width:440px;
@@ -424,7 +426,7 @@ input:focus{
 <body>
 
 <div class="logo-wrap">
-  <span class="logo">جواب</span>
+  <img class="logo-img" src="/assets/logo.png" alt="جواب">
   <div class="logo-sub">بوت الواتس أب الذكي لمتجرك</div>
 </div>
 

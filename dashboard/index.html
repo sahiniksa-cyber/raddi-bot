@@ -255,23 +255,50 @@ label{display:flex;align-items:center;gap:8px}
 .esc-var-btn{border:1px solid var(--indigo-border);background:var(--indigo-bg);color:var(--indigo);border-radius:8px;padding:6px 9px;font-family:var(--font);font-size:11.5px;font-weight:800;cursor:pointer}
 .esc-var-btn:hover{background:#fff;color:var(--text-2)}
 
-/* TEST CHAT */
-.test-chat{background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:14px;min-height:180px;max-height:380px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
-.test-chat:empty::before{content:'💬 ابدأ المحادثة بكتابة رسالة';color:var(--text-dim);font-size:13px;text-align:center;display:block;padding:50px 20px}
-.tm{max-width:75%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.6;word-wrap:break-word;animation:tmIn .25s ease}
+/* TEST CHAT — WhatsApp-style (mirrors صفحة المحادثات) */
+.test-chat{border:1px solid var(--border);border-radius:12px;padding:16px 18px;min-height:240px;max-height:460px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:5px;background:#f0f2f5;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'%3E%3Cpath fill='%23dde1e6' fill-opacity='0.45' d='M20 20c2-2 4-4 4-6s-2-4-4-4-4 2-4 4 2 4 4 6z'/%3E%3C/svg%3E")}
+.test-chat:empty{align-items:center;justify-content:center}
+.test-chat:empty::before{content:'ابدأ المحادثة بكتابة رسالة كأنك عميل';color:var(--text-soft);font-size:13px;text-align:center;display:block;padding:14px 20px;background:rgba(255,255,255,.75);border-radius:10px;box-shadow:var(--shadow-xs)}
+.tm-wrap{display:flex;max-width:78%;gap:7px;align-items:flex-end;animation:tmIn .25s ease}
+.tm-wrap.user{align-self:flex-start}
+.tm-wrap.bot{align-self:flex-end;flex-direction:row-reverse}
 @keyframes tmIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.tm.user{background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;align-self:flex-start;border-bottom-right-radius:4px;box-shadow:0 1px 2px rgba(22,163,74,.2)}
-.tm.bot{background:#fff;color:var(--text);align-self:flex-end;border-bottom-left-radius:4px;border:1px solid var(--border);box-shadow:var(--shadow-xs)}
-.tm.bot.kw{border-color:var(--amber-border);background:var(--amber-bg)}
-.tm.typing{align-self:flex-end;background:#fff;padding:12px 16px;border:1px solid var(--border)}
-.tm.typing::after{content:'• • •';animation:tdots 1.2s infinite;letter-spacing:3px;color:var(--text-soft)}
+.tm-avatar{width:26px;height:26px;border-radius:50%;background:var(--green-bg);border:1px solid var(--green-border);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-bottom:16px}
+.tm-avatar i[data-lucide]{width:13px;height:13px;color:var(--green);stroke-width:1.5}
+.tm-col{display:flex;flex-direction:column;min-width:0}
+.tm-wrap.user .tm-col{align-items:flex-start}
+.tm-wrap.bot .tm-col{align-items:flex-end}
+.tm-bubble{padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.55;word-break:break-word;box-shadow:0 1px 2px rgba(0,0,0,.06);white-space:pre-wrap}
+.tm-wrap.user .tm-bubble{background:#ffffff;color:var(--text);border-top-right-radius:4px}
+.tm-wrap.bot .tm-bubble{background:#e9f5eb;color:var(--text);border-top-left-radius:4px}
+.tm-bubble.kw{background:var(--amber-bg);border:1px solid var(--amber-border)}
+.tm-meta{font-size:10px;color:var(--text-soft);margin-top:6px;padding-top:5px;border-top:1px dashed rgba(0,0,0,.12);direction:rtl;line-height:1.5}
+.tm-time{font-size:9.5px;color:var(--text-dim);margin-top:2px;padding:0 5px;font-weight:500}
+.tm-typing{align-self:flex-end;flex-direction:row-reverse}
+.tm-typing .tm-bubble{background:#e9f5eb;padding:10px 16px}
+.tm-typing .tm-bubble::after{content:'• • •';animation:tdots 1.2s infinite;letter-spacing:3px;color:var(--text-soft)}
 @keyframes tdots{0%,100%{opacity:.3}50%{opacity:1}}
-.tm-meta{font-size:10px;color:var(--text-dim);margin-top:3px;direction:ltr}
-.test-input{display:flex;gap:8px}
-.test-input input{margin-bottom:0;flex:1}
-.test-send{padding:11px 24px;border-radius:11px;border:none;background:linear-gradient(135deg,var(--green-light),var(--green));color:#fff;font-family:var(--font);font-size:13px;font-weight:800;cursor:pointer;transition:all .18s;flex-shrink:0;box-shadow:0 1px 2px rgba(22,163,74,.25)}
-.test-send:hover{transform:translateY(-1px)}
-.test-send:disabled{opacity:.5;cursor:wait;transform:none}
+.test-input{display:flex;gap:8px;align-items:center}
+.test-input input{margin-bottom:0;flex:1;border-radius:11px}
+.test-send{width:42px;height:42px;padding:0;border-radius:11px;border:none;background:var(--green);color:#fff;cursor:pointer;transition:background .18s;flex-shrink:0;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 2px rgba(22,163,74,.25)}
+.test-send:hover{background:var(--green2)}
+.test-send:disabled{opacity:.5;cursor:wait}
+.test-send i[data-lucide]{width:18px;height:18px;stroke-width:2}
+/* تجربة البوت كنافذة دردشة واتساب متكاملة */
+#testBotPanel{background:#fff!important;padding:0;overflow:hidden}
+#testBotPanel .wa-head{display:flex;align-items:center;gap:11px;padding:11px 16px;background:#fff;border-bottom:1px solid var(--border)}
+.wa-head-avatar{width:40px;height:40px;border-radius:50%;background:var(--green);color:#fff;display:grid;place-items:center;flex:none}
+.wa-head-avatar i[data-lucide]{width:20px;height:20px;stroke-width:2}
+.wa-head-id{flex:1;min-width:0}
+.wa-head-id b{display:block;font-size:14px;font-weight:700;color:var(--text)}
+.wa-head-id span{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--green2);font-weight:500;margin-top:2px}
+.wa-head-id .wa-dot{width:7px;height:7px;border-radius:50%;background:var(--green-light);flex:none}
+.wa-head-reset{display:flex;align-items:center;gap:6px;background:var(--bg-soft);border:1px solid var(--border);border-radius:9px;padding:7px 12px;font-family:var(--font);font-size:12px;font-weight:600;color:var(--text-soft);cursor:pointer;flex:none;transition:all .15s}
+.wa-head-reset:hover{background:#fff;color:var(--text-2);border-color:var(--border-strong)}
+.wa-head-reset i[data-lucide]{width:14px;height:14px;stroke-width:2}
+#testBotPanel .test-chat{border:none;border-radius:0;margin:0;min-height:300px;max-height:430px;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;background-color:#f0f2f5!important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'%3E%3Cpath fill='%23dde1e6' fill-opacity='0.45' d='M20 20c2-2 4-4 4-6s-2-4-4-4-4 2-4 4 2 4 4 6z'/%3E%3C/svg%3E")!important}
+#testBotPanel .test-input{padding:11px 14px;background:#fff;border-top:1px solid var(--border)}
+@media(max-width:560px){.wa-head-reset span{display:none}.wa-head-reset{padding:8px}}
 
 /* TOAST */
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:#fff;padding:12px 24px;border-radius:12px;font-family:var(--font);font-weight:700;font-size:14px;opacity:0;transition:all .3s;pointer-events:none;z-index:9999;white-space:nowrap;box-shadow:0 8px 16px rgba(15,23,42,.15),0 4px 8px rgba(15,23,42,.1)}
@@ -587,6 +614,55 @@ body{
 .panel:nth-of-type(4n+2){background:linear-gradient(135deg,rgba(255,255,255,.82),rgba(225,242,255,.72))}
 .panel:nth-of-type(4n+3){background:linear-gradient(135deg,rgba(255,255,255,.82),rgba(255,241,243,.72))}
 .panel:nth-of-type(4n+4){background:linear-gradient(135deg,rgba(255,255,255,.82),rgba(255,246,216,.72))}
+/* «حسابي»: بطاقات رسمية بيضاء موحّدة (بلا تدرّج ملوّن) — كلها مفتوحة دائماً */
+#view-account .panel{background:var(--card)!important}
+#view-account .phdr{background:var(--card-soft);cursor:default}
+#view-account .phdr .acc-arrow{display:none}
+/* ── قوة رد البوت: عدّاد جاهزية دائري احترافي ── */
+.readiness{display:flex;align-items:center;gap:18px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:var(--shadow-sm)}
+.rd-gauge{position:relative;width:92px;height:92px;flex:none}
+.rd-ring{width:100%;height:100%;transform:rotate(-90deg)}
+.rd-track{fill:none;stroke:var(--bg-soft);stroke-width:9}
+.rd-prog{fill:none;stroke:var(--border-strong);stroke-width:9;stroke-linecap:round;stroke-dasharray:326.7;stroke-dashoffset:326.7;transition:stroke-dashoffset .65s cubic-bezier(.4,0,.2,1),stroke .3s}
+.rd-gauge-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.rd-pct{font-size:22px;font-weight:900;letter-spacing:-.03em;color:var(--text-soft)}
+.rd-info{flex:1;min-width:0}
+.rd-title{font-size:15px;font-weight:800;color:var(--text);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rd-title i[data-lucide]{width:18px;height:18px;color:var(--green);stroke-width:2}
+.rd-badge{font-size:12px;font-weight:800;padding:3px 13px;border-radius:999px;background:var(--bg-soft);color:var(--text-soft)}
+.rd-hint{font-size:12.5px;color:var(--text-soft);line-height:1.65;margin-top:8px}
+.readiness.lvl-weak .rd-prog{stroke:#ef4444}
+.readiness.lvl-mid .rd-prog{stroke:#f59e0b}
+.readiness.lvl-good .rd-prog{stroke:var(--green-light)}
+.readiness.lvl-strong .rd-prog{stroke:var(--green)}
+.readiness.lvl-weak .rd-pct{color:var(--red)}
+.readiness.lvl-mid .rd-pct{color:#d97706}
+.readiness.lvl-good .rd-pct,.readiness.lvl-strong .rd-pct{color:var(--green2)}
+.readiness.lvl-weak .rd-badge{background:var(--red-bg);color:var(--red)}
+.readiness.lvl-mid .rd-badge{background:var(--amber-bg);color:#b45309}
+.readiness.lvl-good .rd-badge,.readiness.lvl-strong .rd-badge{background:var(--green-bg);color:var(--green2)}
+/* ── بطاقة الحالة الموحّدة: عدّاد القوة (يمين) | فاصل | إحصائيات (يسار) ── */
+.status-card{display:flex;align-items:stretch;flex-wrap:wrap;background:#fff!important;border:1px solid var(--border);border-radius:16px;box-shadow:0 1px 3px rgba(15,23,42,.05);overflow:hidden;margin-bottom:18px;backdrop-filter:none;-webkit-backdrop-filter:none}
+.status-card .readiness{flex:0 0 auto;min-width:216px;display:flex;align-items:center;gap:14px;padding:16px 20px;margin:0;background:none!important;border:none!important;border-radius:0;box-shadow:none!important}
+.status-card .rd-gauge{width:62px;height:62px}
+.status-card .rd-track{stroke-width:9}
+.status-card .rd-prog{stroke-width:9}
+.status-card .rd-pct{font-size:16px;font-weight:800}
+.status-card .rd-info{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-width:0}
+.status-card .rd-title{font-size:14px;font-weight:800;color:var(--text)}
+.status-card .rd-badge{font-size:11.5px;font-weight:800;padding:3px 12px;border-radius:999px;background:var(--bg-soft);color:var(--text-soft)}
+.sc-divider{flex:none;width:1px;background:var(--border);align-self:stretch;margin:16px 0}
+.status-card .sc-stats{flex:1 1 300px;display:grid;grid-template-columns:repeat(3,1fr);margin:0;gap:0;background:none!important}
+.status-card .sc-stats .stat{display:flex;flex-direction:column-reverse;align-items:center;justify-content:center;gap:6px;min-height:0!important;padding:16px 10px!important;background:none!important;background-image:none!important;border:none!important;border-radius:0;box-shadow:none!important}
+.status-card .sc-stats .stat + .stat{border-inline-start:1px solid var(--border)!important}
+.status-card .sc-stats .stat .v{font-size:22px;font-weight:800;line-height:1}
+.status-card .sc-stats .stat .l{font-size:11.5px;color:var(--text-soft);font-weight:600;margin:0}
+@media(max-width:760px){
+  .status-card{flex-direction:column}
+  .status-card .readiness{justify-content:center}
+  .sc-divider{width:auto;height:1px;margin:0}
+  .status-card .sc-stats .stat{padding:14px 8px}
+}
 
 .phdr{
   min-height:68px;
@@ -784,6 +860,7 @@ body{background-attachment:scroll}
   #view-settings>.sw{max-width:1160px;columns:2;column-gap:16px}
   #view-settings>.sw>.panel{break-inside:avoid;margin-bottom:16px;width:100%}
   #view-settings>.sw>.bot-ctrl,
+  #view-settings>.sw>.status-card,
   #view-settings>.sw>.stats-row,
   #view-settings>.sw>.health-btn,
   #view-settings>.sw>.health-results,
@@ -832,6 +909,7 @@ body{background-attachment:scroll}
 .main-sidebar{position:fixed;inset:0 0 0 auto;z-index:420;width:272px;display:flex;flex-direction:column;background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(15,23,42,.04);transition:width .18s ease,transform .18s ease}
 .sidebar-brand{height:76px;display:flex;align-items:center;gap:11px;padding:0 16px;border-bottom:1px solid #eef1f4;flex:none}
 .sidebar-logo-mark{width:40px;height:40px;display:grid;place-items:center;flex:none;border-radius:12px;background:#12805c;color:#fff;font-size:19px;font-weight:700}
+.sidebar-logo-img{height:34px;width:auto;flex:none;display:block;object-fit:contain}
 .sidebar-brand-copy{min-width:0;line-height:1.25}
 .sidebar-brand-copy strong{display:block;font-size:18px;font-weight:700;color:var(--text)}
 .sidebar-brand-copy span{display:block;margin-top:3px;font-size:11px;color:var(--text-soft);white-space:nowrap}
@@ -867,9 +945,11 @@ body{background-attachment:scroll}
 .topbar .user-pill button:hover{background:var(--red-bg)}
 body.nav-collapsed .main-sidebar{width:82px}
 body.nav-collapsed .dashboard-app{padding-right:82px}
-body.nav-collapsed .sidebar-brand{justify-content:center;padding:0 10px}
+body.nav-collapsed .sidebar-brand{flex-direction:column;height:auto;justify-content:center;gap:10px;padding:14px 8px}
 body.nav-collapsed .sidebar-brand-copy,body.nav-collapsed .sidebar-channel,body.nav-collapsed .nav-section-label,body.nav-collapsed .tab-label,body.nav-collapsed .sidebar-help span{display:none!important}
-body.nav-collapsed .sidebar-collapse{position:absolute;top:87px;left:-15px;width:30px;height:30px;border-radius:999px!important;z-index:2}
+body.nav-collapsed .sidebar-logo-img{height:26px}
+/* Collapsed: clean docked toggle (no floating pill) */
+body.nav-collapsed .sidebar-collapse{position:static;margin:0;width:34px;height:34px;border-radius:10px!important}
 body.nav-collapsed .sidebar-collapse i{transform:rotate(180deg)}
 body.nav-collapsed .nav-section{margin-bottom:10px}
 body.nav-collapsed .nav-section .tab{justify-content:center;padding:10px;margin:4px 0}
@@ -881,7 +961,8 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .main-sidebar{width:min(286px,86vw);transform:translateX(105%);box-shadow:-20px 0 50px rgba(15,23,42,.16)}
   body.nav-collapsed .dashboard-app{padding-right:0}
   body.nav-collapsed .main-sidebar{width:min(286px,86vw)}
-  body.nav-collapsed .sidebar-brand{justify-content:flex-start;padding:0 16px}
+  body.nav-collapsed .sidebar-brand{flex-direction:row;height:76px;justify-content:flex-start;gap:11px;padding:0 16px}
+  body.nav-collapsed .sidebar-logo-img{height:34px}
   body.nav-collapsed .sidebar-brand-copy,body.nav-collapsed .sidebar-channel,body.nav-collapsed .nav-section-label,body.nav-collapsed .tab-label,body.nav-collapsed .sidebar-help span{display:block!important}
   body.nav-collapsed .sidebar-collapse{position:static;width:36px;height:36px;margin-inline-start:auto;border-radius:10px!important}
   body.nav-collapsed .nav-section{margin-bottom:19px}
@@ -923,9 +1004,8 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 
 <aside class="main-sidebar" id="mainSidebar" aria-label="القائمة الرئيسية">
   <div class="sidebar-brand">
-    <div class="sidebar-logo-mark">ج</div>
-    <div class="sidebar-brand-copy"><strong>جواب</strong><span>خدمة العملاء الذكية</span></div>
-    <button class="sidebar-collapse" id="sidebarCollapseBtn" onclick="toggleMainNav()" title="تصغير القائمة" aria-label="تصغير القائمة"><i data-lucide="panel-right-close"></i></button>
+    <img class="sidebar-logo-img" src="/assets/logo.png" alt="جواب" width="120" height="55">
+    <div class="sidebar-brand-copy"><span>خدمة العملاء الذكية</span></div>
   </div>
 
   <!-- Hidden by default; instagram.js reveals it only when the feature is on. -->
@@ -1182,11 +1262,28 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     </div>
   </div>
 
-  <div class="stats-row wa-only" style="grid-template-columns:repeat(4,1fr)">
-    <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
-    <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:var(--purple)">0</div><div class="l">ردود AI 🤖</div></div>
-    <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
-    <div class="stat"><div class="v" id="stMdl">—</div><div class="l">النموذج</div></div>
+  <!-- بطاقة الحالة الموحّدة: عدّاد قوة الرد (يمين) | فاصل | إحصائيات (يسار) -->
+  <div class="status-card wa-only">
+    <div class="readiness" id="botStrength">
+      <div class="rd-gauge">
+        <svg class="rd-ring" viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="rd-track" cx="60" cy="60" r="52"></circle>
+          <circle class="rd-prog" id="strRing" cx="60" cy="60" r="52"></circle>
+        </svg>
+        <div class="rd-gauge-center"><span class="rd-pct" id="strPct">0%</span></div>
+      </div>
+      <div class="rd-info">
+        <div class="rd-title">قوة رد البوت</div>
+        <span class="rd-badge" id="strBadge">—</span>
+      </div>
+    </div>
+    <div class="sc-divider" aria-hidden="true"></div>
+    <div class="stats-row wa-only sc-stats">
+      <div class="stat"><div class="v" id="stChats">0</div><div class="l">محادثات نشطة</div></div>
+      <div class="stat" title="إجمالي ردود البوت منذ آخر تشغيل"><div class="v" id="stReplies" style="color:var(--purple)">0</div><div class="l">ردود AI</div></div>
+      <div class="stat"><div class="v" id="stPhone">—</div><div class="l">رقم الواتس</div></div>
+    </div>
+    <div class="rd-hint" id="strHint" hidden></div>
   </div>
 
   <!-- ═══ FULL SERVICE HEALTH CHECK ═══ -->
@@ -1196,19 +1293,20 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
     <div id="healthBody"></div>
   </div>
 
-  <!-- ═══ TEST BOT LIVE ═══ -->
-  <div class="panel wa-only">
-    <div class="phdr">
-      <span>💬 جرّب البوت الآن — قبل ما يرد على عملاء حقيقيين</span>
-      <button class="add-btn" onclick="resetTestChat()">🗑 محادثة جديدة</button>
-    </div>
-    <div class="pbdy">
-      <p class="hint" style="margin:0 0 10px">اكتب رسالة كأنك عميل وشف كيف يرد البوت — يستخدم نفس الإعدادات + الذاكرة</p>
-      <div class="test-chat" id="testChat"></div>
-      <div class="test-input">
-        <input type="text" id="testInput" placeholder="مثال: السلام عليكم، عندكم منتج X؟" onkeydown="if(event.key==='Enter'){event.preventDefault();sendTestMsg()}">
-        <button class="test-send" onclick="sendTestMsg()" id="testSendBtn">إرسال</button>
+  <!-- ═══ TEST BOT LIVE — نافذة دردشة واتساب ═══ -->
+  <div class="panel wa-only no-acc chat-panel" id="testBotPanel">
+    <div class="wa-head">
+      <div class="wa-head-avatar"><i data-lucide="bot"></i></div>
+      <div class="wa-head-id">
+        <b>تجربة البوت</b>
+        <span><span class="wa-dot"></span> معاينة — لا يُرسل للعميل ولا يخصم رصيد</span>
       </div>
+      <button class="wa-head-reset" onclick="resetTestChat()" title="محادثة جديدة"><i data-lucide="refresh-cw"></i><span>محادثة جديدة</span></button>
+    </div>
+    <div class="test-chat wa" id="testChat"></div>
+    <div class="test-input">
+      <input type="text" id="testInput" placeholder="اكتب رسالة…" onkeydown="if(event.key==='Enter'){event.preventDefault();sendTestMsg()}">
+      <button class="test-send" onclick="sendTestMsg()" id="testSendBtn" aria-label="إرسال"><i data-lucide="send"></i></button>
     </div>
   </div>
 
@@ -1787,9 +1885,86 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
   .campaign-saved-card{margin:16px 236px 0 0;padding:18px;border:1px solid var(--border);border-radius:16px;background:#fff}.campaign-saved-copy{display:flex;align-items:flex-start;gap:10px}.campaign-saved-copy i{width:20px;height:20px;flex:none;margin-top:2px;color:var(--green2);stroke-width:1.5}.campaign-saved-copy b{display:block;font-size:14px;font-weight:600}.campaign-saved-copy p{margin:4px 0 0;font-size:11.5px;color:var(--text-soft);line-height:1.6}.campaign-saved-actions{display:grid;grid-template-columns:minmax(220px,380px) auto;justify-content:start;align-items:center;gap:9px;margin-top:14px}.campaign-saved-actions select{width:100%;min-width:0;margin:0!important}.campaign-saved-actions .campaign-btn{white-space:nowrap}
   .campaign-mode-switch{display:inline-flex;gap:5px;margin:0 0 16px;padding:5px;border:1px solid var(--border);border-radius:13px;background:#fff}.campaign-mode-btn{border:0;border-radius:9px;padding:10px 15px;background:transparent;color:var(--text-soft);font:600 12.5px var(--font);cursor:pointer}.campaign-mode-btn.active{background:var(--green-bg);color:var(--green2)}
   .campaign-archive{min-height:460px}.campaign-archive-layout{display:grid;grid-template-columns:320px minmax(0,1fr);gap:15px;align-items:start}.campaign-archive-list,.campaign-archive-detail{border:1px solid var(--border);border-radius:16px;background:#fff}.campaign-archive-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:17px;border-bottom:1px solid var(--border)}.campaign-archive-head h3{margin:0 0 4px;font-size:16px}.campaign-archive-head p{margin:0;color:var(--text-soft);font-size:11px;line-height:1.6}.campaign-archive-refresh{border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:#fff;color:var(--text);font:600 11px var(--font);cursor:pointer}.campaign-archive-items{max-height:720px;overflow:auto;padding:8px}.campaign-archive-item{width:100%;margin-bottom:7px;padding:13px;border:1px solid transparent;border-radius:12px;background:#f8fafc;text-align:right;color:var(--text);font-family:var(--font);cursor:pointer}.campaign-archive-item:hover,.campaign-archive-item.active{border-color:var(--green-border);background:var(--green-bg)}.campaign-archive-item-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.campaign-archive-item b{font-size:12.5px}.campaign-archive-item p{margin:6px 0 0;font-size:10.5px;color:var(--text-soft)}.campaign-status-badge,.campaign-recipient-badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;background:#f1f5f9;color:#475569;font-size:9.5px;font-weight:700;white-space:nowrap}.campaign-status-badge.sending,.campaign-status-badge.scheduled{background:#eff6ff;color:#1d4ed8}.campaign-status-badge.completed,.campaign-recipient-badge.sent{background:#ecfdf5;color:#047857}.campaign-status-badge.paused{background:#fffbeb;color:#a16207}.campaign-status-badge.failed,.campaign-recipient-badge.failed{background:#fef2f2;color:#b91c1c}.campaign-status-badge.canceled,.campaign-recipient-badge.canceled,.campaign-recipient-badge.skipped{background:#f1f5f9;color:#64748b}.campaign-archive-empty{padding:46px 20px;text-align:center;color:var(--text-soft);font-size:12px;line-height:1.8}.campaign-archive-detail{padding:18px}.campaign-archive-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.campaign-archive-title-row h3{margin:0 0 5px;font-size:18px}.campaign-archive-title-row p{margin:0;color:var(--text-soft);font-size:11px}.campaign-archive-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:16px 0}.campaign-archive-metric{padding:12px;border:1px solid var(--border);border-radius:11px;background:#f8fafc}.campaign-archive-metric strong{display:block;font-size:20px;color:var(--green2)}.campaign-archive-metric span{font-size:10px;color:var(--text-soft)}.campaign-archive-message{margin:0 0 14px;padding:12px;border:1px solid var(--border);border-radius:11px;background:#f8fafc;font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word}.campaign-archive-error{margin:0 0 14px;padding:10px 12px;border:1px solid #fecaca;border-radius:10px;background:#fef2f2;color:#991b1b;font-size:11px;line-height:1.7}.campaign-recipient-tools{display:grid;grid-template-columns:minmax(160px,1fr) 180px auto;gap:8px;margin:14px 0 9px}.campaign-recipient-tools input,.campaign-recipient-tools select{margin:0!important}.campaign-recipient-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:12px}.campaign-recipient-table{width:100%;border-collapse:collapse;min-width:620px}.campaign-recipient-table th,.campaign-recipient-table td{padding:10px 11px;border-bottom:1px solid var(--border);text-align:right;font-size:10.5px;vertical-align:middle}.campaign-recipient-table th{background:#f8fafc;color:var(--text-soft);font-weight:600}.campaign-recipient-table tr:last-child td{border-bottom:0}.campaign-recipient-phone{direction:ltr;text-align:right!important;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px!important}.campaign-recipient-error{max-width:230px;color:#991b1b;white-space:normal;line-height:1.55}.campaign-recipient-pagination{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;color:var(--text-soft);font-size:10.5px}.campaign-recipient-pagination div{display:flex;gap:7px}.campaign-recipient-pagination button{border:1px solid var(--border);border-radius:8px;padding:7px 11px;background:#fff;color:var(--text);font:600 10.5px var(--font);cursor:pointer}.campaign-recipient-pagination button:disabled{opacity:.45;cursor:not-allowed}
+  /* ═══ تحسين احترافي (لابتوب + جوال): أزرار أنحف، أرقام أهدأ، مسافات أنظف ═══ */
+  .campaign-hero h2{font-size:20px;font-weight:700;letter-spacing:-.01em}
+  .campaign-shell{padding:22px 16px 40px}
+  .campaign-card{padding:18px}
+  .campaign-title{font-size:16px;margin-bottom:5px}
+  .campaign-sub{font-size:12.5px;margin-bottom:14px;line-height:1.7}
+  /* أزرار موحّدة أنحف + تغذية بصرية عند المرور */
+  .campaign-btn{padding:8px 15px;border-radius:9px;font:600 12.5px var(--font);line-height:1.5;transition:background .15s,border-color .15s,color .15s}
+  .campaign-btn:hover{background:var(--green2)}
+  .campaign-btn.secondary:hover{background:var(--bg-soft);border-color:var(--border-strong)}
+  .campaign-btn.danger:hover{background:#991b1b}
+  .campaign-actions{gap:8px;margin-top:16px}
+  /* خطوات أنحف */
+  .campaign-steps{padding:8px}
+  .campaign-step{padding:9px 11px}
+  .campaign-step-number{width:23px;height:23px}
+  /* أرقام المقاييس أهدأ (كانت مبالغ فيها) */
+  .campaign-metric{padding:12px}
+  .campaign-metric strong{font-size:19px}
+  .campaign-send-count{padding:11px 13px}
+  .campaign-send-count strong,.campaign-keyword-count strong,.campaign-progress-metric strong,.campaign-archive-metric strong{font-size:18px}
+  .campaign-history-stat strong{font-size:15px}
+  /* ملاحظات أهدأ وأقل صخباً */
+  .campaign-note{font-size:12px;padding:10px 12px;line-height:1.65;margin:10px 0}
+  /* توحيد حجم الإدخال داخل بطاقة الحملة */
+  .campaign-card input,.campaign-card textarea,.campaign-card select{font-size:13px}
+  /* ═══ Stepper احترافي: أرقام دائرية → علامة ✓ للمكتمل + خط رابط + حالة نشطة واضحة ═══ */
+  .campaign-steps{position:relative;padding:8px 6px;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+  .campaign-steps::before{content:'';position:absolute;z-index:0;right:32px;top:36px;bottom:36px;width:2px;background:#e6eaf0}
+  .campaign-step{position:relative;z-index:1;gap:11px;padding:11px 12px;border-radius:12px;margin-bottom:2px;transition:background .15s}
+  .campaign-step:hover:not(.active){background:#f6f8fa}
+  .campaign-step-number{position:relative;z-index:1;width:28px;height:28px;font-size:12.5px;font-weight:700;border:2px solid #e2e8f0;background:#fff;color:var(--text-dim);transition:background .18s,border-color .18s,color .18s}
+  .campaign-step.visited .campaign-step-number,.campaign-step.active .campaign-step-number{background:var(--green);border-color:var(--green);color:#fff;box-shadow:0 2px 6px rgba(22,163,74,.28)}
+  .campaign-step.visited:not(.active) .campaign-step-number{font-size:0}
+  .campaign-step.visited:not(.active) .campaign-step-number::after{content:'✓';font-size:14px;font-weight:800}
+  .campaign-step.active{background:var(--green-bg)}
+  .campaign-step.active::after{content:'';position:absolute;z-index:2;top:11px;bottom:11px;right:0;width:3px;border-radius:0 3px 3px 0;background:var(--green)}
+  .campaign-step.active .campaign-step-copy b{color:var(--green2);font-weight:700}
+  /* ═══ لمسات احترافية على الأسطح ═══ */
+  .campaign-card{box-shadow:0 1px 3px rgba(15,23,42,.05)}
+  .campaign-hero{padding-bottom:14px;border-bottom:1px solid var(--border);margin-bottom:16px}
+  .campaign-hero h2{display:flex;align-items:center;gap:9px}
+  .campaign-source-option{transition:border-color .15s,background .15s,box-shadow .15s}
+  .campaign-source-option:has(input:checked){box-shadow:0 0 0 3px rgba(22,163,74,.12)}
+  .campaign-metric{box-shadow:0 1px 2px rgba(15,23,42,.03)}
+  /* ═══ حملات — تبسيط وتخطيط أنظف (v2) ═══ */
+  /* مصادر الاستهداف: قائمة صفوف مدمجة بدل بطاقات طويلة مزدحمة */
+  .campaign-source-list{grid-template-columns:1fr;gap:8px;margin-top:14px}
+  .campaign-source-option{min-height:0;padding:12px 14px;border-radius:11px;align-items:center;gap:12px}
+  .campaign-source-option b{font-size:13px}
+  .campaign-source-option .hint{margin-top:2px;font-size:11.5px;line-height:1.55}
+  .campaign-source-open{display:none}
+  /* زر الاختيار: دائرة مضبوطة تُملأ بالأخضر عند الاختيار (حشوة صفر تمنع البيضاوية) */
+  .campaign-source-option input{-webkit-appearance:none!important;appearance:none!important;flex:none!important;box-sizing:border-box!important;display:block!important;width:20px!important;height:20px!important;min-width:20px!important;min-height:20px!important;padding:0!important;margin:0!important;border:2px solid var(--border-strong)!important;border-radius:50%!important;background:#fff!important;transition:background .15s,border-color .15s}
+  .campaign-source-option input:checked{background:var(--green)!important;border-color:var(--green)!important}
+  .campaign-source-option input::after{content:''!important;display:none!important}
+  /* مقاييس الأقسام: بطاقات مدمجة بلا نص زائد */
+  .campaign-metrics{gap:9px;margin:12px 0}
+  .campaign-metric{padding:12px 14px}
+  .campaign-metric strong{font-size:19px}
+  .campaign-metric b{margin-top:1px}
+  .campaign-metric span{display:none}
+  /* شرح أهدأ وأقصر بصريّاً */
+  .campaign-sub{font-size:12px}
+  .campaign-card .hint{font-size:11.5px;line-height:1.55}
+  /* أسطح موحّدة الاستدارة */
+  .campaign-source-panel{border-radius:12px;padding:14px}
+  .campaign-target-box{border-radius:11px}
+  /* شريط «الحملات المحفوظة»: نظيف ومدمج، في أول قسم فقط */
+  .campaign-saved-card{margin:0 0 18px!important;padding:12px 14px;border-radius:12px;background:var(--bg-soft);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  .campaign-saved-copy{align-items:center;gap:10px}
+  .campaign-saved-copy i{margin-top:0}
+  .campaign-saved-copy b{font-size:13px}
+  .campaign-saved-copy p{display:none}
+  .campaign-saved-actions{margin-top:0!important;display:flex;flex-wrap:wrap;gap:8px;grid-template-columns:none!important}
+  .campaign-saved-actions select{width:auto!important;min-width:190px;max-width:260px}
+  .campaign-saved-actions .campaign-btn.secondary{background:#fff}
   @media(max-width:920px){.campaign-content-layout{grid-template-columns:1fr}.campaign-whatsapp-preview{position:static;max-width:360px;margin:0 auto;width:100%}.campaign-saved-card{margin-right:236px}}
   @media(max-width:920px){.campaign-archive-layout{grid-template-columns:1fr}.campaign-archive-items{max-height:330px}.campaign-archive-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
-  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-step{min-width:175px}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-progress-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-source-option{min-height:108px}.campaign-saved-card{margin-right:0}.campaign-saved-actions,.campaign-keyword-entry{grid-template-columns:1fr}.campaign-saved-actions .campaign-btn,.campaign-keyword-entry .campaign-btn{width:100%}.campaign-segment-head{align-items:flex-start;flex-direction:column}.campaign-history-head{flex-direction:column}.campaign-history-stats{grid-template-columns:1fr}.campaign-mode-switch{display:grid;grid-template-columns:1fr 1fr;width:100%}.campaign-recipient-tools{grid-template-columns:1fr}.campaign-archive-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-archive-title-row{flex-direction:column}}
+  @media(max-width:760px){.campaign-layout{grid-template-columns:1fr}.campaign-steps{position:static;display:flex;overflow:auto}.campaign-steps::before{display:none}.campaign-step{min-width:175px}.campaign-step.active::after{display:none}.campaign-grid,.campaign-metrics,.campaign-source-list{grid-template-columns:1fr}.campaign-progress-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-source-option{min-height:108px}.campaign-saved-card{margin-right:0}.campaign-saved-actions,.campaign-keyword-entry{grid-template-columns:1fr}.campaign-saved-actions .campaign-btn,.campaign-keyword-entry .campaign-btn{width:100%}.campaign-segment-head{align-items:flex-start;flex-direction:column}.campaign-history-head{flex-direction:column}.campaign-history-stats{grid-template-columns:1fr}.campaign-mode-switch{display:grid;grid-template-columns:1fr 1fr;width:100%}.campaign-recipient-tools{grid-template-columns:1fr}.campaign-archive-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.campaign-archive-title-row{flex-direction:column}}
 </style>
 <div class="campaign-shell">
   <div class="campaign-hero">
@@ -1869,6 +2044,10 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
           </div>
         </div>
         <div class="campaign-actions"><button class="campaign-btn" onclick="campaignSaveAndNext('content')">حفظ والمتابعة</button></div>
+        <div class="campaign-saved-card">
+          <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
+          <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button id="campaignReuseAudienceBtn" class="campaign-btn secondary" onclick="campaignReuseAudience()" disabled>إعادة بنفس الجمهور</button></div>
+        </div>
       </section>
 
       <section class="campaign-page" data-campaign-page="content">
@@ -1935,10 +2114,6 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
       </section>
     </main>
   </div>
-  <section class="campaign-saved-card">
-    <div class="campaign-saved-copy"><i data-lucide="folder-open"></i><div><b>الحملات المحفوظة</b><p>افتح حملة سابقة لإكمالها أو تعديلها، أو ابدأ حملة جديدة.</p></div></div>
-    <div class="campaign-saved-actions"><select id="campaignPicker" onchange="campaignOpen(this.value)"><option value="">اختر حملة محفوظة</option></select><button id="campaignReuseAudienceBtn" class="campaign-btn secondary" onclick="campaignReuseAudience()" disabled>إعادة بنفس الجمهور</button><button class="campaign-btn secondary" onclick="campaignNew()">+ حملة جديدة</button></div>
-  </section>
   </div>
   <section id="campaignArchiveWorkspace" class="campaign-archive" hidden>
     <div class="campaign-archive-layout">
@@ -1982,7 +2157,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 
   <!-- Account Info -->
   <div class="panel">
-    <div class="phdr">👤 معلومات الحساب</div>
+    <div class="phdr">معلومات الحساب</div>
     <div class="pbdy">
       <div class="g2">
         <div>
@@ -1995,7 +2170,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
         </div>
       </div>
       <div style="margin-top:8px;padding:11px 14px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:11px;font-size:13px;color:var(--green2);font-weight:600">
-        🔒 بياناتك مشفرة ومحفوظة بأمان — لا يمكن لأحد رؤية كلمة مرورك
+        بياناتك مشفّرة ومحفوظة بأمان — لا يمكن لأحد الاطّلاع على كلمة المرور.
       </div>
     </div>
   </div>
@@ -2070,7 +2245,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 
   <!-- Change Password -->
   <div class="panel">
-    <div class="phdr">🔑 تغيير كلمة المرور</div>
+    <div class="phdr">تغيير كلمة المرور</div>
     <div class="pbdy">
       <div>
         <label>كلمة المرور الحالية</label>
@@ -2101,23 +2276,23 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
         </div>
       </div>
       <button class="save-btn" style="margin-top:14px" onclick="doChangePassword()">
-        <span id="changePassBtnTxt">🔒 حفظ كلمة المرور الجديدة</span>
+        <span id="changePassBtnTxt">حفظ كلمة المرور الجديدة</span>
       </button>
     </div>
   </div>
 
   <!-- Logout -->
   <div class="panel">
-    <div class="phdr">🚪 تسجيل الخروج</div>
+    <div class="phdr">تسجيل الخروج</div>
     <div class="pbdy">
-      <p class="hint" style="margin-bottom:14px">لن يتأثر البوت عند تسجيل الخروج — سيستمر في العمل بشكل طبيعي</p>
+      <p class="hint" style="margin-bottom:14px">لن يتأثر البوت عند تسجيل الخروج — سيستمر في العمل بشكل طبيعي.</p>
       <button onclick="doLogout()"
         style="width:100%;padding:13px;border-radius:12px;border:1px solid var(--red-border);
                background:#fff;color:var(--red);font-family:var(--font);
                font-size:15px;font-weight:800;cursor:pointer;transition:all .18s;box-shadow:var(--shadow-xs)"
         onmouseenter="this.style.background='var(--red-bg)'"
         onmouseleave="this.style.background='#fff'">
-        🚪 تسجيل الخروج
+        تسجيل الخروج
       </button>
     </div>
   </div>
@@ -2408,7 +2583,7 @@ function selModel(card){
   const m=card.dataset.model;
   document.getElementById('mdlSel').value=m;
   const short=m.split('/').pop().replace(/:free$/,'').split('-').slice(0,2).join('-');
-  document.getElementById('stMdl').textContent=short.substring(0,10);
+  {const _m=document.getElementById('stMdl');if(_m)_m.textContent=short.substring(0,10);}
   // Show only the relevant key section
   ['googleKeySection','anthropicKeySection','openaiKeySection'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
@@ -2686,7 +2861,56 @@ function fillForm(c){
   // Training: remember previously saved answers and show the review panel.
   savedTrainAnswers=Array.isArray(c.trainAnswers)?c.trainAnswers:[];
   renderTrainPrev(savedTrainAnswers);
+  computeBotStrength();
 }
+
+// ── قوة رد البوت: مقياس جاهزية يرتفع كل ما اكتمل قسم في الإعدادات ──
+function computeBotStrength(){
+  const el=document.getElementById('botStrength');
+  if(!el) return;
+  const val=id=>{const n=document.getElementById(id);return n?String(n.value||'').trim():'';};
+  const has=(id,sel)=>{const n=document.getElementById(id);return !!(n&&(sel?n.querySelector(sel):n.children.length));};
+  const parts=[
+    {ok:!!val('storeName'),      w:12, label:'اسم المتجر'},
+    {ok:!!val('storeDesc'),      w:12, label:'وصف المتجر'},
+    {ok:has('prodContainer','.prod-card'), w:20, label:'المنتجات'},
+    {ok:!!val('welcomeMsg'),     w:10, label:'رسالة الترحيب'},
+    {ok:!!val('rsEmployeeName'), w:10, label:'اسم الموظف'},
+    {ok:has('kwContainer','.kw-row'),      w:12, label:'الردود الفورية'},
+    {ok:has('escContainer',''),  w:12, label:'جهات التصعيد'},
+    {ok:!!val('workHours'),      w:6,  label:'ساعات العمل'}
+  ];
+  let score=6; // أساس: أسلوب الرد له قيم افتراضية جاهزة
+  parts.forEach(p=>{ if(p.ok) score+=p.w; });
+  if(score>100) score=100;
+  let lvl,label;
+  if(score<35){lvl='weak';label='ضعيف';}
+  else if(score<60){lvl='mid';label='متوسط';}
+  else if(score<80){lvl='good';label='جيد';}
+  else if(score<95){lvl='strong';label='قوي';}
+  else {lvl='strong';label='ممتاز';}
+  // حافظ على بقية كلاسات العنصر، بدّل مستوى القوة فقط
+  el.classList.remove('lvl-weak','lvl-mid','lvl-good','lvl-strong');
+  el.classList.add('lvl-'+lvl);
+  const CIRC=2*Math.PI*52; // محيط دائرة العدّاد (r=52)
+  const ring=document.getElementById('strRing');    if(ring){ring.style.strokeDasharray=CIRC.toFixed(1);ring.style.strokeDashoffset=(CIRC*(1-score/100)).toFixed(1);}
+  const pct=document.getElementById('strPct');      if(pct) pct.textContent=score+'%';
+  const badge=document.getElementById('strBadge');  if(badge) badge.textContent=label;
+  const missing=parts.filter(p=>!p.ok).map(p=>p.label);
+  const guide = missing.length
+    ? ('لرفع القوة، أكمل: '+missing.join('، '))
+    : 'كل الأقسام الأساسية مكتملة — ردود البوت في أقوى حالاتها.';
+  el.title = guide;                                 // إرشاد عند المرور بالفأرة (يبقى الشكل نظيفاً)
+  const hint=document.getElementById('strHint');    if(hint) hint.textContent = guide;
+}
+// تحديث حيّ كل ما عدّل التاجر أي حقل أو أضاف/حذف عنصراً في صفحة الإعدادات
+(function bindBotStrength(){
+  const v=document.getElementById('view-settings');
+  if(!v) return;
+  let raf=0;
+  const ping=()=>{ if(raf) return; raf=requestAnimationFrame(()=>{raf=0;computeBotStrength();}); };
+  ['input','change','click'].forEach(ev=>v.addEventListener(ev,ping,true));
+})();
 
 async function clearAllConversations(){
   if(!confirm('هل تريد مسح ذاكرة جميع المحادثات الحالية؟ لن يتذكر البوت أي عميل.'))return;
@@ -2700,14 +2924,22 @@ async function clearAllConversations(){
 
 // ── TEST CHAT ──
 let testSessionId='test-'+Date.now();
+function testTimeNow(){
+  try{return new Date().toLocaleTimeString('ar-SA',{timeZone:'Asia/Riyadh',hour:'2-digit',minute:'2-digit'});}
+  catch(_){return '';}
+}
 function appendTestMsg(role,text,meta=''){
   const c=document.getElementById('testChat');
-  const el=document.createElement('div');
-  el.className='tm '+role+(meta.includes('kw')?' kw':'');
-  el.innerHTML=esc(text)+(meta?`<div class="tm-meta">${esc(meta)}</div>`:'');
-  c.appendChild(el);
+  const wrap=document.createElement('div');
+  wrap.className='tm-wrap '+(role==='bot'?'bot':'user');
+  const avatar=role==='bot'?'<div class="tm-avatar"><i data-lucide="bot"></i></div>':'';
+  const bubbleClass='tm-bubble'+(meta.includes('كلمة مفتاحية')?' kw':'');
+  const metaHtml=meta?`<div class="tm-meta">${esc(meta)}</div>`:'';
+  wrap.innerHTML=`${avatar}<div class="tm-col"><div class="${bubbleClass}">${esc(text)}${metaHtml}</div><div class="tm-time">${esc(testTimeNow())}</div></div>`;
+  c.appendChild(wrap);
+  if(window.lucide&&lucide.createIcons)lucide.createIcons();
   c.scrollTop=c.scrollHeight;
-  return el;
+  return wrap;
 }
 async function sendTestMsg(){
   const inp=document.getElementById('testInput');
@@ -2718,8 +2950,10 @@ async function sendTestMsg(){
   appendTestMsg('user',txt);
   inp.value='';
   // Show typing indicator
-  const typingEl=document.createElement('div');typingEl.className='tm bot typing';
+  const typingEl=document.createElement('div');typingEl.className='tm-wrap bot tm-typing';
+  typingEl.innerHTML='<div class="tm-avatar"><i data-lucide="bot"></i></div><div class="tm-col"><div class="tm-bubble"></div></div>';
   document.getElementById('testChat').appendChild(typingEl);
+  if(window.lucide&&lucide.createIcons)lucide.createIcons();
   document.getElementById('testChat').scrollTop=999999;
   try{
     const r=await fetch('/api/test-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:txt,sessionId:testSessionId})});
@@ -3844,6 +4078,10 @@ startPolling(loadQuota, 30000);
   function setup(){
     document.querySelectorAll('.panel').forEach(function(p){
       if(p.dataset.accInit) return;
+      // Panels that must stay permanently open (never turn into an accordion):
+      //  - anything inside «حسابي» (account) — the merchant wants every field visible
+      //  - any panel explicitly opted out via .no-acc (e.g. «جرّب البوت»)
+      if(p.closest('#view-account') || p.classList.contains('no-acc')){ p.dataset.accInit='1'; return; }
       var hdr=p.querySelector(':scope > .phdr');
       var body=p.querySelector(':scope > .pbdy');
       if(!hdr||!body) return;
