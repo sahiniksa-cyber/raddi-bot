@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>سلة · العملاء — جواب</title>
+  <style>
+    :root {
+      --bg: #0f1420; --panel: #171e2e; --panel2: #1e2740; --line: #2a3450;
+      --text: #eaf0ff; --muted: #93a0c0; --accent: #4c8dff; --good: #2ecc71;
+      --warn: #f39c12; --bad: #e74c3c; --chip: #223052;
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg:#f4f6fb; --panel:#fff; --panel2:#f0f3fa; --line:#e2e8f4; --text:#16233d; --muted:#5b6b8c; --chip:#eaf1ff; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Tahoma", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 18px; margin: 0; }
+    header .sub { color: var(--muted); font-size: 13px; }
+    .wrap { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 58px); }
+    aside { border-inline-end: 1px solid var(--line); padding: 14px; }
+    aside h3 { font-size: 12px; color: var(--muted); margin: 14px 6px 8px; letter-spacing: .04em; }
+    .seg { display: block; width: 100%; text-align: start; background: none; border: 0; color: var(--text);
+      padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+    .seg:hover { background: var(--panel2); }
+    .seg.active { background: var(--accent); color: #fff; }
+    main { padding: 18px 20px; min-width: 0; }
+    .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+    .toolbar input { flex: 1; min-width: 200px; background: var(--panel); border: 1px solid var(--line);
+      color: var(--text); padding: 9px 12px; border-radius: 10px; font-size: 14px; }
+    .count { color: var(--muted); font-size: 13px; }
+    button.pill { background: var(--chip); color: var(--text); border: 1px solid var(--line); border-radius: 999px;
+      padding: 7px 14px; cursor: pointer; font-size: 13px; }
+    button.pill:hover { border-color: var(--accent); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: start; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: var(--panel2); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--chip); color: var(--muted); }
+    .badge.good { color: var(--good); } .badge.warn { color: var(--warn); }
+    .empty { color: var(--muted); padding: 40px; text-align: center; }
+    /* drawer */
+    .drawer { position: fixed; inset-block: 0; inset-inline-end: 0; width: min(520px, 96vw); background: var(--panel);
+      border-inline-start: 1px solid var(--line); transform: translateX(-100%); transition: transform .2s; overflow: auto; z-index: 20; }
+    html[dir="rtl"] .drawer { transform: translateX(100%); }
+    .drawer.open { transform: translateX(0) !important; }
+    .drawer-head { padding: 16px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+    .drawer-body { padding: 16px 18px; }
+    .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 13px; margin: 8px 0 16px; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .segtags { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 16px; }
+    .tl { border-inline-start: 2px solid var(--line); margin-inline-start: 6px; padding-inline-start: 14px; }
+    .tl .item { position: relative; padding: 8px 0; font-size: 13px; }
+    .tl .item::before { content:""; position:absolute; inset-inline-start:-19px; top:12px; width:8px; height:8px; border-radius:50%; background: var(--accent); }
+    .tl .when { color: var(--muted); font-size: 11px; }
+    .sec-title { font-size: 12px; color: var(--muted); margin: 18px 0 6px; letter-spacing: .04em; }
+    .x { background: none; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; }
+    .disabled-note { padding: 40px; text-align: center; color: var(--muted); }
+    a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="back" href="/">◀ لوحة التحكم</a>
+    <h1>العملاء الموحّدون</h1>
+    <span class="sub">جواب × سلة · Customer 360</span>
+  </header>
+
+  <div id="app" class="wrap">
+    <aside>
+      <h3>الشرائح الجاهزة</h3>
+      <div id="quick"></div>
+      <h3>الشرائح المحفوظة</h3>
+      <div id="saved"></div>
+    </aside>
+    <main>
+      <div class="toolbar">
+        <input id="search" placeholder="ابحث: اسم / جوال / بريد / رقم طلب / معرّف سلة" />
+        <span id="count" class="count"></span>
+        <button class="pill" id="refresh">تحديث</button>
+      </div>
+      <div id="tableWrap">
+        <table>
+          <thead><tr><th>العميل</th><th>الجوال</th><th>الطلبات</th><th>الإجمالي</th><th>التصنيف</th><th>آخر نشاط</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div id="empty" class="empty" hidden>لا يوجد عملاء في هذه الشريحة بعد.</div>
+      </div>
+    </main>
+  </div>
+
+  <div id="drawer" class="drawer">
+    <div class="drawer-head">
+      <strong id="d-name">—</strong>
+      <button class="x" id="d-close">×</button>
+    </div>
+    <div class="drawer-body" id="d-body"></div>
+  </div>
+
+  <script src="/salla-crm.js" defer></script>
+</body>
+</html>
