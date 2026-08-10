@@ -43,6 +43,7 @@ const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { createInstagramRoutes } = require('./routes/instagram.routes');
 const { createSallaRoutes } = require('./routes/salla.routes');
+const { createSallaCrmRoutes } = require('./routes/salla-crm.routes');
 const { createCampaignRoutes } = require('./routes/campaign.routes');
 const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
@@ -383,6 +384,9 @@ function createApp() {
   // Salla Partner-app webhook (captures OAuth tokens via Easy Mode). Inert until
   // SALLA_WEBHOOK_SECRET is set. Path is in RAW_BODY_PATHS; mounts own express.raw.
   app.use(createSallaRoutes(routeDeps));
+  // Salla Customer-Intelligence dashboard API (سلة → العملاء). Every route
+  // self-guards on SALLA_CRM_ENABLED (default off) → ships dark.
+  app.use(createSallaCrmRoutes(routeDeps));
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup, database: db });
   const configControllerModule = require('./controllers/config.controller');
