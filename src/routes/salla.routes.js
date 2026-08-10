@@ -3,6 +3,7 @@
 const express = require('express');
 const { verifySallaSignature } = require('../services/salla/salla-signature');
 const defaultStores = require('../services/salla/salla-stores');
+const defaultIngest = require('../services/salla/salla-ingest');
 const defaultDb = require('../db/client');
 
 /**
@@ -24,6 +25,7 @@ const defaultDb = require('../db/client');
 function createSallaRoutes(deps = {}) {
   const env = deps.env || process.env;
   const stores = deps.sallaStores || defaultStores;
+  const ingestSvc = deps.sallaIngest || defaultIngest;
   const db = deps.database || defaultDb;
   const router = express.Router();
 
@@ -82,9 +84,25 @@ function createSallaRoutes(deps = {}) {
         console.log(`${ts()} [salla-webhook] merchant=${merchantId} uninstalled`);
         logEvent(merchantId, event, true, { uninstalled: true });
       } else {
-        // Not handled yet (order.created, product.updated, …). Logged so we can
-        // decide what the bot does with them later, per the phase-2 plan.
-        logEvent(merchantId, event, true, {});
+        // CRM ingest for store events (order.* / customer.* / abandoned.cart.*)
+        // → resolve identity, mirror the record, recompute segments. Best-effort:
+        // it must never break the 200 ack, and it only runs once the merchant is
+        // linked to a platform user (crm is scoped by user_id). Unlinked or
+        // non-CRM events just leave a breadcrumb as before.
+        let handled = null;
+        let linkedUserId = null;
+        try {
+          const store = await stores.getStore(merchantId, { database: db });
+          linkedUserId = store && store.user_id;
+          if (linkedUserId) {
+            handled = await ingestSvc.ingestWebhookEvent(linkedUserId, body, { database: db });
+          }
+        } catch (e) {
+          console.error(`${ts()} [salla-webhook] CRM ingest failed for ${event}: ${e.message}`);
+          logEvent(merchantId, event, true, { crmError: e.message });
+          return res.sendStatus(200);
+        }
+        logEvent(merchantId, event, true, { crm: handled ? handled.kind : null, linked: Boolean(linkedUserId) });
       }
       return res.sendStatus(200);
     } catch (err) {

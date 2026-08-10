@@ -44,12 +44,13 @@ function req(app, method, path, { headers = {}, body } = {}) {
   });
 }
 
-function fakeStores() {
+function fakeStores(storeRow = null) {
   return {
     authorized: [],
     uninstalled: [],
     async upsertStoreAuthorization(merchantId, payload) { this.authorized.push({ merchantId, payload }); },
     async markUninstalled(merchantId) { this.uninstalled.push(merchantId); },
+    async getStore() { return storeRow; },
   };
 }
 
@@ -109,10 +110,10 @@ test('marks the store uninstalled on app.uninstalled (200)', async () => {
   assert.deepEqual(s.uninstalled, [777]);
 });
 
-test('acknowledges unknown events with 200 without storing a token', async () => {
-  const s = fakeStores();
+test('acknowledges non-token events with 200 without storing a token', async () => {
+  const s = fakeStores(); // unlinked merchant (getStore → null) → no CRM ingest
   const secret = 'S';
-  const payload = { event: 'order.created', merchant: 1, data: { id: 99 } };
+  const payload = { event: 'product.updated', merchant: 1, data: { id: 99 } };
   const raw = Buffer.from(JSON.stringify(payload));
   const app = makeApp({ SALLA_WEBHOOK_SECRET: secret }, { sallaStores: s });
   const res = await req(app, 'POST', '/salla/webhook', {
@@ -121,6 +122,30 @@ test('acknowledges unknown events with 200 without storing a token', async () =>
   });
   assert.equal(res.status, 200);
   assert.equal(s.authorized.length, 0);
+});
+
+test('order event for a linked merchant is routed to CRM ingest (200)', async () => {
+  const s = fakeStores({ user_id: 'u-linked', merchant_id: '1' });
+  const ingested = [];
+  const sallaIngest = { ingestWebhookEvent: async (userId, body) => { ingested.push({ userId, event: body.event }); return { kind: 'order' }; } };
+  const secret = 'S';
+  const payload = { event: 'order.created', merchant: 1, data: { id: 99, status: { slug: 'completed' } } };
+  const raw = Buffer.from(JSON.stringify(payload));
+  const app = makeApp({ SALLA_WEBHOOK_SECRET: secret }, { sallaStores: s, sallaIngest });
+  const res = await req(app, 'POST', '/salla/webhook', { headers: { 'X-Salla-Signature': sign(raw, secret) }, body: raw });
+  assert.equal(res.status, 200);
+  assert.deepEqual(ingested, [{ userId: 'u-linked', event: 'order.created' }]);
+});
+
+test('CRM ingest failure still returns 200 (never breaks the ack)', async () => {
+  const s = fakeStores({ user_id: 'u-linked' });
+  const sallaIngest = { ingestWebhookEvent: async () => { throw new Error('boom'); } };
+  const secret = 'S';
+  const payload = { event: 'order.created', merchant: 1, data: { id: 1 } };
+  const raw = Buffer.from(JSON.stringify(payload));
+  const app = makeApp({ SALLA_WEBHOOK_SECRET: secret }, { sallaStores: s, sallaIngest });
+  const res = await req(app, 'POST', '/salla/webhook', { headers: { 'X-Salla-Signature': sign(raw, secret) }, body: raw });
+  assert.equal(res.status, 200);
 });
 
 test('toExpiryDate converts Salla unix seconds to a Date', () => {
