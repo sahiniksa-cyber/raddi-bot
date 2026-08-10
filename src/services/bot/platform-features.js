@@ -65,7 +65,9 @@ function buildPlatformPromptBlock(config = {}, {
   avoid = '',
 } = {}) {
   const r = config.replyStyle || {};
-  const employeeName = r.employeeName || 'موظف خدمة العملاء';
+  const employeeName = r.employeeNameEnabled === true && String(r.employeeName || '').trim()
+    ? String(r.employeeName).trim()
+    : 'موظف خدمة العملاء';
   const tone = r.tone || 'ودي ومحترم';
   const language = describeLanguage(config);
   const emoji = describeEmoji(r.emojiLevel || 'none');

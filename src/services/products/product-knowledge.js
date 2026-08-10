@@ -57,6 +57,10 @@ function extractProductSection(instructions) {
   return match ? match[1] : '';
 }
 
+function stripProductSections(instructions) {
+  return String(instructions || '').replace(PRODUCT_SECTION_RE, '').trim();
+}
+
 function parsePromptProducts(instructions) {
   const section = extractProductSection(instructions);
   if (!section) return [];
@@ -93,10 +97,14 @@ function structuredProducts(products = []) {
     .filter(product => String(product?.name || '').trim())
     .map(product => {
       const out = {
+        id: String(product.id || product.productId || '').trim() || undefined,
         name: String(product.name || '').trim(),
+        aliases: Array.isArray(product.aliases) ? product.aliases.map(value => String(value || '').trim()).filter(Boolean) : undefined,
         description: String(product.description || '').trim(),
         longDescription: String(product.longDescription || '').trim(),
         price: String(product.price || '').trim(),
+        currency: String(product.currency || '').trim() || undefined,
+        available: product.available !== false,
         url: String(product.url || '').trim(),
         source: product.source || 'fields',
       };
@@ -119,7 +127,11 @@ function mergeProducts(products) {
     }
     byName.set(key, {
       ...existing,
+      id: existing.id || product.id,
+      aliases: [...new Set([...(existing.aliases || []), ...(product.aliases || [])])],
       price: existing.price || product.price,
+      currency: existing.currency || product.currency,
+      available: existing.available !== false && product.available !== false,
       description: [existing.description, product.description].filter(Boolean).join('\n').trim(),
       longDescription: existing.longDescription || product.longDescription || '',
       url: existing.url || product.url || '',
@@ -196,4 +208,5 @@ module.exports = {
   normalizeProductText,
   parsePromptProducts,
   scoreProduct,
+  stripProductSections,
 };

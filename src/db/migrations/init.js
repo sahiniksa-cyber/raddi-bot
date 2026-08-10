@@ -211,15 +211,19 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_messages_user_sender_created
     ON messages(user_id, sender, created_at DESC)`,
 
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_user_provider_message_unique
-    ON messages(user_id, provider_message_id)
-    WHERE provider_message_id IS NOT NULL`,
-
   `ALTER TABLE conversations
      ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT 'whatsapp'`,
 
   `ALTER TABLE messages
      ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT 'whatsapp'`,
+
+  // Provider ids are unique inside a tenant + transport, not globally across
+  // every channel owned by the same merchant.
+  `DROP INDEX IF EXISTS idx_messages_user_provider_message_unique`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_scope_provider_message_unique
+    ON messages(user_id, channel_id, provider_message_id)
+    WHERE provider_message_id IS NOT NULL`,
 
   `ALTER TABLE messages
      ALTER COLUMN conversation_id SET NOT NULL`,
@@ -1070,6 +1074,69 @@ const statements = [
 
   `CREATE INDEX IF NOT EXISTS idx_whatsapp_history_search_user_phone
     ON whatsapp_history_search_index (user_id, normalized_phone)`,
+
+  // Product truth is versioned independently from the mutable bot config so
+  // every generated reply can be tied to the exact catalog it used.
+  `CREATE TABLE IF NOT EXISTS product_catalog_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    version BIGINT NOT NULL CHECK (version > 0),
+    products JSONB NOT NULL DEFAULT '[]'::jsonb,
+    previous_products JSONB NOT NULL DEFAULT '[]'::jsonb,
+    changed_by TEXT NOT NULL,
+    change_reason TEXT,
+    source TEXT NOT NULL DEFAULT 'unknown',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, version)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_product_catalog_versions_user_created
+    ON product_catalog_versions (user_id, created_at DESC)`,
+
+  `CREATE OR REPLACE FUNCTION prevent_product_catalog_version_mutation()
+   RETURNS trigger AS $$
+   BEGIN
+     RAISE EXCEPTION 'product catalog versions are immutable';
+   END;
+   $$ LANGUAGE plpgsql`,
+
+  `DROP TRIGGER IF EXISTS product_catalog_versions_immutable
+    ON product_catalog_versions`,
+
+  `CREATE TRIGGER product_catalog_versions_immutable
+    BEFORE UPDATE OR DELETE ON product_catalog_versions
+    FOR EACH ROW EXECUTE FUNCTION prevent_product_catalog_version_mutation()`,
+
+  `CREATE TABLE IF NOT EXISTS ai_reply_traces (
+    operation_id TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    conversation_id UUID NOT NULL,
+    customer_id TEXT NOT NULL,
+    inbound_message_id TEXT,
+    customer_message_redacted TEXT NOT NULL DEFAULT '',
+    selected_product JSONB,
+    product_context JSONB NOT NULL DEFAULT '[]'::jsonb,
+    stages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    prompt_version TEXT,
+    validator_version TEXT,
+    catalog_version BIGINT NOT NULL DEFAULT 0,
+    outcome_status TEXT NOT NULL DEFAULT 'processing',
+    final_reply_redacted TEXT NOT NULL DEFAULT '',
+    outcome_reason TEXT NOT NULL DEFAULT '',
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    UNIQUE (operation_id, user_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_ai_reply_traces_scope_created
+    ON ai_reply_traces
+      (user_id, channel_id, conversation_id, customer_id, created_at DESC)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_ai_reply_traces_retention
+    ON ai_reply_traces (retention_until)`,
 ];
 
 async function migrate() {

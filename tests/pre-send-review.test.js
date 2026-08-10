@@ -57,6 +57,7 @@ test('reviews the persisted final draft with the already-sent assistant reply', 
       return {
         reply: 'إذا حاب تدفع بالتقسيط، أعطني رقم جوالك وأرسل لك طلب الدفع.',
         suppressed: false,
+        validationDecision: 'validated',
         audit: { decision: 'repair', repeatedClaims: ['لا يوجد كود خصم', 'تقسيط تمارا'] },
       };
     },
@@ -106,7 +107,7 @@ test('final review receives every trailing customer fragment as one ordered turn
   const bot = {
     reviewReplyBeforeSend: async (input) => {
       received = input;
-      return { reply: input.draft, suppressed: false, audit: { decision: 'pass' } };
+      return { reply: input.draft, suppressed: false, validationDecision: 'validated', audit: { decision: 'pass' } };
     },
   };
 
@@ -155,7 +156,7 @@ test('final review never joins adjacent customer messages across the session gap
   const bot = {
     reviewReplyBeforeSend: async (input) => {
       received = input;
-      return { reply: input.draft, suppressed: false, audit: { decision: 'pass' } };
+      return { reply: input.draft, suppressed: false, validationDecision: 'validated', audit: { decision: 'pass' } };
     },
   };
 
@@ -198,7 +199,7 @@ test('reuses a persisted review on retry and never calls the AI twice', async ()
   const database = makeDatabase({
     persisted: {
       content: 'النص المراجع',
-      rawPayload: { preSendReview: { status: 'reviewed', decision: 'repair' } },
+      rawPayload: { preSendReview: { status: 'reviewed', decision: 'repair', validationDecision: 'validated' } },
     },
   });
   let calls = 0;
@@ -219,6 +220,23 @@ test('fails closed when the reviewer is unavailable', async () => {
   assert.equal(database.updates.length, 0);
 });
 
+test('fails closed when the reviewer returns sendable text without final deterministic validation', async () => {
+  const database = makeDatabase();
+  const bot = {
+    reviewReplyBeforeSend: async () => ({
+      reply: 'نص راجعه النموذج فقط',
+      suppressed: false,
+      audit: { decision: 'pass' },
+    }),
+  };
+
+  await assert.rejects(
+    reviewOutgoingReplyBeforeSend({ database, bot, ...base }),
+    /final deterministic validation/i,
+  );
+  assert.equal(database.updates.length, 0);
+});
+
 test('AI failure fallback is still reviewed even though it has no stored reply row', async () => {
   const database = makeDatabase();
   let calls = 0;
@@ -227,7 +245,7 @@ test('AI failure fallback is still reviewed even though it has no stored reply r
       calls++;
       assert.equal(draft, 'لحظات من فضلك، نراجع طلبك ونرجعلك بأقرب وقت');
       assert.equal(source, 'ai_failure_fallback');
-      return { reply: draft, suppressed: false, audit: { decision: 'pass' } };
+      return { reply: draft, suppressed: false, validationDecision: 'validated', audit: { decision: 'pass' } };
     },
   };
   const result = await reviewOutgoingReplyBeforeSend({
@@ -310,6 +328,7 @@ test('final review sees only the current session and distinguishes the owner fro
       return {
         reply: 'أبد وقت ما تحبي، بين يدينك.',
         suppressed: false,
+        validationDecision: 'validated',
         audit: { decision: 'repair' },
       };
     },

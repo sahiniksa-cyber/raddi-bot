@@ -31,9 +31,9 @@ test('lid best-effort send also decrements quota after success', () => {
   const lidEnd = workerSource.indexOf('async function notifyOwnerOfLidFailure');
   assert.ok(lidStart > -1 && lidEnd > lidStart, 'handleLidOutgoing must exist before notifyOwnerOfLidFailure');
   const lidBody = workerSource.slice(lidStart, lidEnd);
-  const sendIdx = lidBody.indexOf('bot.client.sendMessage');
+  const sendIdx = lidBody.indexOf('sendWhatsappReply');
   const decIdx = lidBody.indexOf('decrementMessageQuota');
-  assert.ok(sendIdx > -1, 'lid path must send via bot.client.sendMessage');
+  assert.ok(sendIdx > -1, 'lid path must send via the idempotent wrapper');
   assert.ok(decIdx > sendIdx, 'decrementMessageQuota must run AFTER the lid send succeeds');
   assert.match(lidBody, /quotaRemainingAfter/);
 });

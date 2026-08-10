@@ -42,6 +42,7 @@ function makeJob(sender = '966500000001@s.whatsapp.net') {
       replyMessageId: 'reply-1',
       source: 'ai_reply',
       preSendReviewRequired: true,
+      replyState: 'queued_for_send',
     },
     timestamp: Date.now(),
     attemptsMade: 0,
@@ -74,7 +75,11 @@ test('normal WhatsApp path sends only the final reviewed text', async () => {
     const result = await processOutgoingWhatsapp(makeJob(), {
       getUserBot: async () => makeBot(sent),
       scopeValidator: validateScope,
-      reviewBeforeSend: async () => ({ reply: 'النص النهائي المراجع', suppressed: false }),
+      reviewBeforeSend: async () => ({
+        reply: 'النص النهائي المراجع',
+        suppressed: false,
+        audit: { validationDecision: 'validated' },
+      }),
     });
     assert.equal(result.sent, true);
     assert.deepEqual(sent.map(item => item.text), ['النص النهائي المراجع']);

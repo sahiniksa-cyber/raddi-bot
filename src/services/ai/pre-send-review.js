@@ -6,6 +6,10 @@ const {
   normalizeSessionGapMs,
   trimToCurrentSession,
 } = require('./conversation-context');
+const {
+  appendReplyStage,
+  isReplyTraceEnabled,
+} = require('./reply-trace-repository');
 
 function compactAudit(audit = {}, source = 'ai_reply') {
   const shortList = (value, limit = 10) => Array.isArray(value)
@@ -23,6 +27,9 @@ function compactAudit(audit = {}, source = 'ai_reply') {
     requiresHuman: audit.requiresHuman === true,
     humanReason: String(audit.humanReason || '').slice(0, 240),
     handoffSummary: String(audit.handoffSummary || '').slice(0, 240),
+    validationDecision: String(audit.validationDecision || '').slice(0, 32),
+    validatorVersion: String(audit.validatorVersion || '').slice(0, 80),
+    catalogVersion: Math.max(0, parseInt(audit.catalogVersion, 10) || 0),
     latencyMs: Math.max(0, parseInt(audit.latencyMs, 10) || 0),
     source: String(source || 'ai_reply').slice(0, 64),
     reviewedAt: new Date().toISOString(),
@@ -87,7 +94,8 @@ async function loadReviewContext({
 
     const rawPayload = asObject(currentMessage.raw_payload);
     const persisted = asObject(rawPayload.preSendReview);
-    if (persisted.status === 'reviewed') {
+    if (persisted.status === 'reviewed'
+      && (persisted.decision === 'suppress' || persisted.validationDecision === 'validated')) {
       return {
         reused: true,
         suppressed: persisted.decision === 'suppress',
@@ -217,10 +225,19 @@ async function reviewOutgoingReplyBeforeSend({
   const suppressed = reviewed?.suppressed === true;
   const reply = suppressed ? '' : String(reviewed?.reply || '').trim();
   if (!suppressed && !reply) throw new Error('pre-send reviewer returned an empty reply');
+  const validationDecision = String(
+    reviewed?.validationDecision || reviewed?.finalValidation?.decision || '',
+  );
+  if (!suppressed && validationDecision !== 'validated') {
+    throw new Error('pre-send reply is missing final deterministic validation');
+  }
 
   const audit = compactAudit({
     ...(reviewed?.audit || {}),
     decision: suppressed ? 'suppress' : (reviewed?.audit?.decision || 'pass'),
+    validationDecision: suppressed ? 'suppressed' : validationDecision,
+    validatorVersion: reviewed?.finalValidation?.audit?.validatorVersion,
+    catalogVersion: reviewed?.finalValidation?.audit?.catalogVersion,
   }, payload.source);
   if (replyMessageId) {
     await persistReview({
@@ -233,6 +250,20 @@ async function reviewOutgoingReplyBeforeSend({
       reply,
       suppressed,
       audit,
+    });
+  }
+  if (payload.replyOperationId && isReplyTraceEnabled()) {
+    await appendReplyStage({
+      database,
+      tenantId: userId,
+      operationId: payload.replyOperationId,
+      stage: {
+        name: 'pre_send_review',
+        inputDraft: finalDraft,
+        resultingReply: reply,
+        suppressed,
+        audit,
+      },
     });
   }
   return {

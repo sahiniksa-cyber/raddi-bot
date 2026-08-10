@@ -29,6 +29,7 @@ test('a duplicate provider message is returned as existing without resetting its
 
   assert.deepEqual(result, { id: 'existing-message', inserted: false });
   assert.match(calls[0].sql, /ON CONFLICT[\s\S]+DO NOTHING/);
+  assert.match(calls[0].sql, /ON CONFLICT \(user_id, channel_id, provider_message_id\)/);
   assert.doesNotMatch(calls[0].sql, /DO UPDATE[\s\S]+queued_for_ai/);
   assert.match(calls[1].sql, /user_id = \$1/);
   assert.match(calls[1].sql, /provider_message_id = \$2/);

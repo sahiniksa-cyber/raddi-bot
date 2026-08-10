@@ -101,7 +101,7 @@ async function insertInboundMessage(client, { userId, conversationId, sender, te
   const result = await client.query(
     `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
      VALUES ($1, $2, 'whatsapp', $3, 'inbound', 'user', $4, $5, 'queued_for_ai', $6::jsonb)
-     ON CONFLICT (user_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
+     ON CONFLICT (user_id, channel_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
      RETURNING id`,
     [
       conversationId,
@@ -146,7 +146,7 @@ async function insertOutboundHumanMessage(client, {
   const result = await client.query(
     `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload, created_at)
      VALUES ($1, $2, 'whatsapp', $3, 'outbound', 'assistant', $4, $5, 'sent_by_human', $6::jsonb, COALESCE($7::timestamptz, NOW()))
-     ON CONFLICT (user_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
+     ON CONFLICT (user_id, channel_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
      RETURNING id, created_at`,
     [
       conversationId,
