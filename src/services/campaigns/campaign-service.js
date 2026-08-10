@@ -19,6 +19,7 @@ const {
   upsertSignals,
   validateAiSignals,
 } = require('./smart-segmentation');
+const { compileRules, QUICK_SEGMENTS } = require('../identity/segment-rules');
 
 const EDITABLE_STATES = new Set(['draft', 'ready_for_approval', 'approved']);
 const CAMPAIGN_RECIPIENT_STATUSES = new Set([
@@ -65,7 +66,7 @@ function safeJson(value, fallback = {}) {
 function normalizeAudienceRules(value = {}) {
   const input = safeJson(value, {});
   const requestedSource = input.source === 'smart' ? 'contacts' : input.source;
-  const source = ['keywords', 'contacts', 'conversations', 'all', 'saved_campaign'].includes(requestedSource)
+  const source = ['keywords', 'contacts', 'conversations', 'all', 'saved_campaign', 'crm_segment'].includes(requestedSource)
     ? requestedSource
     : 'contacts';
   const hasExplicitStates = Array.isArray(input.states);
@@ -122,6 +123,24 @@ function normalizeAudienceRules(value = {}) {
       throw badRequest('الحملة المصدر غير صالحة', 'SAVED_CAMPAIGN_INVALID');
     }
     normalized.sourceCampaignId = sourceCampaignId;
+  }
+  if (source === 'crm_segment') {
+    // One of: a quick-segment key, a saved segment id, or inline rules.
+    const segmentKey = input.segmentKey ? String(input.segmentKey).trim() : null;
+    const segmentId = input.segmentId ? String(input.segmentId).trim() : null;
+    let segmentRules = input.segmentRules || null;
+    if (segmentKey) {
+      const quick = QUICK_SEGMENTS.find(s => s.key === segmentKey);
+      if (!quick) throw badRequest('شريحة العملاء غير معروفة');
+      segmentRules = quick.rules;
+    }
+    if (segmentRules) {
+      try { compileRules(segmentRules); } catch (_) { throw badRequest('قواعد شريحة العملاء غير صالحة'); }
+    }
+    if (!segmentKey && !segmentId && !segmentRules) throw badRequest('حدّد شريحة العملاء');
+    if (segmentKey) normalized.segmentKey = segmentKey;
+    if (segmentId) normalized.segmentId = segmentId;
+    if (segmentRules) normalized.segmentRules = segmentRules;
   }
   return normalized;
 }
@@ -457,11 +476,16 @@ async function resolveAudience(database, userId, rules = {}) {
               NULL::text AS product_key, product_name,
               customer_status AS customer_state, NULL::numeric AS confidence,
               NULL::uuid AS evidence_message_id, ''::text AS evidence_text, source,
+              customer_id,
               order_reference, order_date, subscription_start_date, subscription_end_date
        FROM campaign_contacts WHERE user_id = $1 ORDER BY updated_at DESC`,
       [userId],
     );
     rows.push(...result.rows);
+  } else if (source === 'crm_segment') {
+    // Canonical-customer audience from a saved/quick/inline segment. Recipients
+    // carry customer_id so multi-source duplicates collapse to one send.
+    rows.push(...await resolveCrmSegmentAudience(database, userId, rules));
   }
 
   const bySender = new Map();
@@ -472,7 +496,10 @@ async function resolveAudience(database, userId, rules = {}) {
     // silently removed most real customers from campaign previews and sends.
     if (!sender || sender.includes('@g.us') || sender.includes('@broadcast')) continue;
     const phone = String(row.normalized_phone || '').replace(/\D/g, '');
-    const key = phone ? `phone:${phone}` : `sender:${sender}`;
+    // Prefer the canonical customer id when known, so the same person routed via
+    // WhatsApp AND Salla is a single recipient. Falls back to phone, then JID.
+    const key = row.customer_id ? `customer:${row.customer_id}`
+      : (phone ? `phone:${phone}` : `sender:${sender}`);
     if (!bySender.has(key)) {
       bySender.set(key, row);
       continue;
@@ -480,6 +507,7 @@ async function resolveAudience(database, userId, rules = {}) {
     const current = bySender.get(key);
     bySender.set(key, {
       ...current,
+      customer_id: current.customer_id || row.customer_id,
       normalized_phone: current.normalized_phone || row.normalized_phone,
       customer_name: current.customer_name || row.customer_name,
       evidence_text: current.evidence_text || row.evidence_text,
@@ -487,6 +515,59 @@ async function resolveAudience(database, userId, rules = {}) {
     });
   }
   return [...bySender.values()];
+}
+
+// Resolve the rules object for a crm_segment audience (quick key / saved id /
+// inline), defaulting to everyone.
+async function resolveSegmentRules(database, userId, rules) {
+  const n = normalizeAudienceRules(rules);
+  if (n.segmentRules) return n.segmentRules;
+  if (n.segmentId) {
+    const r = await database.query('SELECT rules FROM crm_segments WHERE user_id = $1 AND id = $2', [userId, n.segmentId]);
+    if (r.rows[0]) return r.rows[0].rules;
+  }
+  return { segment: 'all' };
+}
+
+async function resolveCrmSegmentAudience(database, userId, rules) {
+  const seg = await resolveSegmentRules(database, userId, rules);
+  const compiled = compileRules(seg, { startIndex: 2 });
+  const extra = compiled.sql && compiled.sql !== 'TRUE' ? ` AND ${compiled.sql}` : '';
+  const result = await database.query(
+    `SELECT c.id AS customer_id, c.canonical_phone AS normalized_phone, c.display_name AS customer_name
+       FROM crm_customers c LEFT JOIN crm_customer_metrics m ON m.customer_id = c.id
+      WHERE c.user_id = $1 AND c.canonical_phone IS NOT NULL${extra}`,
+    [userId, ...compiled.params],
+  );
+  return result.rows.map(r => ({
+    conversation_id: null,
+    sender: senderFromPhone(r.normalized_phone),
+    normalized_phone: r.normalized_phone,
+    customer_name: r.customer_name || '',
+    customer_id: r.customer_id,
+    product_key: null,
+    product_name: null,
+    customer_state: null,
+    confidence: null,
+    evidence_message_id: null,
+    evidence_text: '',
+    source: 'crm_segment',
+  }));
+}
+
+// Send-time eligibility re-check for a crm_segment recipient: is this customer
+// STILL in the segment? (e.g. converted before the message went out.)
+async function recipientMatchesCrmSegment(database, userId, customerId, rules) {
+  if (!customerId) return false;
+  const seg = await resolveSegmentRules(database, userId, rules);
+  const compiled = compileRules(seg, { startIndex: 3 });
+  const extra = compiled.sql && compiled.sql !== 'TRUE' ? ` AND ${compiled.sql}` : '';
+  const result = await database.query(
+    `SELECT 1 FROM crm_customers c LEFT JOIN crm_customer_metrics m ON m.customer_id = c.id
+      WHERE c.user_id = $1 AND c.id = $2${extra} LIMIT 1`,
+    [userId, customerId, ...compiled.params],
+  );
+  return result.rows.length > 0;
 }
 
 function createCampaignService({ database = db, getUserBot, scheduleCampaignRecipient = null } = {}) {
@@ -1177,11 +1258,12 @@ function createCampaignService({ database = db, getUserBot, scheduleCampaignReci
           `INSERT INTO campaign_recipients (
              campaign_id, user_id, conversation_id, sender, normalized_phone, customer_name,
              product_key, product_name, customer_state, confidence, evidence_message_id,
-             evidence_text, source
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+             evidence_text, source, customer_id
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [campaignId, userId, recipient.conversation_id, recipient.sender, recipient.normalized_phone,
             recipient.customer_name, recipient.product_key, recipient.product_name, recipient.customer_state,
-            recipient.confidence, recipient.evidence_message_id, recipient.evidence_text, recipient.source],
+            recipient.confidence, recipient.evidence_message_id, recipient.evidence_text, recipient.source,
+            recipient.customer_id || null],
         );
       }
       const hash = snapshotHash(snapshot);
@@ -1468,5 +1550,8 @@ module.exports = {
   normalizeCampaignMessage,
   normalizePhone,
   resolveAudience,
+  resolveCrmSegmentAudience,
+  resolveSegmentRules,
+  recipientMatchesCrmSegment,
   snapshotHash,
 };

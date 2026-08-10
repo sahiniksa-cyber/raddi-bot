@@ -8,7 +8,7 @@ const { createRedisConnection } = require('../queues/redis');
 const { CAMPAIGN_QUEUE_NAME, enqueueCampaignRecipient } = require('../queues/campaign-queue');
 const { checkMessageQuota, decrementMessageQuota } = require('../services/billing/message-quota');
 const { buildProductCatalog } = require('../services/products/product-knowledge');
-const { normalizeAudienceRules } = require('../services/campaigns/campaign-service');
+const { normalizeAudienceRules, recipientMatchesCrmSegment } = require('../services/campaigns/campaign-service');
 const { normalizeUploadFilename } = require('../services/campaigns/media-store');
 const {
   INTEREST_RE,
@@ -357,6 +357,23 @@ async function processCampaignRecipient(job, { database = db, getUserBot } = {})
         });
         await scheduleNextRecipient(campaignId, { database, delay: 0 });
         return { skipped: true, reason: 'keyword_match_changed' };
+      }
+    }
+    if (audienceRules.source === 'crm_segment') {
+      // Re-evaluate the canonical customer against the segment right before send,
+      // so someone who (e.g.) purchased since approval is NOT sent a "still not
+      // ordered?" message. Missing customer_id → treat as no longer eligible.
+      const stillMatches = await recipientMatchesCrmSegment(database, campaign.user_id, recipient.customer_id, audienceRules);
+      if (!stillMatches) {
+        await database.transaction(async client => {
+          await client.query(
+            `UPDATE campaign_recipients SET status = 'skipped', last_error = 'segment_no_longer_matches', updated_at = NOW() WHERE id = $1`,
+            [recipientId],
+          );
+          await client.query(`UPDATE campaigns SET skipped_count = skipped_count + 1, updated_at = NOW() WHERE id = $1`, [campaignId]);
+        });
+        await scheduleNextRecipient(campaignId, { database, delay: 0 });
+        return { skipped: true, reason: 'segment_no_longer_matches' };
       }
     }
 
