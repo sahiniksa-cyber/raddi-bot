@@ -1,9 +1,10 @@
 'use strict';
 
-// Guard test for the Customer-Intelligence page. The dashboard is served by
-// EXPLICIT file routes (not a static root), so a new page silently 404s unless
-// both the file exists AND the route is registered — this locks both down.
-// (Visual QA happens on staging; this guards the wiring that has bitten before.)
+// Guard test for the native "سلة" section. It lives INSIDE the dashboard SPA
+// (index.html) as a tab, powered by /salla-crm.js — mirroring instagram.js /
+// campaigns.js. Locks the wiring (tab button, goTab hook, script include, view
+// injection, endpoints) that silently breaks if any piece drifts.
+// Visual QA happens on staging.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,38 +12,39 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+const indexHtml = fs.readFileSync(path.join(ROOT, 'dashboard', 'index.html'), 'utf8');
+const js = fs.readFileSync(path.join(ROOT, 'dashboard', 'salla-crm.js'), 'utf8');
+const server = fs.readFileSync(path.join(ROOT, 'src', 'server.js'), 'utf8');
 
-test('page + script files exist', () => {
-  assert.ok(fs.existsSync(path.join(ROOT, 'dashboard', 'salla-customers.html')));
-  assert.ok(fs.existsSync(path.join(ROOT, 'dashboard', 'salla-crm.js')));
+test('dashboard has a native "سلة" sidebar tab wired to goTab', () => {
+  assert.match(indexHtml, /goTab\('salla'\)/);
+  assert.match(indexHtml, /id="tab-salla"/);
+  assert.match(indexHtml, /<span class="tab-label">سلة<\/span>/);
 });
 
-test('server registers explicit routes for the page and its script', () => {
-  const server = fs.readFileSync(path.join(ROOT, 'src', 'server.js'), 'utf8');
-  assert.match(server, /app\.get\('\/salla-customers'/);
+test('goTab calls the salla init hook (mirrors campaigns/instagram)', () => {
+  assert.match(indexHtml, /t==='salla'&&window\.sallaOnTab/);
+});
+
+test('index loads the salla script and the server serves it', () => {
+  assert.match(indexHtml, /<script src="\/salla-crm\.js">/);
   assert.match(server, /app\.get\('\/salla-crm\.js'/);
+  // the off-brand standalone page is gone
+  assert.ok(!fs.existsSync(path.join(ROOT, 'dashboard', 'salla-customers.html')));
+  assert.doesNotMatch(server, /salla-customers\.html/);
 });
 
-test('the page has the Salla-branded hub with all three tabs + mount points', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'dashboard', 'salla-customers.html'), 'utf8');
-  assert.match(html, /src="\/salla-crm\.js"/);
-  assert.match(html, /dir="rtl"/);
-  // three tabs
-  assert.match(html, /data-pane="messages"/);
-  assert.match(html, /data-pane="connect"/);
-  assert.match(html, /data-pane="customers"/);
-  // mount points
-  assert.match(html, /id="statusList"/);
-  assert.match(html, /id="rows"/);
-  assert.match(html, /id="quick"/);
-  assert.match(html, /id="drawer"/);
-  assert.match(html, /id="syncProgress"/);
+test('salla-crm.js injects a native #view-salla, exposes sallaOnTab, and uses platform tokens', () => {
+  assert.match(js, /id\s*=\s*'view-salla'/);
+  assert.match(js, /window\.sallaOnTab/);
+  // platform identity, not the old teal: green tokens + platform button classes
+  assert.match(js, /var\(--green\)/);
+  assert.match(js, /green-btn/);
+  assert.ok(!js.includes('#0fae7e'), 'must not reuse the off-brand teal');
 });
 
 test('the script targets every CRM API endpoint it needs', () => {
-  const js = fs.readFileSync(path.join(ROOT, 'dashboard', 'salla-crm.js'), 'utf8');
-  for (const ep of ['/api/salla/quick-segments', '/api/salla/customers', '/api/salla/audience/count',
-    '/api/salla/status-messages', '/api/salla/crm-status', '/api/salla/link', '/api/salla/sync', '/api/salla/backfill']) {
+  for (const ep of ['/status-messages', '/customers', '/audience/count', '/quick-segments', '/crm-status', '/link', '/sync', '/backfill']) {
     assert.ok(js.includes(ep), 'missing endpoint ' + ep);
   }
 });

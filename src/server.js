@@ -346,10 +346,10 @@ function createApp() {
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
   app.get('/instagram.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'instagram.js')));
   app.get('/campaigns.js', requireAuth, (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'campaigns.js')));
-  // Salla Customer-Intelligence page (سلة → العملاء). Explicit routes (the
-  // dashboard is served by explicit file routes, not a static root).
-  app.get('/salla-customers', requireAuth, (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'salla-customers.html')));
-  app.get('/salla-crm.js', requireAuth, (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'salla-crm.js')));
+  // Salla section script — injected as a native tab inside the dashboard SPA
+  // (index.html loads it like instagram.js/campaigns.js). Explicit route because
+  // the dashboard is served by explicit file routes, not a static root.
+  app.get('/salla-crm.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'salla-crm.js')));
   // Public legal pages required by Meta to publish the app. No auth: they must
   // be reachable by Meta's reviewers and by end users.
   app.get('/privacy', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'privacy.html')));

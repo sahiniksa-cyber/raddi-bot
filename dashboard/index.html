@@ -1023,6 +1023,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
         <button class="tab active" onclick="goTab('connect')" id="tab-connect" title="الربط وحالة واتساب"><i data-lucide="smartphone"></i><span class="tab-label">الربط وحالة واتساب</span></button>
         <button class="tab" onclick="goTab('conversations')" id="tab-conversations" title="المحادثات"><i data-lucide="message-circle"></i><span class="tab-label">المحادثات</span></button>
         <button class="tab" onclick="goTab('campaigns')" id="tab-campaigns" title="الحملات"><i data-lucide="send"></i><span class="tab-label">الحملات</span></button>
+        <button class="tab" onclick="goTab('salla')" id="tab-salla" title="سلة"><i data-lucide="shopping-bag"></i><span class="tab-label">سلة</span></button>
       </div>
       <div class="nav-section">
         <div class="nav-section-label">الذكاء والتخصيص</div>
@@ -2326,6 +2327,7 @@ body.nav-collapsed .sidebar-help{justify-content:center;padding:10px}
 
 <script src="/instagram.js"></script>
 <script src="/campaigns.js"></script>
+<script src="/salla-crm.js"></script>
 <script>
 let config = {}, lastStatus = '';
 // Which channel the shared settings form is currently editing. Default whatsapp
@@ -2435,6 +2437,7 @@ function goTab(t){
   if(t==='train')loadLearnedReplies();
   if(t==='instagram'&&window.igOnTab)window.igOnTab();
   if(t==='campaigns'&&window.campaignOnTab)window.campaignOnTab();
+  if(t==='salla'&&window.sallaOnTab)window.sallaOnTab();
 }
 
 // ── SCREENS ──
