@@ -12,19 +12,21 @@
 
 const db = require('../../db/client');
 
-// Curated standard Salla order statuses (slug + Arabic label + dot color).
+// Curated standard Salla order statuses (slug + Arabic label + dot color +
+// group). Grouped so the UI can present all of them compactly.
 const SALLA_ORDER_STATUSES = Object.freeze([
-  { slug: 'payment_pending', label: 'بانتظار الدفع', color: '#f59e0b' },
-  { slug: 'waiting_for_payment_confirmation', label: 'بانتظار تأكيد الدفع', color: '#f59e0b' },
-  { slug: 'under_review', label: 'قيد المراجعة', color: '#f59e0b' },
-  { slug: 'in_progress', label: 'قيد التنفيذ', color: '#3b82f6' },
-  { slug: 'completed', label: 'مكتمل', color: '#10b981' },
-  { slug: 'delivering', label: 'قيد التوصيل', color: '#8b5cf6' },
-  { slug: 'shipped', label: 'تم الشحن', color: '#8b5cf6' },
-  { slug: 'delivered', label: 'تم التوصيل', color: '#10b981' },
-  { slug: 'canceled', label: 'ملغي', color: '#ef4444' },
-  { slug: 'payment_failed', label: 'فشل الدفع', color: '#ef4444' },
-  { slug: 'restored', label: 'مسترجع', color: '#6b7280' },
+  { slug: 'payment_pending', label: 'بانتظار الدفع', color: '#f59e0b', group: 'الدفع' },
+  { slug: 'waiting_for_payment_confirmation', label: 'بانتظار تأكيد الدفع', color: '#f59e0b', group: 'الدفع' },
+  { slug: 'payment_failed', label: 'فشل الدفع', color: '#ef4444', group: 'الدفع' },
+  { slug: 'under_review', label: 'قيد المراجعة', color: '#3b82f6', group: 'التنفيذ' },
+  { slug: 'in_progress', label: 'قيد التنفيذ', color: '#3b82f6', group: 'التنفيذ' },
+  { slug: 'completed', label: 'مكتمل', color: '#16a34a', group: 'التنفيذ' },
+  { slug: 'delivering', label: 'قيد التوصيل', color: '#8b5cf6', group: 'الشحن والتوصيل' },
+  { slug: 'shipped', label: 'تم الشحن', color: '#8b5cf6', group: 'الشحن والتوصيل' },
+  { slug: 'delivered', label: 'تم التوصيل', color: '#16a34a', group: 'الشحن والتوصيل' },
+  { slug: 'canceled', label: 'ملغي', color: '#ef4444', group: 'إلغاء ومرتجعات' },
+  { slug: 'restoring', label: 'قيد الاسترجاع', color: '#6b7280', group: 'إلغاء ومرتجعات' },
+  { slug: 'restored', label: 'مسترجع', color: '#6b7280', group: 'إلغاء ومرتجعات' },
 ]);
 
 const TEMPLATE_VARIABLES = Object.freeze(['order_id', 'customer_name', 'order_status', 'store_name']);
@@ -50,11 +52,11 @@ async function listStatusMessages(userId, deps = {}) {
   const saved = new Map(rows.map((r) => [r.status_slug, r]));
   const out = SALLA_ORDER_STATUSES.map((s) => {
     const r = saved.get(s.slug);
-    return { slug: s.slug, label: s.label, color: s.color, enabled: r ? r.enabled : false, message: r ? r.message_text : '' };
+    return { slug: s.slug, label: s.label, color: s.color, group: s.group, enabled: r ? r.enabled : false, message: r ? r.message_text : '' };
   });
   for (const r of rows) {
     if (!STATUS_LABEL.has(r.status_slug)) {
-      out.push({ slug: r.status_slug, label: r.status_slug, color: '#6b7280', enabled: r.enabled, message: r.message_text });
+      out.push({ slug: r.status_slug, label: r.status_slug, color: '#6b7280', group: 'أخرى', enabled: r.enabled, message: r.message_text });
     }
   }
   return out;

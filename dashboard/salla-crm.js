@@ -50,6 +50,17 @@
     + '#view-salla .sl-var{font-size:11.5px;padding:4px 9px;border-radius:8px;background:var(--green-bg);border:1px solid var(--green-border);color:var(--green2);cursor:pointer;font-family:var(--font)}'
     + '#view-salla .sl-saverow{display:flex;align-items:center;justify-content:space-between;margin-top:10px}'
     + '#view-salla .sl-saved{color:var(--green2);font-size:12px;opacity:0;transition:opacity .2s} #view-salla .sl-saved.show{opacity:1}'
+    + '#view-salla .sl-gl{font-size:11px;color:var(--text-dim);font-weight:700;margin:16px 4px 7px;letter-spacing:.02em}'
+    + '#view-salla .sl-srow{background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:8px;overflow:hidden}'
+    + '#view-salla .sl-srow.on{border-color:var(--green-border)}'
+    + '#view-salla .sl-srow-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;cursor:pointer;user-select:none}'
+    + '#view-salla .sl-srow-head:hover{background:var(--bg-soft)}'
+    + '#view-salla .sl-srow-left{display:flex;align-items:center;gap:9px;min-width:0}'
+    + '#view-salla .sl-srow-right{display:flex;align-items:center;gap:11px;flex:none}'
+    + '#view-salla .sl-chev{width:16px;height:16px;color:var(--text-dim);transition:transform .18s;flex:none}'
+    + '#view-salla .sl-srow.open .sl-chev{transform:rotate(180deg)}'
+    + '#view-salla .sl-srow-body{display:none;padding:2px 14px 14px}'
+    + '#view-salla .sl-srow.open .sl-srow-body{display:block}'
     + '#view-salla .sl-switch{position:relative;width:42px;height:23px;border-radius:999px;background:var(--border-strong);border:0;cursor:pointer;transition:background .15s;flex:none}'
     + '#view-salla .sl-switch.on{background:var(--green)}'
     + '#view-salla .sl-switch::after{content:"";position:absolute;top:3px;right:3px;width:17px;height:17px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(15,23,42,.25)}'
@@ -151,9 +162,11 @@
     view.addEventListener('click', function (e) {
       var sub = e.target.closest('.sl-subtab');
       if (sub) { setSub(sub.getAttribute('data-sub')); return; }
-      var sw = e.target.closest('.sl-switch'); if (sw) { sw.classList.toggle('on'); return; }
-      var v = e.target.closest('.sl-var'); if (v) { var ta = v.closest('.sl-panel').querySelector('textarea'); if (ta) { ta.value += v.getAttribute('data-var'); ta.focus(); } return; }
-      var save = e.target.closest('.sl-save'); if (save) { saveStatus(save.closest('.sl-panel')); return; }
+      var sw = e.target.closest('.sl-switch');
+      if (sw) { sw.classList.toggle('on'); var sr = sw.closest('.sl-srow'); if (sr) sr.classList.toggle('on', sw.classList.contains('on')); return; }
+      var v = e.target.closest('.sl-var'); if (v) { var ta = v.closest('.sl-srow').querySelector('textarea'); if (ta) { ta.value += v.getAttribute('data-var'); ta.focus(); } return; }
+      var save = e.target.closest('.sl-save'); if (save) { saveStatus(save.closest('.sl-srow')); return; }
+      var head = e.target.closest('.sl-srow-head'); if (head) { head.parentNode.classList.toggle('open'); return; }
       var seg = e.target.closest('.sl-seg'); if (seg) { state.segment = seg.getAttribute('data-seg'); markSeg(); loadCustomers(); return; }
       var tr = e.target.closest('#slRows tr'); if (tr) { openCustomer(tr.getAttribute('data-id')); return; }
       if (e.target.id === 'slLink') return doLink();
@@ -175,24 +188,29 @@
   }
 
   /* ---------- messages ---------- */
+  var CHEV = '<svg class="sl-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
   function loadStatusMessages() {
     api(API + '/status-messages').then(function (d) {
       var vars = d.variables || ['order_id', 'customer_name', 'order_status', 'store_name'];
-      document.getElementById('slStatusList').innerHTML = (d.statuses || []).map(function (s) {
-        var chips = vars.map(function (v) { return '<button type="button" class="sl-var" data-var="{' + v + '}">{' + v + '}</button>'; }).join('');
-        return '<div class="sl-panel" data-slug="' + esc(s.slug) + '">'
-          + '<div class="sl-row"><div style="display:flex;align-items:center;gap:9px"><span class="sl-dot" style="background:' + esc(s.color || '#94a3b8') + '"></span><span class="sl-name">' + esc(s.label) + '</span><span class="sl-slug">' + esc(s.slug) + '</span></div>'
-          + '<button type="button" class="sl-switch' + (s.enabled ? ' on' : '') + '"></button></div>'
-          + '<textarea class="sl-msg" placeholder="اكتب الرسالة...">' + esc(s.message || '') + '</textarea>'
+      var chips = vars.map(function (v) { return '<button type="button" class="sl-var" data-var="{' + v + '}">{' + v + '}</button>'; }).join('');
+      var lastGroup = null, html = '';
+      (d.statuses || []).forEach(function (s) {
+        if (s.group !== lastGroup) { html += '<div class="sl-gl">' + esc(s.group || 'أخرى') + '</div>'; lastGroup = s.group; }
+        html += '<div class="sl-srow' + (s.enabled ? ' on' : '') + '" data-slug="' + esc(s.slug) + '">'
+          + '<div class="sl-srow-head"><div class="sl-srow-left"><span class="sl-dot" style="background:' + esc(s.color || '#94a3b8') + '"></span>'
+          + '<span class="sl-name">' + esc(s.label) + '</span><span class="sl-slug">' + esc(s.slug) + '</span></div>'
+          + '<div class="sl-srow-right"><button type="button" class="sl-switch' + (s.enabled ? ' on' : '') + '"></button>' + CHEV + '</div></div>'
+          + '<div class="sl-srow-body"><textarea class="sl-msg" placeholder="اكتب الرسالة...">' + esc(s.message || '') + '</textarea>'
           + '<div class="sl-chips">' + chips + '</div>'
-          + '<div class="sl-saverow"><span class="sl-saved">✓ تم الحفظ</span><button type="button" class="green-btn sl-save" style="margin:0">حفظ</button></div></div>';
-      }).join('');
+          + '<div class="sl-saverow"><span class="sl-saved">✓ تم الحفظ</span><button type="button" class="green-btn sl-save" style="margin:0">حفظ</button></div></div></div>';
+      });
+      document.getElementById('slStatusList').innerHTML = html;
     }).catch(function (e) { if (e.disabled) document.getElementById('slStatusList').innerHTML = disabled(); });
   }
-  function saveStatus(panel) {
-    var btn = panel.querySelector('.sl-save'); btn.disabled = true;
-    api(API + '/status-messages', { method: 'PUT', body: JSON.stringify({ statusSlug: panel.getAttribute('data-slug'), enabled: panel.querySelector('.sl-switch').classList.contains('on'), message: panel.querySelector('textarea').value }) })
-      .then(function () { var s = panel.querySelector('.sl-saved'); s.classList.add('show'); setTimeout(function () { s.classList.remove('show'); }, 1600); })
+  function saveStatus(row) {
+    var btn = row.querySelector('.sl-save'); btn.disabled = true;
+    api(API + '/status-messages', { method: 'PUT', body: JSON.stringify({ statusSlug: row.getAttribute('data-slug'), enabled: row.querySelector('.sl-switch').classList.contains('on'), message: row.querySelector('textarea').value }) })
+      .then(function () { var s = row.querySelector('.sl-saved'); s.classList.add('show'); setTimeout(function () { s.classList.remove('show'); }, 1600); })
       .catch(function () {}).then(function () { btn.disabled = false; });
   }
 
