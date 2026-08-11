@@ -3,99 +3,178 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>سلة · العملاء — جواب</title>
+  <title>سلة · جواب</title>
   <style>
-    :root {
-      --bg: #0f1420; --panel: #171e2e; --panel2: #1e2740; --line: #2a3450;
-      --text: #eaf0ff; --muted: #93a0c0; --accent: #4c8dff; --good: #2ecc71;
-      --warn: #f39c12; --bad: #e74c3c; --chip: #223052;
+    :root{
+      --teal:#0fae7e; --teal-soft:#0fae7e14; --teal-ink:#2f8f6f;
+      --bg:#f7f8fa; --panel:#ffffff; --panel2:#fafbfc; --line:#e8ebf0; --line2:#f1f3f7;
+      --text:#1a2233; --muted:#7a8699; --muted2:#9aa5b8;
     }
-    @media (prefers-color-scheme: light) {
-      :root { --bg:#f4f6fb; --panel:#fff; --panel2:#f0f3fa; --line:#e2e8f4; --text:#16233d; --muted:#5b6b8c; --chip:#eaf1ff; }
+    @media (prefers-color-scheme: dark){
+      :root{ --bg:#0f1420; --panel:#171e2e; --panel2:#1b2338; --line:#2a3450; --line2:#232c44;
+             --text:#eaf0ff; --muted:#93a0c0; --muted2:#6b7799; --teal-soft:#0fae7e22; }
     }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: "Tahoma", system-ui, sans-serif; background: var(--bg); color: var(--text); }
-    header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
-    header h1 { font-size: 18px; margin: 0; }
-    header .sub { color: var(--muted); font-size: 13px; }
-    .wrap { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 58px); }
-    aside { border-inline-end: 1px solid var(--line); padding: 14px; }
-    aside h3 { font-size: 12px; color: var(--muted); margin: 14px 6px 8px; letter-spacing: .04em; }
-    .seg { display: block; width: 100%; text-align: start; background: none; border: 0; color: var(--text);
-      padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; }
-    .seg:hover { background: var(--panel2); }
-    .seg.active { background: var(--accent); color: #fff; }
-    main { padding: 18px 20px; min-width: 0; }
-    .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-    .toolbar input { flex: 1; min-width: 200px; background: var(--panel); border: 1px solid var(--line);
-      color: var(--text); padding: 9px 12px; border-radius: 10px; font-size: 14px; }
-    .count { color: var(--muted); font-size: 13px; }
-    button.pill { background: var(--chip); color: var(--text); border: 1px solid var(--line); border-radius: 999px;
-      padding: 7px 14px; cursor: pointer; font-size: 13px; }
-    button.pill:hover { border-color: var(--accent); }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th, td { text-align: start; padding: 10px 8px; border-bottom: 1px solid var(--line); }
-    th { color: var(--muted); font-weight: 600; font-size: 12px; }
-    tbody tr { cursor: pointer; }
-    tbody tr:hover { background: var(--panel2); }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--chip); color: var(--muted); }
-    .badge.good { color: var(--good); } .badge.warn { color: var(--warn); }
-    .empty { color: var(--muted); padding: 40px; text-align: center; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Tajawal","Tahoma",system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{max-width:1040px;margin:0 auto;padding:20px 18px 60px}
+    a.back{color:var(--muted);text-decoration:none;font-size:13px}
+    a.back:hover{color:var(--text)}
+    /* header */
+    .head{display:flex;align-items:center;justify-content:space-between;margin:14px 0 20px}
+    .brand{display:flex;align-items:center;gap:12px}
+    .logo{width:44px;height:44px;border-radius:16px;background:var(--teal);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px #0fae7e33}
+    .brand h1{font-size:21px;margin:0;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+    .brand .sub{color:var(--muted);font-size:13px;margin-top:2px}
+    .pill{font-size:11px;padding:2px 10px;border-radius:999px;font-weight:500}
+    .pill.on{color:var(--teal);background:var(--teal-soft)}
+    .pill.off{color:#c47f2f;background:#fdf0e6}
+    /* tabs */
+    .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:22px}
+    .tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);
+      padding:10px 16px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit}
+    .tab:hover{color:var(--text)}
+    .tab.active{color:var(--teal);border-color:var(--teal)}
+    .pane{display:none} .pane.active{display:block}
+    /* cards */
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 1px 2px #0000000a;margin-bottom:12px}
+    .note{display:flex;gap:10px;align-items:flex-start;background:var(--teal-soft);border:1px solid #0fae7e33;border-radius:12px;padding:13px;margin-bottom:18px;font-size:13px;color:var(--teal-ink)}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+    .status-name{font-size:15px;font-weight:500}
+    .slug{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--line2);color:var(--muted)}
+    textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:12px;
+      padding:11px;font-size:14px;font-family:inherit;resize:vertical;min-height:56px;margin-top:12px}
+    textarea:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
+    .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+    .chip{font-size:12px;padding:5px 10px;border-radius:9px;background:var(--teal-soft);color:var(--teal-ink);border:0;cursor:pointer;font-family:inherit}
+    .chip:hover{filter:brightness(.97)}
+    .btn{background:var(--teal);color:#fff;border:0;border-radius:10px;padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit}
+    .btn:hover{opacity:.92} .btn:disabled{opacity:.5;cursor:default}
+    .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+    .btn.ghost:hover{border-color:var(--teal);color:var(--teal)}
+    .save-row{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+    .saved{color:var(--teal);font-size:12px;opacity:0;transition:opacity .2s}
+    .saved.show{opacity:1}
+    /* toggle */
+    .switch{position:relative;width:44px;height:24px;border-radius:999px;background:#d4d9e0;border:0;cursor:pointer;transition:background .15s;flex:none}
+    .switch.on{background:var(--teal)}
+    .switch::after{content:"";position:absolute;top:3px;right:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px #0003}
+    .switch.on::after{transform:translateX(-20px)}
+    /* progress */
+    .prog-label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:5px}
+    .prog{height:8px;background:var(--line2);border-radius:999px;overflow:hidden}
+    .prog>span{display:block;height:100%;background:var(--teal);border-radius:999px;width:0;transition:width .4s}
+    input.text{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 12px;font-size:14px;font-family:inherit}
+    /* table */
+    .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+    .search{position:relative;flex:1;min-width:220px}
+    .search input{width:100%}
+    .segchips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+    .seg{font-size:13px;padding:6px 14px;border-radius:999px;background:var(--panel);border:1px solid var(--line);color:var(--muted);cursor:pointer;font-family:inherit}
+    .seg:hover{border-color:var(--teal)} .seg.active{background:var(--teal);color:#fff;border-color:var(--teal)}
+    table{width:100%;border-collapse:collapse;font-size:14px;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+    th,td{text-align:start;padding:11px 12px}
+    thead tr{color:var(--muted2);font-size:12px;border-bottom:1px solid var(--line2)}
+    tbody tr{border-bottom:1px solid var(--line2);cursor:pointer}
+    tbody tr:last-child{border-bottom:0}
+    tbody tr:hover{background:var(--panel2)}
+    .tag{font-size:12px;padding:2px 9px;border-radius:999px;background:var(--teal-soft);color:var(--teal-ink)}
+    .tag.warn{background:#fdf0e6;color:#c47f2f} .tag.blue{background:#eaf1fd;color:#2f6fc4}
+    .count{color:var(--muted);font-size:13px;font-weight:500}
+    .empty,.disabled-note{color:var(--muted);text-align:center;padding:38px}
     /* drawer */
-    .drawer { position: fixed; inset-block: 0; inset-inline-end: 0; width: min(520px, 96vw); background: var(--panel);
-      border-inline-start: 1px solid var(--line); transform: translateX(-100%); transition: transform .2s; overflow: auto; z-index: 20; }
-    html[dir="rtl"] .drawer { transform: translateX(100%); }
-    .drawer.open { transform: translateX(0) !important; }
-    .drawer-head { padding: 16px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
-    .drawer-body { padding: 16px 18px; }
-    .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 13px; margin: 8px 0 16px; }
-    .kv div:nth-child(odd) { color: var(--muted); }
-    .segtags { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 16px; }
-    .tl { border-inline-start: 2px solid var(--line); margin-inline-start: 6px; padding-inline-start: 14px; }
-    .tl .item { position: relative; padding: 8px 0; font-size: 13px; }
-    .tl .item::before { content:""; position:absolute; inset-inline-start:-19px; top:12px; width:8px; height:8px; border-radius:50%; background: var(--accent); }
-    .tl .when { color: var(--muted); font-size: 11px; }
-    .sec-title { font-size: 12px; color: var(--muted); margin: 18px 0 6px; letter-spacing: .04em; }
-    .x { background: none; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; }
-    .disabled-note { padding: 40px; text-align: center; color: var(--muted); }
-    a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+    .drawer{position:fixed;inset-block:0;inset-inline-start:0;width:min(460px,96vw);background:var(--panel);
+      border-inline-end:1px solid var(--line);box-shadow:0 0 40px #0003;transform:translateX(-100%);transition:transform .2s;overflow:auto;z-index:30}
+    html[dir="rtl"] .drawer{transform:translateX(100%)}
+    .drawer.open{transform:translateX(0)!important}
+    .drawer-head{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid var(--line2)}
+    .drawer-body{padding:16px}
+    .kv{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;font-size:13px;margin:12px 0 16px}
+    .kv div:nth-child(odd){color:var(--muted)}
+    .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:6px 0 18px}
+    .metric{background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:11px}
+    .metric .n{font-size:18px;font-weight:700;letter-spacing:-.02em}
+    .metric .l{font-size:11px;color:var(--muted2)}
+    .sec{font-size:12px;color:var(--muted2);margin:16px 0 8px;font-weight:500}
+    .tl{border-inline-start:2px solid var(--line2);padding-inline-start:14px;margin-inline-start:5px}
+    .tl .item{position:relative;padding:7px 0;font-size:13px}
+    .tl .item::before{content:"";position:absolute;inset-inline-start:-19px;top:11px;width:8px;height:8px;border-radius:50%;background:var(--teal)}
+    .tl .when{color:var(--muted2);font-size:11px}
+    .x{background:none;border:0;color:var(--muted2);font-size:22px;cursor:pointer}
   </style>
 </head>
 <body>
-  <header>
+  <div class="wrap">
     <a class="back" href="/">◀ لوحة التحكم</a>
-    <h1>العملاء الموحّدون</h1>
-    <span class="sub">جواب × سلة · Customer 360</span>
-  </header>
+    <div class="head">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        </div>
+        <div>
+          <h1>سلة <span id="conn" class="pill off">غير مربوط</span></h1>
+          <div class="sub">تكامل سلة × جواب · نظام العملاء الموحّد</div>
+        </div>
+      </div>
+    </div>
 
-  <div id="app" class="wrap">
-    <aside>
-      <h3>الشرائح الجاهزة</h3>
-      <div id="quick"></div>
-      <h3>الشرائح المحفوظة</h3>
-      <div id="saved"></div>
-    </aside>
-    <main>
+    <div class="tabs">
+      <button class="tab active" data-pane="messages">الرسائل الجاهزة</button>
+      <button class="tab" data-pane="connect">الربط والمزامنة</button>
+      <button class="tab" data-pane="customers">العملاء والشرائح</button>
+    </div>
+
+    <!-- TAB 1: ready messages -->
+    <section id="pane-messages" class="pane active">
+      <div class="note">
+        <span>ℹ️</span>
+        <span>فعّل حالة الطلب واكتب الرسالة اللي يرسلها البوت للعميل تلقائياً لما تتغير حالة طلبه في سلة. استعمل المتغيّرات لتخصيص الرسالة.</span>
+      </div>
+      <div id="statusList"></div>
+    </section>
+
+    <!-- TAB 2: connect + sync -->
+    <section id="pane-connect" class="pane">
+      <div class="card" id="storeCard"><div class="count">جارٍ التحميل…</div></div>
+      <div class="card">
+        <div class="status-name" style="margin-bottom:2px">ربط المتجر</div>
+        <div class="count" style="margin-bottom:12px">إذا ثبّتّ التطبيق على متجرك في سلة وما ظهر مربوطاً، أدخل معرّف المتجر لربطه بحسابك.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input id="merchantId" class="text" placeholder="معرّف المتجر (Merchant ID)" style="flex:1;min-width:200px" />
+          <button class="btn" id="linkBtn">ربط</button>
+        </div>
+        <div id="linkMsg" class="count" style="margin-top:8px"></div>
+      </div>
+      <div class="card">
+        <div class="status-name" style="margin-bottom:2px">مزامنة بيانات المتجر</div>
+        <div class="count" style="margin-bottom:14px">جلب العملاء والطلبات والسلات من سلة وبناء الملفات الموحّدة.</div>
+        <div id="syncProgress"></div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+          <button class="btn" id="syncBtn">بدء المزامنة</button>
+          <button class="btn ghost" id="backfillBtn">ربط بيانات واتساب القديمة</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: customers -->
+    <section id="pane-customers" class="pane">
+      <div class="segchips" id="quick"></div>
       <div class="toolbar">
-        <input id="search" placeholder="ابحث: اسم / جوال / بريد / رقم طلب / معرّف سلة" />
+        <div class="search"><input id="search" class="text" placeholder="ابحث: اسم / جوال / بريد / رقم طلب / معرّف سلة" /></div>
         <span id="count" class="count"></span>
-        <button class="pill" id="refresh">تحديث</button>
       </div>
       <div id="tableWrap">
         <table>
-          <thead><tr><th>العميل</th><th>الجوال</th><th>الطلبات</th><th>الإجمالي</th><th>التصنيف</th><th>آخر نشاط</th></tr></thead>
+          <thead><tr><th>العميل</th><th>الجوال</th><th>الطلبات</th><th>الإجمالي</th><th>التصنيف</th></tr></thead>
           <tbody id="rows"></tbody>
         </table>
         <div id="empty" class="empty" hidden>لا يوجد عملاء في هذه الشريحة بعد.</div>
       </div>
-    </main>
+    </section>
   </div>
 
   <div id="drawer" class="drawer">
-    <div class="drawer-head">
-      <strong id="d-name">—</strong>
-      <button class="x" id="d-close">×</button>
-    </div>
+    <div class="drawer-head"><strong id="d-name">—</strong><button class="x" id="d-close">×</button></div>
     <div class="drawer-body" id="d-body"></div>
   </div>
 

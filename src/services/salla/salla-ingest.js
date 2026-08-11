@@ -14,6 +14,7 @@
 const db = require('../../db/client');
 const defaultResolver = require('../identity/identity-resolver');
 const defaultMetrics = require('../identity/customer-metrics');
+const defaultStatusMessages = require('./salla-status-messages');
 const { mapSallaCustomerToSignal, mapSallaOrder, mapSallaCart } = require('./salla-api');
 
 async function ingestCustomer(userId, sallaCustomer, deps = {}) {
@@ -116,7 +117,13 @@ async function ingestWebhookEvent(userId, body, deps = {}) {
     return { kind: 'customer', customerId };
   }
   if (event.startsWith('order.')) {
-    return { kind: 'order', ...(await ingestOrder(userId, data, deps)) };
+    const result = await ingestOrder(userId, data, deps);
+    // On a status change, send the merchant's ready-made message (if enabled).
+    let statusMessage = null;
+    if (event === 'order.status.updated' || event === 'order.created') {
+      statusMessage = await maybeSendStatusMessage(userId, data, deps).catch(() => null);
+    }
+    return { kind: 'order', ...result, statusMessage };
   }
   if (event === 'abandoned.cart' || event === 'abandoned.cart.updated') {
     return { kind: 'cart', ...(await ingestCart(userId, data, 'abandoned', deps)) };
@@ -127,4 +134,25 @@ async function ingestWebhookEvent(userId, body, deps = {}) {
   return null;
 }
 
-module.exports = { ingestCustomer, ingestOrder, ingestCart, ingestWebhookEvent, addTimelineEvent };
+// Send the ready-made message for an order's status, if the merchant enabled
+// one. The actual WhatsApp dispatch is injected (`deps.sendStatusMessage`) so
+// this stays inert until wired to the send path at deploy — and is unit-tested.
+async function maybeSendStatusMessage(userId, orderData, deps = {}) {
+  const dispatch = deps.sendStatusMessage;
+  if (typeof dispatch !== 'function') return null; // not wired → inert
+  const statusMessages = deps.statusMessages || defaultStatusMessages;
+  const o = mapSallaOrder(orderData);
+  if (!o.statusSlug || !o.customerPhone) return null;
+  const template = await statusMessages.resolveForStatus(userId, o.statusSlug, deps);
+  if (!template) return null;
+  const text = statusMessages.renderMessage(template, {
+    order_id: o.referenceId || o.sallaOrderId,
+    customer_name: (orderData.customer && orderData.customer.name) || '',
+    order_status: o.statusSlug,
+    store_name: deps.storeName || '',
+  });
+  await dispatch({ userId, phone: o.customerPhone, text, orderId: o.sallaOrderId, statusSlug: o.statusSlug });
+  return { sent: true, statusSlug: o.statusSlug };
+}
+
+module.exports = { ingestCustomer, ingestOrder, ingestCart, ingestWebhookEvent, addTimelineEvent, maybeSendStatusMessage };

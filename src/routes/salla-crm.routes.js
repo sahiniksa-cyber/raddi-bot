@@ -3,6 +3,7 @@
 const express = require('express');
 const defaultRead = require('../services/identity/crm-read');
 const { compileRules, QUICK_SEGMENTS } = require('../services/identity/segment-rules');
+const defaultStatusMessages = require('../services/salla/salla-status-messages');
 const defaultStores = require('../services/salla/salla-stores');
 const defaultSync = require('../services/salla/salla-sync');
 const defaultBackfill = require('../services/identity/backfill');
@@ -16,6 +17,7 @@ const defaultDb = require('../db/client');
 function createSallaCrmRoutes(deps = {}) {
   const env = deps.env || process.env;
   const read = deps.crmRead || defaultRead;
+  const statusMessages = deps.statusMessages || defaultStatusMessages;
   const stores = deps.sallaStores || defaultStores;
   const sync = deps.sallaSync || defaultSync;
   const backfill = deps.backfill || defaultBackfill;
@@ -124,6 +126,21 @@ function createSallaCrmRoutes(deps = {}) {
   router.delete('/api/salla/segments/:id', guard, requireAuth, async (req, res, next) => {
     try {
       await db.query('DELETE FROM crm_segments WHERE user_id = $1 AND id = $2', [uid(req), req.params.id]);
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  });
+
+  // ── Ready-made messages per order status ────────────────────────────────────
+  router.get('/api/salla/status-messages', guard, requireAuth, async (req, res, next) => {
+    try {
+      res.json({ statuses: await statusMessages.listStatusMessages(uid(req), { database: db }), variables: defaultStatusMessages.TEMPLATE_VARIABLES });
+    } catch (err) { next(err); }
+  });
+  router.put('/api/salla/status-messages', guard, requireAuth, async (req, res, next) => {
+    try {
+      const { statusSlug, enabled, message } = req.body || {};
+      if (!statusSlug) return res.status(400).json({ error: 'status_slug_required' });
+      await statusMessages.upsertStatusMessage(uid(req), statusSlug, { enabled: enabled === true, message }, { database: db });
       res.json({ success: true });
     } catch (err) { next(err); }
   });

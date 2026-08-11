@@ -1004,6 +1004,19 @@ const statements = [
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
 
+  // Per-merchant ready-made WhatsApp message templates, keyed by Salla order
+  // status slug. When an order.status.updated webhook arrives and a template is
+  // enabled for that status, the bot sends it to the customer.
+  `CREATE TABLE IF NOT EXISTS salla_status_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status_slug TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    message_text TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, status_slug)
+  )`,
+
   // Nullable link columns on existing tables — backfilled by identity
   // resolution; all existing logic keeps working while they are NULL.
   `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES crm_customers(id) ON DELETE SET NULL`,
@@ -1032,6 +1045,10 @@ const statements = [
   `DROP TRIGGER IF EXISTS trg_salla_sync_jobs_updated_at ON salla_sync_jobs`,
   `CREATE TRIGGER trg_salla_sync_jobs_updated_at
     BEFORE UPDATE ON salla_sync_jobs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+  `DROP TRIGGER IF EXISTS trg_salla_status_messages_updated_at ON salla_status_messages`,
+  `CREATE TRIGGER trg_salla_status_messages_updated_at
+    BEFORE UPDATE ON salla_status_messages
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
 
   // ── Campaign center: durable drafts, smart customer segmentation, imported
