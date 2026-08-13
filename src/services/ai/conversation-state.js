@@ -148,10 +148,26 @@ function buildExtractionRequest({ previousState = {}, newTurns = [], lastBotRepl
   };
 }
 
+/**
+ * The LLM owns only the SEMANTIC state. Systemic truth (handoff status, real
+ * tool-execution outcomes) is stamped by the platform from authoritative
+ * records — never by the model. This strips any LLM attempt to claim it, and
+ * attaches the system-owned facts under `state.system`.
+ */
+function reconcileSystemState(llmState, systemFacts = {}) {
+  const s = validateState(llmState);
+  s.resolved_issues = s.resolved_issues.filter((i) => i.resolved_by !== 'owner');
+  s.actions_attempted = s.actions_attempted.map((a) =>
+    a.confirmed_by === 'system' ? { ...a, confirmed_by: null } : a);
+  s.system = { escalationPending: systemFacts.escalationPending === true };
+  return s;
+}
+
 module.exports = {
   EMPTY_STATE,
   validateState,
   parseExtractionResponse,
   EXTRACTION_SYSTEM_PROMPT,
   buildExtractionRequest,
+  reconcileSystemState,
 };
