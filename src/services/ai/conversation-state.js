@@ -236,6 +236,55 @@ function buildStaleClaimQuery({ replyMessageId, userId, conversationId, generate
   return { sql, params: [replyMessageId, userId, conversationId, generatedAgainstSeq] };
 }
 
+// ── Deterministic resolved-issue reopen guard ─────────────────────────────
+// A code-level check (beyond prompt injection) that a drafted reply is not
+// re-suggesting steps for an issue the customer already confirmed resolved.
+// Language-agnostic token overlap — no vertical vocabulary, no LLM.
+
+const REOPEN_STOPWORDS = new Set([
+  'في', 'من', 'الى', 'إلى', 'على', 'عن', 'مع', 'هذا', 'هذه', 'ان', 'أن', 'انا', 'أنا',
+  'هو', 'هي', 'ما', 'لا', 'و', 'او', 'أو', 'يا', 'قد', 'كل', 'اي', 'أي',
+  'the', 'a', 'an', 'to', 'of', 'is', 'it', 'for', 'and', 'or', 'you', 'your',
+]);
+
+function reopenTokens(s) {
+  return String(s == null ? '' : s)
+    .replace(/[ً-ْٰ]/g, '')       // Arabic diacritics
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(t => t.length >= 2 && !REOPEN_STOPWORDS.has(t));
+}
+
+/**
+ * Returns { reopened, issue }. A reply "reopens" a resolved issue when it echoes
+ * most of that issue's content tokens (≥ threshold) WHILE the customer's latest
+ * message did NOT re-raise it (< 0.5 overlap) — i.e. the bot is volunteering
+ * steps for something already confirmed done. If the customer brought it up
+ * again, repeating is legitimate and NOT flagged.
+ */
+function detectResolvedReopen(replyText, resolvedIssues = [], customerText = '', { threshold = 0.6 } = {}) {
+  const list = Array.isArray(resolvedIssues) ? resolvedIssues : [];
+  if (!list.length) return { reopened: false, issue: null };
+  const replySet = new Set(reopenTokens(replyText));
+  const customerSet = new Set(reopenTokens(customerText));
+  for (const issue of list) {
+    const summary = issue && issue.summary;
+    if (!summary) continue;
+    const issueTokens = reopenTokens(summary);
+    if (!issueTokens.length) continue;
+    const inReply = issueTokens.filter(t => replySet.has(t)).length / issueTokens.length;
+    const inCustomer = issueTokens.filter(t => customerSet.has(t)).length / issueTokens.length;
+    if (inReply >= threshold && inCustomer < 0.5) {
+      return { reopened: true, issue: summary };
+    }
+  }
+  return { reopened: false, issue: null };
+}
+
 module.exports = {
   EMPTY_STATE,
   validateState,
@@ -246,4 +295,5 @@ module.exports = {
   buildConversationStateBlock,
   isSemanticDuplicate,
   buildStaleClaimQuery,
+  detectResolvedReopen,
 };

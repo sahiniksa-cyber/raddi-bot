@@ -34,7 +34,7 @@ const {
   saveConversationState,
   extractConversationState,
 } = require('../services/ai/conversation-state.service');
-const { isSemanticDuplicate } = require('../services/ai/conversation-state');
+const { isSemanticDuplicate, detectResolvedReopen } = require('../services/ai/conversation-state');
 const { isAutoReplyEnabled } = require('../services/bot/auto-reply-control');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
@@ -1110,6 +1110,52 @@ async function processAiReply(job) {
 
     if (combinePrefix) {
       customerReply = combineCannedAndAi(combinePrefix, customerReply);
+    }
+
+    // Deterministic resolved-issue reopen guard (flagged). Beyond prompt
+    // injection: a code-level check that the drafted reply isn't volunteering
+    // steps for an issue the customer already confirmed resolved. On detection,
+    // regenerate ONCE with a targeted instruction; accept the retry only if it
+    // no longer reopens. Never suppresses (avoids dropping a legitimate reply).
+    if (process.env.CONVERSATION_STATE_ENABLED === 'true'
+        && convStateRow.state?.resolved_issues?.length) {
+      try {
+        const reopen = detectResolvedReopen(customerReply, convStateRow.state.resolved_issues, text);
+        if (reopen.reopened) {
+          logger.warn('state', `deterministic reopen guard tripped for "${reopen.issue}" — regenerating`);
+          const retryRaw = await ai.getReply([
+            ...history,
+            { role: 'system', content: `العميل سبق وأكّد حلّ: «${reopen.issue}». لا تقترح خطوات لحلّها ولا تُعِد فتحها؛ جاوب فقط على طلبه الحالي.` },
+          ], {
+            isFirstMsg: false,
+            maxRetries: 1,
+            customerProfile,
+            instantAnswered: combinePrefix,
+            escalationPending,
+            conversationState: convStateRow.state,
+            conversationStateCanInject,
+          }).catch(() => '');
+          const retry = String(retryRaw || '').trim();
+          if (retry) {
+            const retryEsc = prepareEscalation({
+              reply: retry,
+              config,
+              customerSender: conversation.sender,
+              customerPhoneNumber: conversation.phone_number,
+              inboundText: text,
+            });
+            let retryCustomer = (retryEsc.customerReply || '').trim();
+            if (retryCustomer) {
+              if (combinePrefix) retryCustomer = combineCannedAndAi(combinePrefix, retryCustomer);
+              if (!detectResolvedReopen(retryCustomer, convStateRow.state.resolved_issues, text).reopened) {
+                customerReply = retryCustomer;
+              }
+            }
+          }
+        }
+      } catch (reopenErr) {
+        logger.warn('state', `reopen guard failed: ${reopenErr.message}`);
+      }
     }
 
     // Reply de-duplication: if the candidate reply is near-identical to one of
