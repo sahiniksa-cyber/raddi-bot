@@ -247,5 +247,22 @@ UPDATE messages
 ## 11. خارج النطاق (مراحل لاحقة)
 - نموذج توافق الدفع المنظّم (merchant ∩ customer).
 - إزالة أسماء العلامات/القطاعات المثبّتة من `product-knowledge.js` و`knowledge-retrieval.js`.
-- سدّ ثغرة نطاق `jobs(queue_name, job_key)` (إضافة `user_id`).
 - طبقة تنفيذ أدوات حقيقية (orders/refund/booking) — عند وجودها تصبح مصدر `actions_attempted[confirmed_by=system]`.
+
+---
+
+## 12. المرحلة 1.1 — Hardening (منجزة)
+
+بعد المرحلة ١، أربعة إصلاحات تصليب قبل أي تفعيل على الإنتاج:
+
+1. **عزل tenant في الطابور:** `buildScopedJobKey(userId, rawKey)` يُسبق مفتاح الطابور الوارد (WhatsApp `key.id` غير عالمي التفرّد) بمعرّف المتجر → لا تصادم عبر المتاجر في `jobs(queue_name, job_key)` ولا في BullMQ jobId. (مفاتيح AI-reply=conversation UUID والإرسال=reply UUID عالمية التفرّد أصلًا.)
+
+2. **حارس stale على مسار @lid:** `handleLidOutgoing` كان يرجع قبل حارس stale في المسار الرئيسي؛ أُضيف الحارس داخله (بوابة `source==='ai_reply'`) — يغطّي غالبية العملاء ذوي الأرقام المقنّعة.
+
+3. **تسلسل ذرّي مصدره DB بدل مقارنة الساعات:** استُبدل `generatedAgainstTs` (ساعة التطبيق) مقابل `created_at` (ساعة Postgres) بعدّاد أعداد صحيحة `conversations.inbound_seq` (يُبمّ ذرّيًا لكل وارد، يُختَم على `messages.inbound_seq`). الرد يحفظ أقصى seq أجاب عنه؛ الحارس يلغيه إذا وُجد وارد بـseq أعلى. لا انحراف ساعات. `messages.inbound_seq` nullable بلا default = ALTER ميتاداتا فقط (لا إعادة كتابة للجدول الكبير)؛ صفوف ما قبل الترحيل NULL ولا تُفعّل الحارس. Fail-open عند غياب seq.
+
+4. **حارس حتمي لإعادة فتح المحلول:** `detectResolvedReopen` — تراكب رموز لغوي (بلا LLM، بلا قطاع) يكشف إن كان الرد يقترح خطوات لمشكلة أكّد العميل حلّها ولم يُعِد إثارتها؛ عند الكشف إعادة توليد واحدة موجّهة، ويُقبل الناتج فقط إن لم يُعِد الفتح. لا حذف. يكمّل منع الحقن لا يستبدله.
+
+**benchmark:** `scripts/benchmark-state-extraction.js` يقيس p50/p95/p99 ونسبة الفشل لنداء الاستخراج عبر نفس مسار العامل، بلا DB/Redis/واتساب — يُشغَّل على staging بمفاتيح المزوّد.
+
+**يحتاج تحقّق staging قبل تفعيل المفاتيح:** زمن الاستخراج المضاف قبل التوليد، وقيم p50/p95/p99 الفعلية، وسلوك inbound_seq تحت التزامن.
