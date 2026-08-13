@@ -29,6 +29,12 @@ const { getPlatformSetting } = require('../services/platform/platform-settings')
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const { compactQualityGateAudit } = require('../services/ai/reply-quality-gate');
+const {
+  loadConversationState,
+  saveConversationState,
+  extractConversationState,
+} = require('../services/ai/conversation-state.service');
+const { isSemanticDuplicate } = require('../services/ai/conversation-state');
 const { isAutoReplyEnabled } = require('../services/bot/auto-reply-control');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
@@ -485,7 +491,7 @@ async function markConversationMessagesAutoReplyDisabled({ database = db, userId
   return { retired: result.rowCount || 0 };
 }
 
-async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, database = db }) {
+async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, generatedAgainstTs = null, foldedInboundIds = [], replyIntent = null, database = db }) {
   // provider_message_id must be unique per reply (the UNIQUE constraint is on
   // (user_id, provider_message_id)). The jobId is shared across all replies for
   // the same conversation (BullMQ uses conversation-${id} as the job key for
@@ -506,6 +512,9 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
         source: WORKER_NAME,
         jobId,
         qualityGate: compactQualityGateAudit(qualityGateAudit),
+        generatedAgainstTs,
+        foldedInboundIds,
+        replyIntent,
       }),
     ],
   );
@@ -1006,9 +1015,53 @@ async function processAiReply(job) {
       },
     });
 
+    // ── Generic conversation-state engine (phase 1, flagged). Load prior state,
+    // extract an UPDATED state from the customer's new turns BEFORE generating
+    // (so the reply is grounded on current state), persist it, and inject only
+    // when the stored state is current (fail-soft). One auxiliary LLM call per
+    // reply cycle. Every step is best-effort — state work NEVER blocks a reply.
+    const stateEnabled = process.env.CONVERSATION_STATE_ENABLED === 'true';
+    const latestInboundId = enrichedMessages.length ? enrichedMessages[enrichedMessages.length - 1].id : null;
+    let convStateRow = { state: undefined, extraction_ok: false, reflects_message_id: null };
+    if (stateEnabled) {
+      try {
+        convStateRow = await loadConversationState({ userId, conversationId: conversation.id });
+      } catch (stateErr) {
+        logger.warn('state', `load failed: ${stateErr.message}`);
+      }
+      try {
+        const extracted = await extractConversationState({
+          userId,
+          conversationId: conversation.id,
+          previousState: convStateRow.state,
+          newTurns: [{ role: 'user', content: text }],
+          lastBotReply: [...history].reverse().find(m => m.role === 'assistant')?.content || '',
+          config,
+          aiClient: ai,
+          systemFacts: { escalationPending },
+        });
+        await saveConversationState({
+          userId,
+          conversationId: conversation.id,
+          sender: conversation.sender,
+          state: extracted.state,
+          extractionOk: extracted.extraction_ok,
+          reflectsMessageId: extracted.extraction_ok ? latestInboundId : null,
+        });
+        if (extracted.extraction_ok) {
+          convStateRow = { state: extracted.state, extraction_ok: true, reflects_message_id: latestInboundId };
+        }
+      } catch (stateErr) {
+        logger.warn('state', `extract failed: ${stateErr.message}`);
+      }
+    }
+    const conversationStateCanInject = stateEnabled
+      && convStateRow.extraction_ok === true
+      && convStateRow.reflects_message_id === latestInboundId;
+
     let reply;
     try {
-      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix, escalationPending }) || '').trim();
+      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix, escalationPending, conversationState: convStateRow.state, conversationStateCanInject }) || '').trim();
     } catch (aiErr) {
       if (combinePrefix) {
         // Send the canned part now, but ONLY mark the trigger messages as
@@ -1072,6 +1125,8 @@ async function processAiReply(job) {
           customerProfile,
           instantAnswered: combinePrefix,
           escalationPending,
+          conversationState: convStateRow.state,
+          conversationStateCanInject,
         }).catch(() => '');
         const retry = String(retryRaw || '').trim();
         let regenerated = null;
@@ -1125,6 +1180,11 @@ async function processAiReply(job) {
       return { skipped: true, reason: 'duplicate_suppressed' };
     }
 
+    // Generation reference for the atomic send-time stale guard: the batch of
+    // inbound this reply answered, and when it was produced. A customer message
+    // that arrives after this (and isn't in the folded set) makes the reply stale.
+    const generatedAgainstTs = new Date().toISOString();
+    const foldedInboundIds = enrichedMessages.map(message => message.id);
     const replyMessageId = await storeAssistantMessage({
       userId,
       conversationId: conversation.id,
@@ -1132,6 +1192,9 @@ async function processAiReply(job) {
       reply: customerReply,
       jobId: job.id,
       qualityGateAudit: ai.lastDebug?.qualityGate,
+      generatedAgainstTs,
+      foldedInboundIds,
+      replyIntent: ai.lastDebug?.reply_intent || null,
     });
     const replyDelayMs = resolveReplyDelayMs(config);
 
@@ -1162,6 +1225,8 @@ async function processAiReply(job) {
       source: 'ai_reply',
       preSendReviewRequired: true,
       handoffAcknowledgement: Boolean(escalation.ownerMessage),
+      generatedAgainstTs,
+      foldedInboundIds,
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,
