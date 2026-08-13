@@ -491,6 +491,27 @@ async function markConversationMessagesAutoReplyDisabled({ database = db, userId
   return { retired: result.rowCount || 0 };
 }
 
+// Recent assistant replies with their stored intent label, for semantic dedup.
+// Explicitly tenant-scoped. Fail-open: any error returns [] so dedup degrades to
+// the string-based Jaccard check, never blocking a reply.
+async function loadRecentAssistantReplies({ database = db, userId, conversationId, limit = 6 } = {}) {
+  if (!userId || !conversationId || !database?.isConfigured?.()) return [];
+  try {
+    const r = await database.query(
+      `SELECT content, raw_payload->>'replyIntent' AS intent
+         FROM messages
+        WHERE user_id = $1 AND conversation_id = $2
+          AND direction = 'outbound' AND role = 'assistant'
+        ORDER BY created_at DESC
+        LIMIT $3`,
+      [userId, conversationId, limit],
+    );
+    return r.rows.map(x => ({ content: String(x.content || ''), intent: x.intent || '' }));
+  } catch (_) {
+    return [];
+  }
+}
+
 async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, generatedAgainstTs = null, foldedInboundIds = [], replyIntent = null, database = db }) {
   // provider_message_id must be unique per reply (the UNIQUE constraint is on
   // (user_id, provider_message_id)). The jobId is shared across all replies for
@@ -1101,7 +1122,7 @@ async function processAiReply(job) {
     // neither the follow-up nor ai-recovery regenerates yet another duplicate.
     let suppressDuplicate = false;
     try {
-      const dup = await findDuplicateRecentReply({
+      let dup = await findDuplicateRecentReply({
         db,
         conversationId: conversation.id,
         candidate: customerReply,
@@ -1109,6 +1130,29 @@ async function processAiReply(job) {
         threshold: 0.85,
         userId,
       });
+      // Semantic dedup (flagged, independent). The Jaccard check above is
+      // string-based and misses paraphrases. When enabled, a candidate whose
+      // communicative intent equals a recent reply's stored intent is fed into
+      // the SAME regenerate-once path below. Final suppression still requires
+      // string similarity ≥ 0.85, so a genuinely different-content reply is
+      // never dropped — semantic match only prompts a varied retry.
+      if (!dup && process.env.SEMANTIC_DEDUP_ENABLED === 'true') {
+        const candidateIntent = ai.lastDebug?.qualityGate?.intent || '';
+        if (candidateIntent) {
+          const recent = await loadRecentAssistantReplies({
+            database: db, userId, conversationId: conversation.id, limit: 6,
+          });
+          const semanticMatch = recent.find(r => r.content && isSemanticDuplicate({
+            candidateIntent,
+            recentReplyIntents: [r.intent],
+            hasNewCustomerTurnSinceLastAssistant: false,
+          }));
+          if (semanticMatch) {
+            dup = { content: semanticMatch.content, similarity: replySimilarity(customerReply, semanticMatch.content) };
+            logger.warn('dedup', `semantic intent match "${candidateIntent}" — regenerating`);
+          }
+        }
+      }
       if (dup) {
         logger.warn('dedup', 'duplicate assistant reply detected — regenerating', {
           similarity: Number(dup.similarity).toFixed(3),
@@ -1194,7 +1238,7 @@ async function processAiReply(job) {
       qualityGateAudit: ai.lastDebug?.qualityGate,
       generatedAgainstTs,
       foldedInboundIds,
-      replyIntent: ai.lastDebug?.reply_intent || null,
+      replyIntent: ai.lastDebug?.qualityGate?.intent || null,
     });
     const replyDelayMs = resolveReplyDelayMs(config);
 
@@ -1552,6 +1596,7 @@ module.exports = {
   isConversationEscalationMuted,
   isTransientDatabaseError,
   loadPendingInboundMessages,
+  loadRecentAssistantReplies,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
   markConversationMessagesAutoReplyDisabled,
