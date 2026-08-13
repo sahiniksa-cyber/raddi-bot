@@ -163,6 +163,36 @@ function reconcileSystemState(llmState, systemFacts = {}) {
   return s;
 }
 
+/**
+ * Render the state as an internal system-prompt block. Fail-soft: emits nothing
+ * unless `canInject` is true (the caller only sets it when the stored state is
+ * current and extraction succeeded — a stale/failed state is never shown as
+ * truth). Emits nothing when there is nothing worth saying.
+ */
+function buildConversationStateBlock(state, { canInject } = {}) {
+  if (!canInject || !state) return '';
+  const resolved = Array.isArray(state.resolved_issues) ? state.resolved_issues.filter((i) => i && i.summary) : [];
+  const open = Array.isArray(state.open_issues) ? state.open_issues.filter((i) => i && i.summary) : [];
+  const facts = state.known_facts && typeof state.known_facts === 'object' && !Array.isArray(state.known_facts)
+    ? Object.entries(state.known_facts) : [];
+  const lines = [];
+  if (resolved.length) {
+    lines.push('✅ أمور تأكّد حلّها في هذه المحادثة — لا تقترحها ولا تُعِد خطواتها إلا إذا أبلغ العميل بعودتها:');
+    for (const i of resolved) lines.push(`- ${i.summary}`);
+  }
+  if (open.length) {
+    lines.push('🟡 أمور ما زالت مفتوحة — عالجها:');
+    for (const i of open) lines.push(`- ${i.summary}`);
+  }
+  if (facts.length) {
+    lines.push('📌 معلومات مؤكدة عن العميل (لا تطلبها من جديد):');
+    for (const [k, v] of facts) lines.push(`- ${k}: ${v}`);
+  }
+  if (state.active_topic) lines.push(`🎯 الموضوع النشط الآن: ${state.active_topic}`);
+  if (!lines.length) return '';
+  return `\n\n🧭 حالة المحادثة (مرجع داخلي — لا تذكرها للعميل):\n${lines.join('\n')}`;
+}
+
 module.exports = {
   EMPTY_STATE,
   validateState,
@@ -170,4 +200,5 @@ module.exports = {
   EXTRACTION_SYSTEM_PROMPT,
   buildExtractionRequest,
   reconcileSystemState,
+  buildConversationStateBlock,
 };
