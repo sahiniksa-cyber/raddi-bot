@@ -665,6 +665,28 @@ async function handleLidOutgoing({
       });
       return { skipped: true, reason: 'already_sent', lid: true };
     }
+    // Atomic stale guard on the @lid path too (the majority JID type). Mirrors
+    // the main path: a newer customer message (higher inbound_seq) than the one
+    // this reply answered cancels it. Only for AI replies; escalation/system
+    // sends carry no sequence and fail-open.
+    if (payload.source === 'ai_reply') {
+      const claimed = await claimSendOrStale({
+        replyMessageId,
+        userId,
+        conversationId: payload.conversationId,
+        generatedAgainstSeq: payload.generatedAgainstSeq == null ? null : payload.generatedAgainstSeq,
+      });
+      if (!claimed) {
+        const message = 'stale: newer customer message arrived before @lid send';
+        await markReplyMessage(replyMessageId, 'canceled', {
+          sentBy: WORKER_NAME, canceledAt: new Date().toISOString(), error: message,
+        }, messageScope(payload));
+        await updateJobStatus(job.id, {
+          status: 'canceled', finished_at: new Date(), attempts: job.attemptsMade, last_error: message,
+        });
+        return { skipped: true, reason: 'stale_new_inbound', lid: true };
+      }
+    }
     const bot = await waitForConnectedBot(loadedBot, {
       reason: `outgoing-lid:${job.id}`,
       // Aligned with the main path (10s): @lid is the majority JID type and the
