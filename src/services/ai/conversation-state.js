@@ -106,4 +106,52 @@ function parseExtractionResponse(text) {
   return { state: validateState(parsed), extraction_ok: true };
 }
 
-module.exports = { EMPTY_STATE, validateState, parseExtractionResponse };
+const EXTRACTION_SYSTEM_PROMPT = [
+  'You maintain a STRUCTURED STATE of an ongoing customer-service conversation for an online store.',
+  'The store may sell anything (physical goods, bookings, software, services). Stay fully generic — never assume a product, brand, vertical, or payment provider.',
+  'You receive the PRIOR state (JSON) and the NEW messages since it was computed. Output the UPDATED state as STRICT JSON only — no prose, no code fences.',
+  '',
+  'Schema keys: open_issues[], resolved_issues[], active_topic, active_entity{type,ref,label}, known_facts{}, customer_goal, actions_attempted[], last_reply_intent.',
+  '',
+  'Rules:',
+  '- When the customer confirms a step/issue is done (any language: "تم", "دخلت", "وصل", "اشتغل", "ضبط", "جاني الكود", "done", "worked"), MOVE that issue from open_issues to resolved_issues with resolved_by="customer_confirmed". Never keep a customer-confirmed issue open.',
+  '- When a NEW, distinct problem appears, ADD it to open_issues without dropping other still-open issues.',
+  '- known_facts contains ONLY facts the customer stated explicitly (e.g. a payment method they have, an address they gave). Never invent facts.',
+  '- You do NOT decide handoff/escalation status and you do NOT mark any systemic action as done. Do NOT set resolved_by="owner" and do NOT set actions_attempted.confirmed_by="system" — those are stamped by the platform (النظام), not by you.',
+  '- Keep summaries short. Output valid JSON matching the schema and nothing else.',
+].join('\n');
+
+function buildExtractionRequest({ previousState = {}, newTurns = [], lastBotReply = '' } = {}) {
+  const turnsText = (Array.isArray(newTurns) ? newTurns : [])
+    .map((t) => `${t.role === 'assistant' ? 'BOT' : 'CUSTOMER'}: ${String(t.content || '').trim()}`)
+    .join('\n');
+  const userContent = [
+    'PRIOR_STATE:',
+    JSON.stringify(previousState || {}),
+    '',
+    'LAST_BOT_REPLY:',
+    String(lastBotReply || '').trim() || '(none)',
+    '',
+    'NEW_MESSAGES:',
+    turnsText || '(none)',
+    '',
+    'Return the UPDATED state JSON.',
+  ].join('\n');
+  return {
+    messages: [
+      { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
+      { role: 'user', content: userContent },
+    ],
+    temperature: 0.1,
+    max_tokens: 600,
+    response_format: { type: 'json_object' },
+  };
+}
+
+module.exports = {
+  EMPTY_STATE,
+  validateState,
+  parseExtractionResponse,
+  EXTRACTION_SYSTEM_PROMPT,
+  buildExtractionRequest,
+};
