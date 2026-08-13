@@ -12,6 +12,7 @@ const { recordThreadMessage } = require('../services/escalation/escalation-bridg
 const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-review');
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { prepareEscalation } = require('./escalation-routing');
+const { buildStaleClaimQuery } = require('../services/ai/conversation-state');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -415,6 +416,33 @@ async function processOutgoingWhatsapp(job, {
     return { skipped: true, reason: 'already_sent' };
   }
 
+  // Atomic stale guard (flagged). A newer customer message arrived after this
+  // reply was generated → the reply is stale; cancel it and let the newer job
+  // answer. Only for AI replies (escalation/system notices are never stale).
+  if (payload.source === 'ai_reply') {
+    const claimed = await claimSendOrStale({
+      replyMessageId,
+      userId,
+      conversationId: payload.conversationId,
+      generatedAgainstTs: payload.generatedAgainstTs || null,
+      foldedInboundIds: payload.foldedInboundIds || [],
+    });
+    if (!claimed) {
+      await markReplyMessage(replyMessageId, 'canceled', {
+        sentBy: WORKER_NAME,
+        canceledAt: new Date().toISOString(),
+        error: 'stale: newer customer message arrived before send',
+      }, messageScope(payload));
+      await updateJobStatus(job.id, {
+        status: 'canceled',
+        finished_at: new Date(),
+        attempts: job.attemptsMade,
+        last_error: 'stale outgoing reply (newer inbound)',
+      });
+      return { skipped: true, reason: 'stale_new_inbound' };
+    }
+  }
+
   await updateJobStatus(job.id, {
     status: 'processing',
     started_at: new Date(),
@@ -783,6 +811,28 @@ function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
 // process died before the status update. A reply whose message row is already
 // 'sent' (or carries a recorded WhatsApp id) must never ship again. Fail-open:
 // an unknown state must not block real replies.
+// Atomic send-time stale guard. A single conditional UPDATE claims the exclusive
+// right to send (queued_for_send → sending) ONLY IF no newer customer inbound
+// exists than the batch this reply answered — no read-then-send race. Generalizes
+// the owner-paused cancel to also cover a NEW customer message that arrived during
+// the humanization delay / generation. Fail-open: any missing input, disabled
+// flag, or DB error returns true (legacy send) so a guard bug never mutes a bot.
+async function claimSendOrStale({
+  replyMessageId, userId, conversationId, generatedAgainstTs, foldedInboundIds = [], database = db,
+} = {}) {
+  if (process.env.SEND_STALE_GUARD_ENABLED !== 'true') return true;
+  if (!replyMessageId || !userId || !conversationId || !generatedAgainstTs || !database?.isConfigured?.()) return true;
+  try {
+    const { sql, params } = buildStaleClaimQuery({
+      replyMessageId, userId, conversationId, generatedAgainstTs, foldedInboundIds,
+    });
+    const r = await database.query(sql, params);
+    return r.rowCount > 0;
+  } catch (_) {
+    return true; // fail-open — never block a legitimate reply on a guard error
+  }
+}
+
 async function isReplyAlreadySent({
   replyMessageId,
   userId,
@@ -1121,6 +1171,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 
 module.exports = {
   cancelDisabledAutoReply,
+  claimSendOrStale,
   completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
   handleLidOutgoing,

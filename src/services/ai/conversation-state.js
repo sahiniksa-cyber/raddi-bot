@@ -214,12 +214,15 @@ function isSemanticDuplicate({ candidateIntent, recentReplyIntents = [], hasNewC
  * tenant-scoped by user_id in both the outer row and the NOT EXISTS subquery.
  */
 function buildStaleClaimQuery({ replyMessageId, userId, conversationId, generatedAgainstTs, foldedInboundIds = [] }) {
+  // 'sending' is claimable too so a BullMQ retry of the SAME reply (after a
+  // transient send failure) can re-claim; only a genuinely newer inbound (the
+  // NOT EXISTS) makes it stale.
   const sql = `UPDATE messages
    SET status = 'sending'
  WHERE id = $1
    AND user_id = $2
    AND conversation_id = $3
-   AND status IN ('queued_for_send')
+   AND status IN ('queued_for_send', 'sending')
    AND NOT EXISTS (
      SELECT 1 FROM messages m2
       WHERE m2.user_id = $2

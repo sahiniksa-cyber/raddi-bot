@@ -35,7 +35,7 @@ test('buildStaleClaimQuery scopes by user_id and excludes folded inbound ids', (
   });
   assert.ok(/UPDATE messages/.test(sql));
   assert.ok(/SET status = 'sending'/.test(sql));
-  assert.ok(/status IN \('queued_for_send'\)/.test(sql));
+  assert.ok(/status IN \('queued_for_send', 'sending'\)/.test(sql));
   assert.ok(/user_id = \$2/.test(sql));            // explicit tenant scope
   assert.ok(/NOT EXISTS/.test(sql));
   assert.ok(/direction = 'inbound'/.test(sql));
