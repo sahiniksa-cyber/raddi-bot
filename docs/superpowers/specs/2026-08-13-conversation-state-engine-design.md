@@ -266,3 +266,24 @@ UPDATE messages
 **benchmark:** `scripts/benchmark-state-extraction.js` يقيس p50/p95/p99 ونسبة الفشل لنداء الاستخراج عبر نفس مسار العامل، بلا DB/Redis/واتساب — يُشغَّل على staging بمفاتيح المزوّد.
 
 **يحتاج تحقّق staging قبل تفعيل المفاتيح:** زمن الاستخراج المضاف قبل التوليد، وقيم p50/p95/p99 الفعلية، وسلوك inbound_seq تحت التزامن.
+
+---
+
+## 13. المرحلة 1.2 — Fail-closed للـstale guard + Rollout (منجزة)
+
+**Fail-closed لردود الـAI:** فشل التحقق في حارس stale (خطأ DB/عدم تهيئة) لم يعد **fail-open** (كان قد يُرسل ردًّا ربما قديمًا). الآن `claimSendOrStale({ throwOnError: true })` تُرمى منه أخطاء **retriable** (`STALE_GUARD_DB_ERROR`, `retriable=true`) فيعيد BullMQ المحاولة ولا يصل نص غير مُتحقَّق منه. مسار @lid يُعيد رمي هذا الخطأ (لا يحوّله لـ«best-effort skipped»). **manual/campaign/escalation لا تمسّها** (لا تستدعي الحارس، `source!=='ai_reply'`). seq الغائب (وظيفة ما قبل الترحيل) يبقى fail-open **عمدًا** (ليس فشلًا) — والـrollout يضمن عدم حدوثه بعد التفعيل.
+
+**اختبارات:** خطأ DB بلا throwOnError → fail-open (للمستدعين غير الـAI)؛ مع throwOnError → يرمي retriable؛ واختبار تكامل يؤكد أن ردّ الـAI **لا يُرسَل** عند فشل التحقق (normal JID و@lid).
+
+### Rollout — ترتيب إلزامي (لتجنّب حبس ردود ما قبل الترحيل)
+
+1. **انشر الكود** بكل المفاتيح `OFF`. الآن يبدأ ختم `generatedAgainstSeq` على الردود الجديدة، ويبدأ ملء `inbound_seq`.
+2. **دع طابور الإرسال يستنزف** كل الوظائف القديمة التي لا تحمل `generatedAgainstSeq` (الردود المُنتَجة قبل النشر). زمن نموذجي: أطول من (تأخير الأنسنة + أقصى إعادة محاولة + هامش) — دقائق قليلة، تحقّق من فراغ الطابور من وظائف ما قبل النشر.
+3. **فعّل `SEND_STALE_GUARD_ENABLED=true` فقط بعد ذلك.** قبل هذه النقطة، تفعيله يعني أن ردودًا بلا seq ستمرّ عبر مسار fail-open (تُرسَل)، وهو غير ضارّ لكن بلا حماية؛ الانتظار يضمن الحماية الكاملة بلا حبس أي رد.
+4. **`CONVERSATION_STATE_ENABLED` مستقل**: يُفعّل بعد اجتياز benchmark الاستخراج (p50/p95/p99 ونسبة الفشل مقبولة).
+5. **`SEMANTIC_DEDUP_ENABLED` مستقل**: يُفعّل أخيرًا بعد رصد عدم قمع ردود مشروعة.
+6. عند أي شكّ: أطفئ المفتاح المعني — كلها إضافية وغير كاسرة.
+
+### التحقق قبل الدمج/التفعيل
+- `node scripts/benchmark-state-extraction.js 100 4` على staging → p50/p95/p99 + نسبة الفشل.
+- `STAGING_CONFIRM=1 STAGING_DATABASE_URL=... node scripts/staging-stale-concurrency-check.js 25` → يغطّي normal/@lid × (during-generation/before-send/atomicity) مكرّرًا.
