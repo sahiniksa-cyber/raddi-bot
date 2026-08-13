@@ -552,6 +552,21 @@ const statements = [
      END IF;
    END $$`,
 
+  // ── Added 2026-08-13 (phase 1.1): DB-sourced monotonic inbound sequence for
+  //    the atomic send-time stale guard. Replaces an app-clock-vs-Postgres-clock
+  //    timestamp comparison (which was skew-prone) with a pure integer sequence
+  //    sourced entirely from the database. conversations.inbound_seq is bumped
+  //    on every inbound; each inbound message is stamped with the value it got.
+  //    A reply records the max seq it answered; the guard cancels it if any
+  //    inbound with a higher seq exists. messages.inbound_seq is nullable with
+  //    NO default → a metadata-only ALTER (no rewrite of the large table); rows
+  //    predating this migration stay NULL and never trip the guard.
+  `ALTER TABLE conversations
+     ADD COLUMN IF NOT EXISTS inbound_seq BIGINT NOT NULL DEFAULT 0`,
+
+  `ALTER TABLE messages
+     ADD COLUMN IF NOT EXISTS inbound_seq BIGINT`,
+
   // ── Per-customer API keys that override the admin defaults for a user.
   //    Encrypted at rest (AES-256-GCM) when SECRETS_KEY is set; falls back
   //    to inline plaintext in dev (still in api_key_encrypted column —
