@@ -420,11 +420,14 @@ async function processOutgoingWhatsapp(job, {
   // reply was generated → the reply is stale; cancel it and let the newer job
   // answer. Only for AI replies (escalation/system notices are never stale).
   if (payload.source === 'ai_reply') {
+    // throwOnError: a DB/guard failure must NOT send an unverified reply — it
+    // throws retriable and BullMQ retries. Propagates out of the processor.
     const claimed = await claimSendOrStale({
       replyMessageId,
       userId,
       conversationId: payload.conversationId,
       generatedAgainstSeq: payload.generatedAgainstSeq == null ? null : payload.generatedAgainstSeq,
+      throwOnError: true,
     });
     if (!claimed) {
       await markReplyMessage(replyMessageId, 'canceled', {
@@ -675,6 +678,7 @@ async function handleLidOutgoing({
         userId,
         conversationId: payload.conversationId,
         generatedAgainstSeq: payload.generatedAgainstSeq == null ? null : payload.generatedAgainstSeq,
+        throwOnError: true,
       });
       if (!claimed) {
         const message = 'stale: newer customer message arrived before @lid send';
@@ -764,10 +768,10 @@ async function handleLidOutgoing({
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send succeeded jid=${sender}`);
     return { sent: true, replyMessageId, lid: true };
   } catch (err) {
-    // Review failures are retriable and must never be converted into the
-    // legacy @lid "best effort skipped" result. BullMQ retries the job; no
-    // unreviewed text reaches WhatsApp.
-    if (err?.code === 'PRE_SEND_REVIEW_FAILED') throw err;
+    // Review failures and stale-guard DB failures are retriable and must never
+    // be converted into the legacy @lid "best effort skipped" result. BullMQ
+    // retries the job; no unreviewed or unverified text reaches WhatsApp.
+    if (err?.code === 'PRE_SEND_REVIEW_FAILED' || err?.code === 'STALE_GUARD_DB_ERROR') throw err;
     sendError = err;
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send failed jid=${sender}: ${err.message}`);
   }
@@ -832,28 +836,46 @@ function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
 // process died before the status update. A reply whose message row is already
 // 'sent' (or carries a recorded WhatsApp id) must never ship again. Fail-open:
 // an unknown state must not block real replies.
+function makeRetriableStaleError(message) {
+  const err = new Error(`stale guard verification failed (retriable): ${message}`);
+  err.code = 'STALE_GUARD_DB_ERROR';
+  err.retriable = true;
+  return err;
+}
+
 // Atomic send-time stale guard. A single conditional UPDATE claims the exclusive
 // right to send (queued_for_send → sending) ONLY IF no newer customer inbound
 // exists than the batch this reply answered — no read-then-send race. Generalizes
 // the owner-paused cancel to also cover a NEW customer message that arrived during
-// the humanization delay / generation. Fail-open: any missing input, disabled
-// flag, or DB error returns true (legacy send) so a guard bug never mutes a bot.
+// the humanization delay / generation.
+//
+// throwOnError: AI-reply callers pass true so a DB/guard FAILURE does NOT fail
+// open (never sends an unverified reply that might be stale) — instead it throws
+// a RETRIABLE error and BullMQ retries the job later. A seq that is simply absent
+// (a pre-inbound_seq-migration job) is NOT a failure: it fail-opens by design,
+// and the rollout enables the guard only after such jobs have drained. Manual /
+// campaign / escalation sends never call this guard (source !== 'ai_reply').
 async function claimSendOrStale({
-  replyMessageId, userId, conversationId, generatedAgainstSeq, database = db,
+  replyMessageId, userId, conversationId, generatedAgainstSeq, database = db, throwOnError = false,
 } = {}) {
   if (process.env.SEND_STALE_GUARD_ENABLED !== 'true') return true;
-  // Fail-open when the sequence is absent (reply generated before the inbound_seq
-  // migration, or seq unavailable) — never block a legitimate reply.
-  if (!replyMessageId || !userId || !conversationId
-      || generatedAgainstSeq == null || !database?.isConfigured?.()) return true;
+  // seq absent → pre-migration job; fail-open by design (not a failure).
+  if (!replyMessageId || !userId || !conversationId || generatedAgainstSeq == null) return true;
+  if (!database?.isConfigured?.()) {
+    if (throwOnError) throw makeRetriableStaleError('database not configured');
+    return true;
+  }
   try {
     const { sql, params } = buildStaleClaimQuery({
       replyMessageId, userId, conversationId, generatedAgainstSeq,
     });
     const r = await database.query(sql, params);
     return r.rowCount > 0;
-  } catch (_) {
-    return true; // fail-open — never block a legitimate reply on a guard error
+  } catch (err) {
+    // A verification FAILURE must not silently send. AI-reply callers get a
+    // retriable throw; other callers keep the legacy fail-open.
+    if (throwOnError) throw makeRetriableStaleError(err.message);
+    return true;
   }
 }
 
