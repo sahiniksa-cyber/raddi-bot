@@ -73,4 +73,34 @@ async function saveConversationState({
   } catch (_) { /* fail-soft: state persistence never blocks a reply */ }
 }
 
-module.exports = { loadConversationState, saveConversationState };
+/**
+ * Run one LLM extraction to update the semantic state from the customer's new
+ * turns, then reconcile system-owned truth over it. Fail-soft on every path
+ * (no client, throw, timeout, non-JSON) → returns the reconciled PRIOR state
+ * with extraction_ok=false so the caller keeps it as a seed but never presents
+ * it as current truth. Exactly one auxiliary LLM call per reply cycle.
+ */
+async function extractConversationState({
+  userId, conversationId, previousState = {}, newTurns = [], lastBotReply = '',
+  config = {}, aiClient, systemFacts = {}, timeoutMs,
+} = {}) {
+  const prior = validateState(previousState);
+  try {
+    if (!aiClient?.raw) throw new Error('no extraction client');
+    const req = buildExtractionRequest({ previousState: prior, newTurns, lastBotReply });
+    const limit = Number(timeoutMs || process.env.CONVERSATION_STATE_EXTRACT_TIMEOUT_MS || 9000);
+    let timer;
+    const resp = await Promise.race([
+      aiClient.raw(req),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('extract timeout')), limit); }),
+    ]).finally(() => clearTimeout(timer));
+    const content = resp?.choices?.[0]?.message?.content || '';
+    const { state, extraction_ok } = parseExtractionResponse(content);
+    if (!extraction_ok) return { state: reconcileSystemState(prior, systemFacts), extraction_ok: false };
+    return { state: reconcileSystemState(state, systemFacts), extraction_ok: true };
+  } catch (_) {
+    return { state: reconcileSystemState(prior, systemFacts), extraction_ok: false };
+  }
+}
+
+module.exports = { loadConversationState, saveConversationState, extractConversationState };
