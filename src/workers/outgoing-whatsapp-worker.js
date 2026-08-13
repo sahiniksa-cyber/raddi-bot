@@ -424,8 +424,7 @@ async function processOutgoingWhatsapp(job, {
       replyMessageId,
       userId,
       conversationId: payload.conversationId,
-      generatedAgainstTs: payload.generatedAgainstTs || null,
-      foldedInboundIds: payload.foldedInboundIds || [],
+      generatedAgainstSeq: payload.generatedAgainstSeq == null ? null : payload.generatedAgainstSeq,
     });
     if (!claimed) {
       await markReplyMessage(replyMessageId, 'canceled', {
@@ -818,13 +817,16 @@ function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
 // the humanization delay / generation. Fail-open: any missing input, disabled
 // flag, or DB error returns true (legacy send) so a guard bug never mutes a bot.
 async function claimSendOrStale({
-  replyMessageId, userId, conversationId, generatedAgainstTs, foldedInboundIds = [], database = db,
+  replyMessageId, userId, conversationId, generatedAgainstSeq, database = db,
 } = {}) {
   if (process.env.SEND_STALE_GUARD_ENABLED !== 'true') return true;
-  if (!replyMessageId || !userId || !conversationId || !generatedAgainstTs || !database?.isConfigured?.()) return true;
+  // Fail-open when the sequence is absent (reply generated before the inbound_seq
+  // migration, or seq unavailable) — never block a legitimate reply.
+  if (!replyMessageId || !userId || !conversationId
+      || generatedAgainstSeq == null || !database?.isConfigured?.()) return true;
   try {
     const { sql, params } = buildStaleClaimQuery({
-      replyMessageId, userId, conversationId, generatedAgainstTs, foldedInboundIds,
+      replyMessageId, userId, conversationId, generatedAgainstSeq,
     });
     const r = await database.query(sql, params);
     return r.rowCount > 0;

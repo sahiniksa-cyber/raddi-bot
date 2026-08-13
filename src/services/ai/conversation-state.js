@@ -208,15 +208,17 @@ function isSemanticDuplicate({ candidateIntent, recentReplyIntents = [], hasNewC
 
 /**
  * Atomic send-time stale claim. A single conditional UPDATE transitions the
- * reply row queued_for_send → sending ONLY IF no newer customer inbound (than
- * the batch this reply answered) exists — closing the read-then-send race. 0
- * rows affected ⇒ a newer message arrived ⇒ the reply is stale. Explicitly
- * tenant-scoped by user_id in both the outer row and the NOT EXISTS subquery.
+ * reply row queued_for_send → sending ONLY IF no customer inbound with a HIGHER
+ * sequence than the batch this reply answered exists — closing the
+ * read-then-send race. 0 rows affected ⇒ a newer message arrived ⇒ the reply is
+ * stale. Comparison is a pure integer sequence sourced entirely from the
+ * database (conversations.inbound_seq → messages.inbound_seq), so there is no
+ * app-clock-vs-DB-clock skew. Explicitly tenant-scoped by user_id in both the
+ * outer row and the NOT EXISTS subquery. 'sending' is claimable too so a BullMQ
+ * retry of the SAME reply can re-claim; only a genuinely newer inbound makes it
+ * stale. Rows predating the inbound_seq migration are NULL and never match `>`.
  */
-function buildStaleClaimQuery({ replyMessageId, userId, conversationId, generatedAgainstTs, foldedInboundIds = [] }) {
-  // 'sending' is claimable too so a BullMQ retry of the SAME reply (after a
-  // transient send failure) can re-claim; only a genuinely newer inbound (the
-  // NOT EXISTS) makes it stale.
+function buildStaleClaimQuery({ replyMessageId, userId, conversationId, generatedAgainstSeq }) {
   const sql = `UPDATE messages
    SET status = 'sending'
  WHERE id = $1
@@ -228,11 +230,10 @@ function buildStaleClaimQuery({ replyMessageId, userId, conversationId, generate
       WHERE m2.user_id = $2
         AND m2.conversation_id = $3
         AND m2.direction = 'inbound'
-        AND m2.created_at > $4
-        AND m2.id <> ALL($5::uuid[])
+        AND m2.inbound_seq > $4
    )
  RETURNING id`;
-  return { sql, params: [replyMessageId, userId, conversationId, generatedAgainstTs, foldedInboundIds] };
+  return { sql, params: [replyMessageId, userId, conversationId, generatedAgainstSeq] };
 }
 
 module.exports = {

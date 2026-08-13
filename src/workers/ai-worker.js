@@ -288,7 +288,7 @@ async function loadPendingInboundMessages({
          AND direction = 'outbound'
          AND role = 'assistant'
      )
-     SELECT id, sender, content, provider_message_id, raw_payload
+     SELECT id, sender, content, provider_message_id, raw_payload, inbound_seq
      FROM messages m
      WHERE conversation_id = $1
        AND user_id = $2
@@ -512,7 +512,7 @@ async function loadRecentAssistantReplies({ database = db, userId, conversationI
   }
 }
 
-async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, generatedAgainstTs = null, foldedInboundIds = [], replyIntent = null, database = db }) {
+async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, generatedAgainstSeq = null, replyIntent = null, database = db }) {
   // provider_message_id must be unique per reply (the UNIQUE constraint is on
   // (user_id, provider_message_id)). The jobId is shared across all replies for
   // the same conversation (BullMQ uses conversation-${id} as the job key for
@@ -533,8 +533,7 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
         source: WORKER_NAME,
         jobId,
         qualityGate: compactQualityGateAudit(qualityGateAudit),
-        generatedAgainstTs,
-        foldedInboundIds,
+        generatedAgainstSeq,
         replyIntent,
       }),
     ],
@@ -1224,11 +1223,15 @@ async function processAiReply(job) {
       return { skipped: true, reason: 'duplicate_suppressed' };
     }
 
-    // Generation reference for the atomic send-time stale guard: the batch of
-    // inbound this reply answered, and when it was produced. A customer message
-    // that arrives after this (and isn't in the folded set) makes the reply stale.
-    const generatedAgainstTs = new Date().toISOString();
-    const foldedInboundIds = enrichedMessages.map(message => message.id);
+    // Generation reference for the atomic send-time stale guard: the MAX
+    // DB-sourced inbound sequence this reply answered. A customer message that
+    // arrives after this gets a higher inbound_seq and makes the reply stale —
+    // a pure integer comparison, no app-vs-DB clock skew.
+    const generatedAgainstSeq = enrichedMessages.reduce((max, m) => {
+      const seq = Number(m.inbound_seq);
+      return Number.isFinite(seq) && seq > max ? seq : max;
+    }, Number.NEGATIVE_INFINITY);
+    const generatedAgainstSeqValue = Number.isFinite(generatedAgainstSeq) ? generatedAgainstSeq : null;
     const replyMessageId = await storeAssistantMessage({
       userId,
       conversationId: conversation.id,
@@ -1236,8 +1239,7 @@ async function processAiReply(job) {
       reply: customerReply,
       jobId: job.id,
       qualityGateAudit: ai.lastDebug?.qualityGate,
-      generatedAgainstTs,
-      foldedInboundIds,
+      generatedAgainstSeq: generatedAgainstSeqValue,
       replyIntent: ai.lastDebug?.qualityGate?.intent || null,
     });
     const replyDelayMs = resolveReplyDelayMs(config);
@@ -1269,8 +1271,7 @@ async function processAiReply(job) {
       source: 'ai_reply',
       preSendReviewRequired: true,
       handoffAcknowledgement: Boolean(escalation.ownerMessage),
-      generatedAgainstTs,
-      foldedInboundIds,
+      generatedAgainstSeq: generatedAgainstSeqValue,
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,

@@ -28,10 +28,9 @@ test('semantic dup: different intent → NOT duplicate; missing intent → NOT d
   }), false);
 });
 
-test('buildStaleClaimQuery scopes by user_id and excludes folded inbound ids', () => {
+test('buildStaleClaimQuery uses a DB-sourced integer sequence, tenant-scoped', () => {
   const { sql, params } = buildStaleClaimQuery({
-    replyMessageId: 'r1', userId: 'u1', conversationId: 'c1',
-    generatedAgainstTs: '2026-08-13T10:00:00.000Z', foldedInboundIds: ['a', 'b'],
+    replyMessageId: 'r1', userId: 'u1', conversationId: 'c1', generatedAgainstSeq: 42,
   });
   assert.ok(/UPDATE messages/.test(sql));
   assert.ok(/SET status = 'sending'/.test(sql));
@@ -39,7 +38,7 @@ test('buildStaleClaimQuery scopes by user_id and excludes folded inbound ids', (
   assert.ok(/user_id = \$2/.test(sql));            // explicit tenant scope
   assert.ok(/NOT EXISTS/.test(sql));
   assert.ok(/direction = 'inbound'/.test(sql));
-  assert.ok(/created_at > \$4/.test(sql));
-  assert.ok(/<> ALL\(\$5/.test(sql));
-  assert.deepEqual(params, ['r1', 'u1', 'c1', '2026-08-13T10:00:00.000Z', ['a', 'b']]);
+  assert.ok(/m2\.inbound_seq > \$4/.test(sql));    // integer sequence, no clock
+  assert.ok(!/created_at/.test(sql));              // no timestamp comparison at all
+  assert.deepEqual(params, ['r1', 'u1', 'c1', 42]);
 });
