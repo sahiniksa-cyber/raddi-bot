@@ -9,8 +9,12 @@
  * migration. Output is a report for human review before anything is converted.
  *
  * SAFETY: read-only. Requires an explicit LEAK_SCAN_DATABASE_URL (never the app's
- * DATABASE_URL) and LEAK_SCAN_CONFIRM=1. Runs the query in a READ ONLY
- * transaction as belt-and-suspenders. Does exactly one SELECT; no writes ever.
+ * DATABASE_URL) and LEAK_SCAN_CONFIRM=1. The SELECT reads ONLY three columns —
+ * user_id and the two free-text operational fields (botInstructions,
+ * escalationConditions) — never the whole `config` blob (which holds API keys,
+ * products, etc.). Runs inside a READ ONLY transaction with a 15s statement
+ * timeout and default_transaction_read_only=on. One SELECT; no writes ever; no
+ * migration. Safe to point directly at production.
  *
  * Usage:
  *   LEAK_SCAN_CONFIRM=1 LEAK_SCAN_DATABASE_URL=postgres://... \
@@ -128,12 +132,26 @@ async function main() {
   const jsonIdx = process.argv.indexOf('--json');
   const jsonPath = jsonIdx > -1 ? process.argv[jsonIdx + 1] : null;
 
-  const pool = new Pool({ connectionString: url, ssl: /sslmode=require/.test(url) ? { rejectUnauthorized: false } : undefined });
+  const pool = new Pool({
+    connectionString: url,
+    ssl: /sslmode=require/.test(url) ? { rejectUnauthorized: false } : undefined,
+    // Session-level guards so this can NEVER write, even by accident, and never
+    // hangs on production: read-only default + short statement timeout.
+    options: '-c default_transaction_read_only=on -c statement_timeout=15000',
+  });
   const client = await pool.connect();
   let rows;
   try {
     await client.query('BEGIN TRANSACTION READ ONLY'); // hard guarantee: no writes
-    const res = await client.query('SELECT user_id, config FROM bot_configs');
+    await client.query("SET LOCAL statement_timeout = '15000'");
+    // Narrowed on purpose: read ONLY user_id + the two free-text operational
+    // fields, never the whole `config` blob (which holds keys, products, etc.).
+    const res = await client.query(
+      `SELECT user_id,
+              config->>'botInstructions'      AS bot_instructions,
+              config->>'escalationConditions' AS escalation_conditions
+         FROM bot_configs`,
+    );
     rows = res.rows;
     await client.query('COMMIT');
   } finally {
@@ -145,7 +163,10 @@ async function main() {
   const totals = {}; // category -> count
   let tenantsWithLeaks = 0;
   for (const row of rows) {
-    const findings = scanConfig(row.config).filter(f => f.isLeak);
+    const findings = scanConfig({
+      botInstructions: row.bot_instructions,
+      escalationConditions: row.escalation_conditions,
+    }).filter(f => f.isLeak);
     if (!findings.length) continue;
     tenantsWithLeaks += 1;
     for (const f of findings) totals[f.category] = (totals[f.category] || 0) + 1;
