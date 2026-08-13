@@ -119,9 +119,26 @@ async function recordJob(queueName, jobKey, payload, metadata = {}) {
   return result.rows[0]?.id || null;
 }
 
+// Tenant-scope a job key whose natural value is NOT globally unique. The
+// jobs(queue_name, job_key) uniqueness and BullMQ jobId are a shared namespace
+// across all tenants; a WhatsApp provider key.id is unique only per sender
+// device, so two tenants could collide and one tenant's job would clobber the
+// other's. Prefixing with the tenant id makes the key tenant-safe. Idempotent,
+// and a no-op when the tenant or key is absent. (AI-reply keys use the
+// conversation UUID and outgoing keys use the reply-message UUID — both are
+// globally unique, so they never need scoping.)
+function buildScopedJobKey(userId, rawKey) {
+  if (!rawKey) return rawKey == null ? null : rawKey;
+  const tenant = userId ? String(userId) : '';
+  if (!tenant) return rawKey;
+  const key = String(rawKey);
+  return key.startsWith(`${tenant}:`) ? key : `${tenant}:${key}`;
+}
+
 async function enqueueIncomingMessage(payload, options = {}) {
   const { incomingMessages } = getQueues();
-  const jobKey = options.jobKey || payload.providerMessageId || payload.messageId;
+  const jobKey = options.jobKey
+    || buildScopedJobKey(payload.userId, payload.providerMessageId || payload.messageId);
   await recordJob(QUEUE_NAMES.incomingMessages, jobKey, payload, payload);
   return incomingMessages.add('process-incoming-message', payload, {
     jobId: jobKey || undefined,
@@ -233,6 +250,7 @@ async function closeQueues() {
 module.exports = {
   QUEUE_NAMES,
   buildAiReplyQueueOptions,
+  buildScopedJobKey,
   closeQueues,
   enqueueAiReply,
   enqueueIncomingMessage,
