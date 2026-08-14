@@ -1,0 +1,64 @@
+name: CI
+
+# Runs on every pull request (and on pushes to the long-lived branches so the
+# PR base is validated too). No production secrets, no live connections, no
+# database: the whole suite runs on mocked db/redis, so CI needs nothing but the
+# checked-out code and npm.
+on:
+  pull_request:
+  push:
+    branches: [master, production]
+  workflow_dispatch:
+
+# A newer push to the same PR/branch cancels the older in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20']
+    # Explicitly blank the connection env so nothing can reach a real backend.
+    # The suite is designed to run fully on mocked db/redis; if a test ever tries
+    # to open a live connection, it must fail here rather than touch production.
+    env:
+      NODE_ENV: test
+      CI: 'true'
+      DATABASE_URL: ''
+      REDIS_URL: ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax-check sources and scripts
+        run: |
+          node -e "require('./src/db/migrations/init.js'); console.log('migrations parse OK')"
+          for f in scripts/*.js; do node --check "$f"; done
+
+      - name: Run test suite (offline — excludes live-DNS SSRF tests)
+        shell: bash
+        run: |
+          # Two files exercise the SSRF guard via LIVE DNS resolution
+          # (assertPublicUrl resolves hostnames / bracketed IPv6 literals through
+          # the OS resolver). Per the "no live connections" CI policy they run on
+          # dev machines, not here. Everything else (264 files) runs offline.
+          files=$(ls tests/*.test.js | grep -vE 'scan-store-ssrf-blocked\.test\.js|ssrf-fetchurl-guard\.test\.js')
+          echo "Running $(echo "$files" | wc -l) test files (2 live-DNS SSRF files excluded)"
+          node --test $files

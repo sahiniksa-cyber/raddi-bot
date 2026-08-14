@@ -12,6 +12,7 @@ const { recordThreadMessage } = require('../services/escalation/escalation-bridg
 const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-review');
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { prepareEscalation } = require('./escalation-routing');
+const { buildStaleClaimQuery } = require('../services/ai/conversation-state');
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -415,6 +416,35 @@ async function processOutgoingWhatsapp(job, {
     return { skipped: true, reason: 'already_sent' };
   }
 
+  // Atomic stale guard (flagged). A newer customer message arrived after this
+  // reply was generated → the reply is stale; cancel it and let the newer job
+  // answer. Only for AI replies (escalation/system notices are never stale).
+  if (payload.source === 'ai_reply') {
+    // throwOnError: a DB/guard failure must NOT send an unverified reply — it
+    // throws retriable and BullMQ retries. Propagates out of the processor.
+    const claimed = await claimSendOrStale({
+      replyMessageId,
+      userId,
+      conversationId: payload.conversationId,
+      generatedAgainstSeq: payload.generatedAgainstSeq == null ? null : payload.generatedAgainstSeq,
+      throwOnError: true,
+    });
+    if (!claimed) {
+      await markReplyMessage(replyMessageId, 'canceled', {
+        sentBy: WORKER_NAME,
+        canceledAt: new Date().toISOString(),
+        error: 'stale: newer customer message arrived before send',
+      }, messageScope(payload));
+      await updateJobStatus(job.id, {
+        status: 'canceled',
+        finished_at: new Date(),
+        attempts: job.attemptsMade,
+        last_error: 'stale outgoing reply (newer inbound)',
+      });
+      return { skipped: true, reason: 'stale_new_inbound' };
+    }
+  }
+
   await updateJobStatus(job.id, {
     status: 'processing',
     started_at: new Date(),
@@ -638,6 +668,29 @@ async function handleLidOutgoing({
       });
       return { skipped: true, reason: 'already_sent', lid: true };
     }
+    // Atomic stale guard on the @lid path too (the majority JID type). Mirrors
+    // the main path: a newer customer message (higher inbound_seq) than the one
+    // this reply answered cancels it. Only for AI replies; escalation/system
+    // sends carry no sequence and fail-open.
+    if (payload.source === 'ai_reply') {
+      const claimed = await claimSendOrStale({
+        replyMessageId,
+        userId,
+        conversationId: payload.conversationId,
+        generatedAgainstSeq: payload.generatedAgainstSeq == null ? null : payload.generatedAgainstSeq,
+        throwOnError: true,
+      });
+      if (!claimed) {
+        const message = 'stale: newer customer message arrived before @lid send';
+        await markReplyMessage(replyMessageId, 'canceled', {
+          sentBy: WORKER_NAME, canceledAt: new Date().toISOString(), error: message,
+        }, messageScope(payload));
+        await updateJobStatus(job.id, {
+          status: 'canceled', finished_at: new Date(), attempts: job.attemptsMade, last_error: message,
+        });
+        return { skipped: true, reason: 'stale_new_inbound', lid: true };
+      }
+    }
     const bot = await waitForConnectedBot(loadedBot, {
       reason: `outgoing-lid:${job.id}`,
       // Aligned with the main path (10s): @lid is the majority JID type and the
@@ -715,10 +768,10 @@ async function handleLidOutgoing({
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send succeeded jid=${sender}`);
     return { sent: true, replyMessageId, lid: true };
   } catch (err) {
-    // Review failures are retriable and must never be converted into the
-    // legacy @lid "best effort skipped" result. BullMQ retries the job; no
-    // unreviewed text reaches WhatsApp.
-    if (err?.code === 'PRE_SEND_REVIEW_FAILED') throw err;
+    // Review failures and stale-guard DB failures are retriable and must never
+    // be converted into the legacy @lid "best effort skipped" result. BullMQ
+    // retries the job; no unreviewed or unverified text reaches WhatsApp.
+    if (err?.code === 'PRE_SEND_REVIEW_FAILED' || err?.code === 'STALE_GUARD_DB_ERROR') throw err;
     sendError = err;
     console.warn(`${new Date().toISOString()} [${WORKER_NAME}] @lid best-effort send failed jid=${sender}: ${err.message}`);
   }
@@ -783,6 +836,49 @@ function shouldCancelOutgoingForStoppedBot(bot, payload = {}) {
 // process died before the status update. A reply whose message row is already
 // 'sent' (or carries a recorded WhatsApp id) must never ship again. Fail-open:
 // an unknown state must not block real replies.
+function makeRetriableStaleError(message) {
+  const err = new Error(`stale guard verification failed (retriable): ${message}`);
+  err.code = 'STALE_GUARD_DB_ERROR';
+  err.retriable = true;
+  return err;
+}
+
+// Atomic send-time stale guard. A single conditional UPDATE claims the exclusive
+// right to send (queued_for_send → sending) ONLY IF no newer customer inbound
+// exists than the batch this reply answered — no read-then-send race. Generalizes
+// the owner-paused cancel to also cover a NEW customer message that arrived during
+// the humanization delay / generation.
+//
+// throwOnError: AI-reply callers pass true so a DB/guard FAILURE does NOT fail
+// open (never sends an unverified reply that might be stale) — instead it throws
+// a RETRIABLE error and BullMQ retries the job later. A seq that is simply absent
+// (a pre-inbound_seq-migration job) is NOT a failure: it fail-opens by design,
+// and the rollout enables the guard only after such jobs have drained. Manual /
+// campaign / escalation sends never call this guard (source !== 'ai_reply').
+async function claimSendOrStale({
+  replyMessageId, userId, conversationId, generatedAgainstSeq, database = db, throwOnError = false,
+} = {}) {
+  if (process.env.SEND_STALE_GUARD_ENABLED !== 'true') return true;
+  // seq absent → pre-migration job; fail-open by design (not a failure).
+  if (!replyMessageId || !userId || !conversationId || generatedAgainstSeq == null) return true;
+  if (!database?.isConfigured?.()) {
+    if (throwOnError) throw makeRetriableStaleError('database not configured');
+    return true;
+  }
+  try {
+    const { sql, params } = buildStaleClaimQuery({
+      replyMessageId, userId, conversationId, generatedAgainstSeq,
+    });
+    const r = await database.query(sql, params);
+    return r.rowCount > 0;
+  } catch (err) {
+    // A verification FAILURE must not silently send. AI-reply callers get a
+    // retriable throw; other callers keep the legacy fail-open.
+    if (throwOnError) throw makeRetriableStaleError(err.message);
+    return true;
+  }
+}
+
 async function isReplyAlreadySent({
   replyMessageId,
   userId,
@@ -1121,6 +1217,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 
 module.exports = {
   cancelDisabledAutoReply,
+  claimSendOrStale,
   completeSuppressedOutgoing,
   createOutgoingWhatsappWorker,
   handleLidOutgoing,
