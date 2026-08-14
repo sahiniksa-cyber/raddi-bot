@@ -3,8 +3,14 @@
 const { detectEditCommand, isYes, isNo, normalizeArabic } = require('../../../lib/prompt-edit-keywords');
 const { normalizeEscalationTarget } = require('../../workers/escalation-routing');
 const { applyProductOp, applyInstantReplyOp, applyDoNotReplyOp } = require('../../../lib/config-edit-appliers');
+const { routeEditBody } = require('../instruction-routing/route-edit');
 
 const TARGET_FIELD = { prompt: 'botInstructions', products: 'products', instant_replies: 'autoReplyKeywords', do_not_reply: 'doNotReplyList' };
+// Structured fields the Instruction Routing Layer may write to (whitelist — the
+// applied field is derived from a fixed SINK map, never raw merchant input).
+const ROUTED_FIELDS = new Set([
+  'escalationRules', 'slaPolicies', 'tenantPolicies', 'actionRequests', 'prohibitions', 'pendingKnowledge',
+]);
 const APPLIERS = { products: applyProductOp, instant_replies: applyInstantReplyOp, do_not_reply: applyDoNotReplyOp };
 const APPLIED_MSG = {
   prompt: '✅ تم تعديل البرومنت. أمشي عليه من الحين.',
@@ -159,6 +165,10 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     const target = pending.target || 'prompt';
     if (target === 'prompt') {
       await applyInstructions(database, userId, pending.proposed_instructions);
+    } else if (target.startsWith('routed:')) {
+      const field = target.slice('routed:'.length);
+      if (!ROUTED_FIELDS.has(field)) throw new Error(`unknown routed field: ${field}`);
+      await applySectionValue(database, userId, field, pending.proposed_value);
     } else {
       await applySectionValue(database, userId, TARGET_FIELD[target], pending.proposed_value);
     }
@@ -277,6 +287,47 @@ async function tryHandle({ database, userId, msg, enqueue, buildAiClient, logger
     ].join('\n'));
     logger?.info?.('prompt-edit', `proposed ${plan.target} edit for ${userId} in ${groupJid}`);
     return { accepted: true, statusCode: 200, promptEdit: 'proposed' };
+  }
+
+  // Instruction Routing Layer (flagged). Before the free-text prompt path, try to
+  // route the edit to a STRUCTURED sink. Operational content (escalation/SLA/
+  // policy/action/prohibition) never reaches botInstructions: it is stored in its
+  // own field (via the two-step confirm) or bounced back for clarification (an
+  // unresolvable escalation target, an ambiguous name, or an unclassifiable edit).
+  // A pure style/persona edit returns null and falls through to the prompt path.
+  if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true' && !forcePrompt) {
+    let routed = null;
+    try {
+      routed = routeEditBody(body, config);
+    } catch (err) {
+      logger?.warn?.('prompt-edit', `instruction routing failed: ${err.message}`);
+    }
+    if (routed && routed.kind === 'clarify') {
+      await send(enqueue, userId, groupJid, routed.message);
+      return { accepted: true, statusCode: 200, promptEdit: 'clarify' };
+    }
+    if (routed && routed.kind === 'store') {
+      await expireGroupPendings(database, userId, groupJid);
+      await insertPending(database, {
+        userId,
+        sourceJid: groupJid,
+        requesterJid: msg.author || msg.from || null,
+        requestText: body,
+        currentInstructions: '',
+        proposedInstructions: routed.summary,
+        changeSummary: routed.summary,
+        target: `routed:${routed.field}`,
+        proposedValue: routed.value,
+      });
+      await send(enqueue, userId, groupJid, [
+        '📝 فهمت التعديل:',
+        `• ${routed.summary}`,
+        'أأكّد التطبيق؟ رد بـ (نعم) للتطبيق أو (لا) للإلغاء.',
+      ].join('\n'));
+      logger?.info?.('prompt-edit', `routed ${routed.field} edit for ${userId} in ${groupJid}`);
+      return { accepted: true, statusCode: 200, promptEdit: 'proposed' };
+    }
+    // routed === null → no operational content; fall through to the prompt path.
   }
 
   let proposal;

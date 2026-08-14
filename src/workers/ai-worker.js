@@ -35,6 +35,7 @@ const {
   extractConversationState,
 } = require('../services/ai/conversation-state.service');
 const { isSemanticDuplicate, detectResolvedReopen } = require('../services/ai/conversation-state');
+const { applyDeterministicEscalation } = require('../services/instruction-routing/escalation-rules');
 const { isAutoReplyEnabled } = require('../services/bot/auto-reply-control');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
@@ -1098,6 +1099,21 @@ async function processAiReply(job) {
       throw aiErr;
     }
     if (!reply) throw new Error('AI returned empty reply');
+    // Instruction Routing (flagged): fire a stored escalation rule
+    // DETERMINISTICALLY by injecting its [تحويل:] marker before the escalation
+    // machinery runs — a matched rule escalates even if the model didn't
+    // volunteer it, and an unresolved target never fires. Best-effort; never
+    // blocks a reply.
+    if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true') {
+      try {
+        reply = applyDeterministicEscalation(reply, config, {
+          text,
+          intent: ai.lastDebug?.qualityGate?.intent || '',
+        }).reply;
+      } catch (detErr) {
+        logger.warn('routing', `deterministic escalation failed: ${detErr.message}`);
+      }
+    }
     const escalation = prepareEscalation({
       reply,
       config,
