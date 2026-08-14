@@ -31,6 +31,7 @@ const OPERATIONAL = new Set(['KNOWLEDGE', 'POLICY', 'SLA_TIME', 'ESCALATION', 'A
 const SEVERITY = {
   ESCALATION: 'high', ACTION: 'high', SLA_TIME: 'high',
   PROHIBITION: 'medium', POLICY: 'medium', KNOWLEDGE: 'low', STYLE: 'none',
+  UNKNOWN: 'low',
 };
 
 const TARGET = {
@@ -41,6 +42,7 @@ const TARGET = {
   ESCALATION: 'escalationContacts + routing rule (condition → real target)',
   ACTION: 'action policy (requires a successful tool/action)',
   PROHIBITION: 'replyStyle.avoidPhrases / prohibition policy',
+  UNKNOWN: 'needs review / clarification (never botInstructions)',
 };
 
 const RE = {
@@ -87,9 +89,10 @@ function classifyInstructionLine(rawLine) {
   if (RE.policyKw.test(line)) return mk('POLICY', RE.cond.test(line) ? 0.7 : 0.55, line);
   if (RE.knowledge.test(line)) return mk('KNOWLEDGE', 0.5, line);
   if (RE.style.test(line)) return mk('STYLE', 0.6, line);
-  // Unclassified content defaults to STYLE (persona) — the safe, non-operational
-  // home. The router still lets a merchant re-route it explicitly.
-  return mk('STYLE', 0.3, line);
+  // Unclassified content is UNKNOWN — NEVER silently treated as persona/style.
+  // The router turns it into a clarification request rather than leaking it into
+  // botInstructions.
+  return mk('UNKNOWN', 0.3, line);
 }
 
 function splitSegments(text) {

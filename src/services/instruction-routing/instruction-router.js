@@ -68,30 +68,69 @@ function extractCondition(line) {
   return m ? m[1].trim() : '';
 }
 
-function resolveContactByName(config, targetName) {
+// A contact's stable id. Prefer an explicit id; otherwise derive a deterministic
+// one from the normalized name so a rule references the same contact across edits.
+function contactStableId(contact) {
+  if (contact && String(contact.id || '').trim()) return String(contact.id).trim();
+  return `name:${normalizeArabic(contact && contact.name)}`;
+}
+
+// EXACT normalized name/alias match only — never a fuzzy `includes` that could
+// pick the wrong contact. Returns ALL exact matches so the caller can treat more
+// than one as ambiguous (→ clarification) rather than guessing.
+function findContactsByExactName(config, targetName) {
   const contacts = Array.isArray(config && config.escalationContacts) ? config.escalationContacts : [];
   const t = normalizeArabic(targetName);
-  if (!t) return null;
-  return contacts.find((c) => {
-    const n = normalizeArabic(c && c.name);
-    return n && (n.includes(t) || t.includes(n));
-  }) || null;
+  if (!t) return [];
+  return contacts.filter((c) => {
+    if (!c) return false;
+    if (normalizeArabic(c.name) === t) return true;
+    const aliases = Array.isArray(c.aliases) ? c.aliases : [];
+    return aliases.some((a) => normalizeArabic(a) === t);
+  });
+}
+
+// Structured trigger (trigger_type + trigger_value) instead of a free-text
+// condition. Types: intent | keyword | topic | sla_breach | system_state.
+const TRAILING_ESC_VERB = /\s+(?:حوّل\S*|حول\S*|صعّد\S*|صعد\S*|بلّغ\S*|بلغ\S*|كلّم\S*|كلم\S*|رجّع\S*|راجع\S*)$/;
+
+function buildTrigger(line) {
+  let m = String(line || '').match(/عن\s+([^\s،.]+(?:\s+[^\s،.]+)?)/);
+  if (m) return { trigger_type: 'topic', trigger_value: cleanTarget(m[1].replace(TRAILING_ESC_VERB, '')) };
+  m = String(line || '').match(/(?:أسئلة|اسئلة|شكاوى|طلبات|مشاكل|استفسارات)\s+([^\s،.]+)/);
+  if (m) return { trigger_type: 'topic', trigger_value: cleanTarget(m[1]) };
+  const cond = extractCondition(line);
+  if (cond) {
+    const kw = cond.split(/\s+/).find((w) => w.length >= 3);
+    if (kw) return { trigger_type: 'keyword', trigger_value: cleanTarget(kw) };
+  }
+  return { trigger_type: 'intent', trigger_value: 'escalation_requested' };
 }
 
 function routeEscalation(segment, config) {
   const line = segment.line;
-  const condition = extractCondition(line);
+  const trigger = buildTrigger(line);
   const targetName = extractTargetName(line);
   if (!targetName) {
-    return { sink: 'escalation', op: 'needs_clarification', reason: 'no_target', condition };
+    return { sink: 'escalation', op: 'needs_clarification', reason: 'no_target', trigger };
   }
-  const contact = resolveContactByName(config, targetName);
-  if (contact && contactHasDestination(contact)) {
-    return { sink: 'escalationRule', op: 'add', targetName, condition, resolved: true };
+  const matches = findContactsByExactName(config, targetName).filter(contactHasDestination);
+  if (matches.length > 1) {
+    return { sink: 'escalation', op: 'needs_clarification', reason: 'ambiguous_target', targetName, trigger };
   }
-  // Named but no real destination on file → do NOT store silently and do NOT let
-  // the bot promise a transfer; ask the merchant to complete the target setup.
-  return { sink: 'escalation', op: 'needs_target_setup', targetName, condition, resolved: false };
+  if (matches.length === 1) {
+    return {
+      sink: 'escalationRule',
+      op: 'add',
+      resolved: true,
+      targetContactId: contactStableId(matches[0]),
+      targetName,
+      trigger,
+    };
+  }
+  // No exact contact with a real destination → do NOT store silently and do NOT
+  // let the bot promise a transfer; ask the merchant to finish setting up the target.
+  return { sink: 'escalation', op: 'needs_target_setup', resolved: false, targetName, trigger };
 }
 
 function extractDuration(line) {
@@ -100,12 +139,26 @@ function extractDuration(line) {
   return { amount: parseInt(m[1], 10), unit: m[2] };
 }
 
+// Below this confidence a classification is not trusted enough to store anything;
+// the router asks the merchant to clarify instead of guessing a sink.
+const CONFIDENCE_THRESHOLD = Number(process.env.INSTRUCTION_ROUTING_MIN_CONFIDENCE || '0.5');
+
 /**
  * Decide the structured destination for a classified segment. Returns null for a
- * null/empty segment. STYLE is the only thing that stays in botInstructions.
+ * null/empty segment. STYLE is the only thing that stays in botInstructions;
+ * UNKNOWN and any low-confidence classification return a clarification request
+ * and store NOTHING (never fall through to botInstructions).
  */
 function routeInstruction(segment, config = {}) {
   if (!segment || !segment.category) return null;
+
+  if (segment.category === 'UNKNOWN') {
+    return { sink: 'review', op: 'needs_clarification', reason: 'unclassified', line: segment.line };
+  }
+  if (typeof segment.confidence === 'number' && segment.confidence < CONFIDENCE_THRESHOLD) {
+    return { sink: 'review', op: 'needs_clarification', reason: 'low_confidence', line: segment.line };
+  }
+
   switch (segment.category) {
     case 'STYLE':
       return { sink: 'botInstructions', op: 'append_persona', line: segment.line };
@@ -124,16 +177,20 @@ function routeInstruction(segment, config = {}) {
     case 'ESCALATION':
       return routeEscalation(segment, config);
     default:
-      return { sink: 'botInstructions', op: 'append_persona', line: segment.line };
+      // Never leak an unrecognized category into botInstructions.
+      return { sink: 'review', op: 'needs_clarification', reason: 'unrouted_category', line: segment.line };
   }
 }
 
 module.exports = {
   routeInstruction,
   routeEscalation,
+  buildTrigger,
   extractTargetName,
   extractCondition,
   extractDuration,
   contactHasDestination,
-  resolveContactByName,
+  contactStableId,
+  findContactsByExactName,
+  CONFIDENCE_THRESHOLD,
 };
