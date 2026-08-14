@@ -548,6 +548,47 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_customer_profiles_user
     ON customer_profiles(user_id)`,
 
+  // ── Added 2026-08-13: conversation_states — one structured, generic state
+  //    row per conversation (open/resolved issues, active topic/entity, known
+  //    facts). LLM-extracted, tenant-scoped, fail-soft. state_version is a
+  //    monotonic counter used by the send-time stale guard; reflects_message_id
+  //    + extraction_ok tell the injector whether the stored state is current.
+  `CREATE TABLE IF NOT EXISTS conversation_states (
+    user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id     UUID NOT NULL,
+    channel_id          TEXT NOT NULL DEFAULT 'whatsapp',
+    sender              TEXT NOT NULL,
+    state               JSONB NOT NULL DEFAULT '{}'::jsonb,
+    state_version       INTEGER NOT NULL DEFAULT 0,
+    reflects_message_id UUID,
+    extraction_ok       BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, conversation_id)
+  )`,
+
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conname = 'conversation_states_scope_fk'
+     ) THEN
+       ALTER TABLE conversation_states
+         ADD CONSTRAINT conversation_states_scope_fk
+         FOREIGN KEY (conversation_id, user_id, channel_id, sender)
+         REFERENCES conversations (id, user_id, channel_id, sender)
+         ON DELETE CASCADE;
+     END IF;
+   END $$`,
+
+  // ── Added 2026-08-13 (phase 1.1): DB-sourced monotonic inbound sequence for
+  //    the atomic send-time stale guard (integer sequence, no clock skew).
+  //    messages.inbound_seq is nullable/no-default → metadata-only ALTER.
+  `ALTER TABLE conversations
+     ADD COLUMN IF NOT EXISTS inbound_seq BIGINT NOT NULL DEFAULT 0`,
+
+  `ALTER TABLE messages
+     ADD COLUMN IF NOT EXISTS inbound_seq BIGINT`,
+
   // ── Per-customer API keys that override the admin defaults for a user.
   //    Encrypted at rest (AES-256-GCM) when SECRETS_KEY is set; falls back
   //    to inline plaintext in dev (still in api_key_encrypted column —

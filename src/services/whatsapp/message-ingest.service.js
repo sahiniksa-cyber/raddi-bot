@@ -85,23 +85,32 @@ function toSafeRawPayload(msg, { includeMediaData = true } = {}) {
   };
 }
 
-async function upsertConversation(client, { userId, sender, phoneNumber }) {
+// bumpInboundSeq: only the inbound customer path bumps the per-conversation
+// monotonic counter (source of the clock-free send-time stale guard). The
+// owner/fromMe path passes false so it never advances the sequence.
+async function upsertConversation(client, { userId, sender, phoneNumber, bumpInboundSeq = false }) {
+  const bump = bumpInboundSeq ? 1 : 0;
   const result = await client.query(
-    `INSERT INTO conversations (user_id, channel_id, sender, phone_number, last_message_at, metadata)
-     VALUES ($1, 'whatsapp', $2, $3, NOW(), '{}'::jsonb)
+    `INSERT INTO conversations (user_id, channel_id, sender, phone_number, last_message_at, metadata, inbound_seq)
+     VALUES ($1, 'whatsapp', $2, $3, NOW(), '{}'::jsonb, $4)
      ON CONFLICT (user_id, sender) DO UPDATE SET
        last_message_at = NOW(),
-       phone_number = COALESCE(conversations.phone_number, EXCLUDED.phone_number)
-     RETURNING id, phone_number`,
-    [userId, sender, phoneNumber],
+       phone_number = COALESCE(conversations.phone_number, EXCLUDED.phone_number),
+       inbound_seq = conversations.inbound_seq + $4
+     RETURNING id, phone_number, inbound_seq`,
+    [userId, sender, phoneNumber, bump],
   );
-  return { id: result.rows[0].id, phoneNumber: result.rows[0].phone_number };
+  return {
+    id: result.rows[0].id,
+    phoneNumber: result.rows[0].phone_number,
+    inboundSeq: result.rows[0].inbound_seq,
+  };
 }
 
-async function insertInboundMessage(client, { userId, conversationId, sender, text, providerMessageId, rawPayload }) {
+async function insertInboundMessage(client, { userId, conversationId, sender, text, providerMessageId, rawPayload, inboundSeq = null }) {
   const result = await client.query(
-    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload)
-     VALUES ($1, $2, 'whatsapp', $3, 'inbound', 'user', $4, $5, 'queued_for_ai', $6::jsonb)
+    `INSERT INTO messages (conversation_id, user_id, channel_id, sender, direction, role, content, provider_message_id, status, raw_payload, inbound_seq)
+     VALUES ($1, $2, 'whatsapp', $3, 'inbound', 'user', $4, $5, 'queued_for_ai', $6::jsonb, $7)
      ON CONFLICT (user_id, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
      RETURNING id`,
     [
@@ -111,6 +120,7 @@ async function insertInboundMessage(client, { userId, conversationId, sender, te
       text,
       providerMessageId,
       JSON.stringify(rawPayload),
+      inboundSeq,
     ],
   );
   if (result.rows[0]?.id) return { id: result.rows[0].id, inserted: true };
@@ -411,10 +421,11 @@ class MessageIngestService {
     const rawPayload = { source, ...toSafeRawPayload(msg) };
 
     const saved = await this.db.transaction(async (client) => {
-      const { id: conversationId, phoneNumber: storedPhoneNumber } = await upsertConversation(client, {
+      const { id: conversationId, phoneNumber: storedPhoneNumber, inboundSeq } = await upsertConversation(client, {
         userId,
         sender,
         phoneNumber,
+        bumpInboundSeq: true,
       });
       const storedMessage = await insertInboundMessage(client, {
         userId,
@@ -423,6 +434,7 @@ class MessageIngestService {
         text,
         providerMessageId,
         rawPayload,
+        inboundSeq,
       });
       return {
         conversationId,
@@ -834,6 +846,7 @@ module.exports = {
   MessageIngestService,
   compactMediaForStorage,
   insertInboundMessage,
+  upsertConversation,
   ownerPauseExpiry,
   messageIdFromWhatsappMessage,
   mediaFromWhatsappMessage,
