@@ -185,6 +185,7 @@ function routeInstruction(segment, config = {}) {
 module.exports = {
   routeInstruction,
   routeEscalation,
+  normalizeArabic,
   buildTrigger,
   extractTargetName,
   extractCondition,
