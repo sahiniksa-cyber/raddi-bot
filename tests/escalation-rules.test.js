@@ -75,3 +75,27 @@ test('deterministic escalation: unresolved target does NOT fire (stays a setup t
   assert.equal(out.escalated, false);
   assert.equal(out.unresolved, true);
 });
+
+test('sla_breach rule fires ONLY when slaBreached=true is passed by the caller', () => {
+  const config = { escalationContacts: [{ id: 'c1', name: 'سعود', phone: '9' }], escalationRules: [{ target_contact_id: 'c1', trigger_type: 'sla_breach' }] };
+  // Not breached → no fire (even though the rule exists).
+  assert.equal(evaluateEscalationRules(config, { text: 'وين طلبي', slaBreached: false }).matched, false);
+  // Breached → fires to the resolved contact.
+  const r = evaluateEscalationRules(config, { text: 'وين طلبي', slaBreached: true });
+  assert.equal(r.matched, true);
+  assert.equal(r.contact.id, 'c1');
+});
+
+test('deterministic escalation: sla_breach rule injects marker when slaBreached=true', () => {
+  const config = { escalationContacts: [{ id: 'c1', name: 'سعود', phone: '9' }], escalationRules: [{ target_contact_id: 'c1', trigger_type: 'sla_breach' }] };
+  const out = applyDeterministicEscalation('رد', config, { text: 'وين طلبي', slaBreached: true });
+  assert.equal(out.escalated, true);
+  assert.match(out.reply, /\[تحويل:سعود\|/);
+});
+
+test('deterministic escalation: sla_breach rule does NOT fire without a breach', () => {
+  const config = { escalationContacts: [{ id: 'c1', name: 'سعود', phone: '9' }], escalationRules: [{ target_contact_id: 'c1', trigger_type: 'sla_breach' }] };
+  const out = applyDeterministicEscalation('رد', config, { text: 'وين طلبي', slaBreached: false });
+  assert.equal(out.escalated, false);
+  assert.equal(out.reply, 'رد');
+});

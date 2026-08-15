@@ -66,3 +66,43 @@ test('AIClient integrates stripAvoidedContent in getReply', () => {
   assert.match(src, /stripAvoidedContent/);
   assert.match(src, /require\(['"]\.\/post-process-reply['"]\)/);
 });
+
+// ── SLA breach block injection (#177, flagged) ────────────────────────
+const HOUR_MS = 3600 * 1000;
+
+test('SLA breach block is injected into the prompt only when routing is ON and a breach is computed', () => {
+  const ai = makeClient({ slaPolicies: [{ amount: 12, unit: 'ساعة', source_text: 'التفعيل حتى 12 ساعة' }] });
+  const since = new Date(Date.now() - 25 * HOUR_MS);
+  const { computeSlaBreach } = require('../src/services/instruction-routing/sla-breach');
+  const slaBreach = computeSlaBreach({ since, now: Date.now(), slaPolicies: [{ amount: 12, unit: 'ساعة' }] });
+
+  const prev = process.env.INSTRUCTION_ROUTING_ENABLED;
+  try {
+    process.env.INSTRUCTION_ROUTING_ENABLED = 'true';
+    const on = ai.buildSystemPrompt([], { slaBreach });
+    assert.match(on, /تنبيه وقت/, 'breach block must appear when routing on + breach computed');
+    assert.match(on, /انقضت/, 'breach block must instruct the window is over');
+
+    delete process.env.INSTRUCTION_ROUTING_ENABLED;
+    const off = ai.buildSystemPrompt([], { slaBreach });
+    assert.doesNotMatch(off, /تنبيه وقت/, 'breach block must NOT appear when routing off');
+  } finally {
+    if (prev === undefined) delete process.env.INSTRUCTION_ROUTING_ENABLED;
+    else process.env.INSTRUCTION_ROUTING_ENABLED = prev;
+  }
+});
+
+test('no SLA breach block when the request is within the window', () => {
+  const ai = makeClient({ slaPolicies: [{ amount: 12, unit: 'ساعة' }] });
+  const { computeSlaBreach } = require('../src/services/instruction-routing/sla-breach');
+  const slaBreach = computeSlaBreach({ since: new Date(Date.now() - 2 * HOUR_MS), now: Date.now(), slaPolicies: [{ amount: 12, unit: 'ساعة' }] });
+  const prev = process.env.INSTRUCTION_ROUTING_ENABLED;
+  try {
+    process.env.INSTRUCTION_ROUTING_ENABLED = 'true';
+    const prompt = ai.buildSystemPrompt([], { slaBreach });
+    assert.doesNotMatch(prompt, /تنبيه وقت/);
+  } finally {
+    if (prev === undefined) delete process.env.INSTRUCTION_ROUTING_ENABLED;
+    else process.env.INSTRUCTION_ROUTING_ENABLED = prev;
+  }
+});
