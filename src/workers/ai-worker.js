@@ -18,6 +18,8 @@ const AIClient = require('../../lib/ai-client');
 const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
+const { applyDeterministicEscalation } = require('../services/instruction-routing/escalation-rules');
+const { computeSlaBreach } = require('../services/instruction-routing/sla-breach');
 const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
@@ -1017,6 +1019,7 @@ async function processAiReply(job) {
     // hasn't answered yet, tell the model so it stops re-registering the request
     // on every follow-up ("بسجل طلبك / بيتواصل معك الفريق").
     let escalationPending = false;
+    let escalationSince = null;
     try {
       const pending = await getPendingEscalation({
         database: db,
@@ -1024,8 +1027,32 @@ async function processAiReply(job) {
         conversationId: conversation.id,
       });
       escalationPending = pending.pending;
+      escalationSince = pending.since || null;
     } catch (pendingErr) {
       logger.warn('escalation', `pending-escalation check failed: ${pendingErr.message}`);
+    }
+
+    // ── SLA breach (#177, flagged, deterministic). Computed ONLY from a reliable
+    // system timestamp (the pending escalation thread's created_at) + the tenant's
+    // parseable slaPolicies — never from an LLM/customer-claimed time. When a
+    // breach is proven, it (a) feeds the prompt so the bot stops repeating the
+    // original ETA as still-future and (b) can fire an sla_breach escalation rule.
+    // No anchor / no parseable policy → { computable:false, sla_breached:false }.
+    let slaBreach = { computable: false, sla_breached: false };
+    if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true') {
+      try {
+        slaBreach = computeSlaBreach({
+          since: escalationSince,
+          now: Date.now(),
+          slaPolicies: config.slaPolicies,
+        });
+        if (slaBreach.sla_breached) {
+          logger.info('routing', `SLA breach computed: pending ${slaBreach.elapsed_human} > ${slaBreach.expected_sla_human}`);
+        }
+      } catch (slaErr) {
+        logger.warn('routing', `sla breach compute failed: ${slaErr.message}`);
+        slaBreach = { computable: false, sla_breached: false };
+      }
     }
 
     const ai = new AIClient(config, logger, {
@@ -1074,7 +1101,7 @@ async function processAiReply(job) {
 
     let reply;
     try {
-      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix, escalationPending, conversationState: convStateRow.state, conversationStateCanInject }) || '').trim();
+      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix, escalationPending, conversationState: convStateRow.state, conversationStateCanInject, slaBreach }) || '').trim();
     } catch (aiErr) {
       if (combinePrefix) {
         // Send the canned part now, but ONLY mark the trigger messages as
@@ -1091,6 +1118,31 @@ async function processAiReply(job) {
       throw aiErr;
     }
     if (!reply) throw new Error('AI returned empty reply');
+
+    // ── Deterministic escalation (#177, flagged). Before prepareEscalation, let a
+    // stored escalationRule that MATCHES this inbound (topic/keyword/intent) — or a
+    // proven SLA breach — inject the [تحويل:] marker so the EXISTING, tested
+    // escalation machinery below fires deterministically, instead of hoping the
+    // LLM volunteered the marker. An unresolved/ambiguous target injects NOTHING
+    // (it stays a merchant setup task — never a silent promise to the customer).
+    if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true') {
+      try {
+        const det = applyDeterministicEscalation(reply, config, {
+          text,
+          intent: ai.lastDebug?.qualityGate?.intent || '',
+          slaBreached: slaBreach.sla_breached === true,
+        });
+        if (det.escalated) {
+          reply = det.reply;
+          logger.info('routing', `deterministic escalation fired → ${det.contact?.name || 'contact'}`);
+        } else if (det.unresolved) {
+          logger.warn('routing', 'escalation rule matched but target unresolved — no customer promise made');
+        }
+      } catch (detErr) {
+        logger.warn('routing', `deterministic escalation failed: ${detErr.message}`);
+      }
+    }
+
     const escalation = prepareEscalation({
       reply,
       config,

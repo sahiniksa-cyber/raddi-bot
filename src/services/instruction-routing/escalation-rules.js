@@ -20,7 +20,7 @@ function resolveContactById(contacts, id) {
   return list.find((c) => c && (String(c.id || '').trim() === want || contactStableId(c) === want)) || null;
 }
 
-function triggerMatches(rule, { norm, intent }) {
+function triggerMatches(rule, { norm, intent, slaBreached }) {
   const value = normalizeArabic(rule && rule.trigger_value);
   switch (rule && rule.trigger_type) {
     case 'topic':
@@ -28,7 +28,11 @@ function triggerMatches(rule, { norm, intent }) {
       return Boolean(value) && norm.includes(value);
     case 'intent':
       return Boolean(value) && String(intent || '') === String(rule.trigger_value || '');
-    // sla_breach / system_state are evaluated by their own engines (not here).
+    case 'sla_breach':
+      // The breach itself is computed deterministically upstream (sla-breach.js);
+      // here we only fire when the caller has already confirmed a real breach.
+      return slaBreached === true;
+    // system_state is evaluated by its own engine (not here).
     default:
       return false;
   }
@@ -40,12 +44,12 @@ function triggerMatches(rule, { norm, intent }) {
  * matched rule's target no longer resolves, { matched:true, rule, contact:null,
  * unresolved:true }. First matching rule wins.
  */
-function evaluateEscalationRules(config = {}, { text, intent } = {}) {
+function evaluateEscalationRules(config = {}, { text, intent, slaBreached } = {}) {
   const rules = Array.isArray(config.escalationRules) ? config.escalationRules : [];
   const contacts = Array.isArray(config.escalationContacts) ? config.escalationContacts : [];
   const norm = normalizeArabic(text || '');
   for (const rule of rules) {
-    if (!triggerMatches(rule, { norm, intent })) continue;
+    if (!triggerMatches(rule, { norm, intent, slaBreached })) continue;
     const contact = resolveContactById(contacts, rule.target_contact_id);
     if (contact && contactHasDestination(contact)) return { matched: true, rule, contact };
     return { matched: true, rule, contact: null, unresolved: true };
@@ -61,13 +65,14 @@ function evaluateEscalationRules(config = {}, { text, intent } = {}) {
  * emitted) and never fires on an unresolved target (that stays a merchant
  * setup task, not a broken/again-silent escalation).
  */
-function applyDeterministicEscalation(reply, config = {}, { text, intent } = {}) {
+function applyDeterministicEscalation(reply, config = {}, { text, intent, slaBreached } = {}) {
   const base = String(reply || '');
-  const r = evaluateEscalationRules(config, { text, intent });
+  const r = evaluateEscalationRules(config, { text, intent, slaBreached });
   if (!r.matched) return { reply: base, escalated: false };
   if (r.unresolved || !r.contact) return { reply: base, escalated: false, unresolved: true, rule: r.rule };
   if (/\[تحويل:/.test(base)) return { reply: base, escalated: false, alreadyMarked: true };
-  const summary = r.rule.trigger_value || 'طلب من العميل';
+  const summary = r.rule.trigger_value
+    || (r.rule.trigger_type === 'sla_breach' ? 'تجاوز مهلة الـSLA' : 'طلب من العميل');
   const marker = `[تحويل:${r.contact.name}|${summary}]`;
   return { reply: `${base} ${marker}`.trim(), escalated: true, contact: r.contact, rule: r.rule };
 }
