@@ -119,61 +119,145 @@ function detectPriceQuestion(text) {
   return PRICE_Q_RE.test(normArabic(text));
 }
 
-function conversationText(history = [], latestUserText = '') {
-  const parts = (Array.isArray(history) ? history : []).map((m) => String(m && m.content || ''));
-  parts.push(String(latestUserText || ''));
-  return parts;
+// Customer messages only (newest first). Bot messages must NOT set the active
+// product/variant/method — only what the CUSTOMER said drives resolution.
+function customerTexts(history = [], latestUserText = '') {
+  const fromHistory = (Array.isArray(history) ? history : [])
+    .filter((m) => m && m.role === 'user')
+    .map((m) => String(m.content || ''));
+  const latest = String(latestUserText || '');
+  if (latest && fromHistory[fromHistory.length - 1] !== latest) fromHistory.push(latest);
+  return fromHistory.reverse(); // newest first
 }
 
-// Which of the tenant's products are referenced anywhere in the conversation?
-function mentionedProducts(products, texts) {
-  const normTexts = texts.map(normArabic);
-  return (Array.isArray(products) ? products : []).filter((p) => {
+function productsIn(products, text) {
+  const t = normArabic(text);
+  const list = Array.isArray(products) ? products : [];
+  const hits = [];
+  for (const p of list) {
     const name = normArabic(p && p.name);
-    return name && normTexts.some((t) => t.includes(name));
-  });
+    if (name && t.includes(name) && !hits.find((q) => normArabic(q.name) === name)) hits.push(p);
+  }
+  return hits;
 }
 
 /**
- * Resolve the product the customer is asking the price of, from conversation
- * context + tenant products only. { status:'resolved'|'ambiguous'|'none' }.
+ * The ACTIVE product = the one in the most-recent CUSTOMER message that names a
+ * product. Walking newest→oldest means a later switch (A → B) wins, and a bot
+ * message repeating a name never changes it. Only when that same latest message
+ * names more than one product is it ambiguous.
+ * { status:'resolved'|'ambiguous'|'none' }.
  */
 function resolveProductReference({ history, latestUserText, products } = {}) {
-  const texts = conversationText(history, latestUserText);
-  const hits = mentionedProducts(products, texts);
-  const distinct = [];
-  for (const p of hits) if (!distinct.find((q) => normArabic(q.name) === normArabic(p.name))) distinct.push(p);
-  if (distinct.length === 1) return { status: 'resolved', product: distinct[0] };
-  if (distinct.length > 1) return { status: 'ambiguous', candidates: distinct.map((p) => p.name) };
+  for (const text of customerTexts(history, latestUserText)) {
+    const hits = productsIn(products, text);
+    if (hits.length === 1) return { status: 'resolved', product: hits[0] };
+    if (hits.length > 1) return { status: 'ambiguous', candidates: hits.map((p) => p.name) };
+  }
   return { status: 'none' };
 }
 
-// Pick the variant the customer chose (by label appearing in the conversation).
+// The variant the CUSTOMER chose (label appears in a customer message).
 function resolveVariant(product, texts) {
   const variants = Array.isArray(product && product.variants) ? product.variants.filter((v) => v && (v.label || v.price)) : [];
   if (!variants.length) return { kind: 'no_variants' };
-  const normTexts = texts.map(normArabic);
   const chosen = variants.filter((v) => {
     const label = normArabic(v.label);
-    return label && normTexts.some((t) => t.includes(label));
+    return label && texts.some((t) => normArabic(t).includes(label));
   });
   if (chosen.length === 1) return { kind: 'chosen', variant: chosen[0] };
   return { kind: 'ambiguous', variants: variants.map((v) => v.label) };
 }
 
-// Pick the tenant rule to apply. One rule → it. Many → match by label token in
-// the conversation; exactly one match → it; otherwise ambiguous.
-function resolveRule(config, texts) {
-  const rules = tenantRules(config);
-  if (rules.length === 0) return { kind: 'none', rule: null };
-  if (rules.length === 1) return { kind: 'one', rule: rules[0] };
-  const normTexts = texts.map(normArabic);
-  const matched = rules.filter((r) => {
-    const label = normArabic(r.label);
-    return label && normTexts.some((t) => t.includes(label));
-  });
+// ── Legacy merchant-instruction → structured pricing rule (P2-A) ──────
+// A tenant may express a fee in free text (botInstructions) instead of a
+// structured rule. Parse the CLEAR forms into the same structured shape. Only
+// emit a rule when BOTH a typed amount AND a trigger are unambiguous — otherwise
+// nothing (never invent a number or guess a trigger). Names are never hardcoded.
+function cleanToken(tok) {
+  return String(tok || '').replace(/^ب[ـ]?/, '').replace(/[،.؛!:؟]+$/u, '').trim();
+}
+function extractTrigger(seg) {
+  let m = seg.match(/عند\s+الدفع\s+ب[ـ]?\s*([^\s،.؛!]+)/); // "عند الدفع بـ X"
+  if (m) return cleanToken(m[1]);
+  m = seg.match(/طريقة(?:\s+الدفع)?\s+([^\s،.؛!]+)/);        // "طريقة (الدفع) X"
+  if (m && normArabic(m[1]) !== 'الدفع') return cleanToken(m[1]);
+  m = seg.match(/عند\s+([^\s،.؛!]+)/);                         // "... عند Y"
+  if (m && normArabic(m[1]) !== 'الدفع') return cleanToken(m[1]);
+  return null;
+}
+const ADD_RE = /(زياد|اضاف|إضاف|رسوم|أضف|اضف|يضاف|زد)/;
+const DISC_RE = /(خصم|حسم|تخفيض)/;
+function extractTypeValue(seg) {
+  const pct = seg.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (pct) {
+    if (DISC_RE.test(seg)) return { type: 'percentage_discount', value: Number(pct[1]) };
+    if (ADD_RE.test(seg)) return { type: 'percentage_addition', value: Number(pct[1]) };
+    return null; // % with no clear direction → ambiguous
+  }
+  const num = seg.match(/(\d+(?:\.\d+)?)/);
+  if (num) {
+    if (DISC_RE.test(seg)) return { type: 'fixed_discount', value: Number(num[1]) };
+    if (ADD_RE.test(seg)) return { type: 'fixed_addition', value: Number(num[1]) };
+  }
+  return null;
+}
+function extractPricingRulesFromInstructions(instructions) {
+  const text = String(instructions || '');
+  if (!text.trim()) return [];
+  const segments = text.split(/[\n.؛!]+/).map((s) => s.trim()).filter(Boolean);
+  const rules = [];
+  for (const seg of segments) {
+    const tv = extractTypeValue(seg);
+    const trigger = extractTrigger(seg);
+    if (tv && trigger && Number.isFinite(tv.value) && tv.value > 0) {
+      rules.push({ trigger, type: tv.type, value: tv.value, source: 'merchant_instruction' });
+    }
+  }
+  return rules;
+}
+
+/**
+ * Unified pricing-rule source (P2-A): STRUCTURED rules (config.pricingRules /
+ * calculationRule) always win; legacy rules parsed from botInstructions fill in
+ * only triggers a structured rule doesn't already cover. Non-destructive.
+ */
+function resolvePricingRules(config = {}) {
+  const structured = tenantRules(config).map((r) => ({
+    type: r.type,
+    value: parseAmount(r.value),
+    // A `label` is a display name, NOT a trigger. Only an explicit `trigger`
+    // makes a rule payment-method-specific; otherwise it is a blanket rule that
+    // applies whenever a price is asked (backward-compatible default).
+    trigger: (r.trigger != null && String(r.trigger).trim() ? String(r.trigger) : null),
+    label: r.label,
+    source: 'structured',
+  })).filter((r) => Number.isFinite(r.value));
+  const seen = new Set(structured.map((r) => (r.trigger ? normArabic(r.trigger) : '__blanket__')));
+  const legacy = extractPricingRulesFromInstructions(config.botInstructions);
+  for (const r of legacy) {
+    const key = r.trigger ? normArabic(r.trigger) : '__blanket__';
+    if (!seen.has(key)) { structured.push({ ...r, label: r.trigger }); seen.add(key); }
+  }
+  return structured;
+}
+
+const PAY_INTENT_RE = /(ادفع|أدفع|الدفع|دفع|سداد|اسدد|تقسيط|طريقه|طريقة)/;
+
+// Pick the rule matching the CUSTOMER's stated context (payment method = trigger).
+// One clear match → it; a blanket (no-trigger) rule → it; nothing relevant → none
+// (base price). Several methods with none/many matching + a pay intent → ambiguous.
+function resolveRule(rules, texts) {
+  const triggered = rules.filter((r) => r.trigger && String(r.trigger).trim());
+  const blanket = rules.filter((r) => !r.trigger || !String(r.trigger).trim());
+  const matched = triggered.filter((r) => texts.some((t) => normArabic(t).includes(normArabic(r.trigger))));
   if (matched.length === 1) return { kind: 'one', rule: matched[0] };
-  return { kind: 'ambiguous', rules: rules.map((r) => r.label || r.type) };
+  if (matched.length > 1) return { kind: 'ambiguous', rules: matched.map((r) => r.trigger) };
+  if (blanket.length === 1) return { kind: 'one', rule: blanket[0] };
+  if (blanket.length > 1) return { kind: 'ambiguous', rules: blanket.map((r) => r.label || r.type) };
+  const payIntent = texts.some((t) => PAY_INTENT_RE.test(normArabic(t)));
+  if (triggered.length >= 2 && payIntent) return { kind: 'ambiguous', rules: triggered.map((r) => r.trigger) };
+  return { kind: 'none', rule: null };
 }
 
 /**
@@ -189,7 +273,7 @@ function resolvePriceComputation({ history, latestUserText, config } = {}) {
   if (ref.status === 'ambiguous') return { status: 'ambiguous_product', candidates: ref.candidates };
 
   const product = ref.product;
-  const texts = conversationText(history, latestUserText);
+  const texts = customerTexts(history, latestUserText);
 
   let basePrice = product.price;
   let variant = null;
@@ -199,7 +283,7 @@ function resolvePriceComputation({ history, latestUserText, config } = {}) {
 
   if (parseAmount(basePrice) == null) return { status: 'unknown_base', product };
 
-  const rr = resolveRule(cfg, texts);
+  const rr = resolveRule(resolvePricingRules(cfg), texts);
   if (rr.kind === 'ambiguous') return { status: 'ambiguous_rule', product, rules: rr.rules };
 
   // Deterministic computation happens HERE, in code — not left to the LLM.
@@ -232,4 +316,5 @@ function buildPriceComputationBlock(resolution) {
 module.exports = {
   computePrice, parseAmount, buildCalculationBlock, tenantRules,
   detectPriceQuestion, resolveProductReference, resolvePriceComputation, buildPriceComputationBlock,
+  extractPricingRulesFromInstructions, resolvePricingRules,
 };

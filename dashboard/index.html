@@ -3600,9 +3600,14 @@ async function saveConf(){
   try{
     const igMode=settingsChannel==='instagram';
     const url=igMode?'/api/instagram/config':'/api/config';
+    // Partial PATCH: send only the fields that actually changed vs the loaded
+    // snapshot, so a stale page never clobbers fields edited out-of-band
+    // (botInstructions via WhatsApp, structured pricing rules, ...). Mirrors the
+    // tested lib/config-diff.js computeConfigPatch.
+    const configPatch=(()=>{const snap=(config&&typeof config==='object')?config:{};const patch={};for(const k of Object.keys(nc)){let same=false;try{same=JSON.stringify(snap[k])===JSON.stringify(nc[k]);}catch(_){same=false;}if(!same)patch[k]=nc[k];}return patch;})();
     const body=igMode
-      ?JSON.stringify({enabled:!!(document.getElementById('igCfgEnabled')&&document.getElementById('igCfgEnabled').checked),config:nc})
-      :JSON.stringify(nc);
+      ?JSON.stringify({enabled:!!(document.getElementById('igCfgEnabled')&&document.getElementById('igCfgEnabled').checked),config:configPatch})
+      :JSON.stringify(configPatch);
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
     if(r.status===401){window.location.href='/login';return;}
     const d=await r.json();

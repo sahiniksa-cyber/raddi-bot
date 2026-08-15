@@ -109,10 +109,11 @@ test('MEMORY: "كم؟" resolves to the previously-mentioned product (الباق�
   assert.equal(r.product.name, 'الباقة X'); // bound to the right prior product
 });
 
-test('MEMORY: two different products referenced → ambiguous (ask, do not guess)', () => {
+test('MEMORY: a later switch to another product wins (latest customer product is active)', () => {
   const hist = [{ role: 'user', content: 'أبي الباقة X' }, { role: 'user', content: 'ولا لا، باقة أخرى أحسن' }];
   const r = resolveProductReference({ history: hist, latestUserText: 'كم؟', products: PRODUCTS_A });
-  assert.equal(r.status, 'ambiguous');
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.product.name, 'باقة أخرى'); // the switch, not ambiguous
 });
 
 test('P2 CORE: computePrice() actually runs inside the reply-path resolver → 100 + 10% = 110', () => {

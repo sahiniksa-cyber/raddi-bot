@@ -11,6 +11,8 @@
  * asks the merchant to finish setting up the target.
  */
 
+const { extractPricingRulesFromInstructions } = require('../ai/deterministic-calc');
+
 // ل-prefixed words that are NOT an escalation target ("if", "but", "we have"...).
 const L_STOPWORDS = new Set([
   'لو', 'لكن', 'لا', 'لم', 'لن', 'لماذا', 'لدينا', 'لديك', 'له', 'لها', 'لهم', 'لك', 'لي', 'لنا',
@@ -157,6 +159,14 @@ function routeInstruction(segment, config = {}) {
   }
   if (typeof segment.confidence === 'number' && segment.confidence < CONFIDENCE_THRESHOLD) {
     return { sink: 'review', op: 'needs_clarification', reason: 'low_confidence', line: segment.line };
+  }
+
+  // A CLEAR fee/pricing instruction becomes a STRUCTURED pricing rule instead of
+  // free text — regardless of the coarse category. Only fires when the line
+  // yields an unambiguous {trigger,type,value}; otherwise falls through.
+  const pricingRules = extractPricingRulesFromInstructions(segment.line);
+  if (pricingRules.length === 1) {
+    return { sink: 'pricingRule', op: 'add', rule: pricingRules[0], line: segment.line };
   }
 
   switch (segment.category) {

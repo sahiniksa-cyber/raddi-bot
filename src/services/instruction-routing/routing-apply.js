@@ -61,6 +61,18 @@ function applyRoutingDecision(decision, config = {}) {
       return store('botInstructions', value, 'تمام، حدّثت أسلوب الرد.');
     }
 
+    case 'pricingRule': {
+      const rule = {
+        trigger: decision.rule && decision.rule.trigger,
+        type: decision.rule && decision.rule.type,
+        value: decision.rule && decision.rule.value,
+        source: (decision.rule && decision.rule.source) || 'merchant_instruction',
+        created_at: nowIso(),
+      };
+      const value = [...arr(cfg.pricingRules), rule];
+      return store('pricingRules', value, 'تمام، سجّلتها كقاعدة تسعير/رسوم منظّمة قابلة للحساب.');
+    }
+
     case 'slaPolicy': {
       const entry = {
         amount: decision.duration && decision.duration.amount,
