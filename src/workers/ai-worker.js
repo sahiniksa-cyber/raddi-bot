@@ -20,6 +20,7 @@ const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { applyDeterministicEscalation } = require('../services/instruction-routing/escalation-rules');
 const { computeSlaBreach } = require('../services/instruction-routing/sla-breach');
+const { resolveTrustedEventTimestamp } = require('../services/ai/trusted-event-time');
 const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
@@ -1041,13 +1042,19 @@ async function processAiReply(job) {
     let slaBreach = { computable: false, sla_breached: false };
     if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true') {
       try {
+        // Pick the trusted SLA anchor from available sources (extensible: future
+        // order/payment/ticket/status timestamps slot in here — NOT message time).
+        // Only escalation_thread_created_at is wired today.
+        const trusted = resolveTrustedEventTimestamp({
+          escalation_thread_created_at: escalationSince,
+        });
         slaBreach = computeSlaBreach({
-          since: escalationSince,
+          since: trusted ? trusted.timestamp : null,
           now: Date.now(),
           slaPolicies: config.slaPolicies,
         });
         if (slaBreach.sla_breached) {
-          logger.info('routing', `SLA breach computed: pending ${slaBreach.elapsed_human} > ${slaBreach.expected_sla_human}`);
+          logger.info('routing', `SLA breach computed (anchor=${trusted.source}): pending ${slaBreach.elapsed_human} > ${slaBreach.expected_sla_human}`);
         }
       } catch (slaErr) {
         logger.warn('routing', `sla breach compute failed: ${slaErr.message}`);

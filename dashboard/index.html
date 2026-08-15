@@ -2529,6 +2529,10 @@ async function toggleBotAutoReply(src){
       return;
     }
     lastAutoReplyEnabled=d.autoReplyEnabled!==false;
+    // Keep the in-page cached config in sync so a later "save settings" (which
+    // spreads {...config}) never posts a stale autoReplyEnabled. The backend
+    // also refuses run-state via the general save, but this keeps the UI truthful.
+    if(config&&typeof config==='object')config.autoReplyEnabled=lastAutoReplyEnabled;
     renderBotAutoReplyState({
       status:lastStatus||d.whatsappStatus||'connected',
       autoReplyEnabled:lastAutoReplyEnabled

@@ -62,6 +62,9 @@ function filterHistoryForAi(rows = []) {
     return {
       role: speaker === 'customer' ? 'user' : 'assistant',
       content: speaker === 'owner' ? `رسالة من مالك المتجر: ${content}` : content,
+      // Carry the message's own timestamp so the reply layer can render per-turn
+      // clock times. Additive: consumers that only read {role,content} ignore it.
+      ts: row.created_at != null ? row.created_at : null,
     };
   }).filter(message => message.content);
 }
@@ -96,7 +99,8 @@ async function buildHistoryForReply({
   const last = history[history.length - 1];
 
   if (text && (!last || last.role !== 'user' || last.content !== text)) {
-    history.push({ role: 'user', content: text });
+    // The pending inbound just arrived → its clock time is "now".
+    history.push({ role: 'user', content: text, ts: new Date() });
   }
   if (history.length > memSize) history.splice(0, history.length - memSize);
   return history;

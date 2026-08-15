@@ -9,6 +9,15 @@ const promptEditService = require('../services/prompt-edit/prompt-edit.service')
 
 const API_KEY_FIELDS = API_KEY_CONFIG_FIELDS.slice();
 
+// Bot RUN-STATE fields are owned exclusively by their dedicated endpoints
+// (e.g. autoReplyEnabled ↔ POST /api/bot/auto-reply). The general settings save
+// must NEVER change them: the dashboard posts a full config object that can
+// carry a STALE autoReplyEnabled (the in-page config isn't refreshed when the
+// toggle is used), which previously flipped the bot OFF on an unrelated save.
+// Stripping them here enforces "an unrelated save can't change bot run-state" at
+// the persistence boundary, independent of any client staleness.
+const RUN_STATE_FIELDS = ['autoReplyEnabled'];
+
 // Detect raw API-key shaped strings hiding in arbitrary fields. Used only
 // for the dev assertion below; production code unconditionally strips.
 const SUSPICIOUS_KEY_PATTERNS = [
@@ -53,6 +62,9 @@ function mergeConfigForSave({ existing, incoming, isAdmin }) {
   if (!isAdmin) {
     for (const k of API_KEY_FIELDS) delete filteredIncoming[k];
   }
+  // Run-state is never set through the general config save (owned by the
+  // dedicated bot endpoints). Drop it so a stale/omitted value can't flip it.
+  for (const k of RUN_STATE_FIELDS) delete filteredIncoming[k];
   const merged = { ...existingObj, ...filteredIncoming };
 
   // Defense in depth: API keys live in admin_api_keys (encrypted at rest).

@@ -37,11 +37,13 @@ test('buildHistoryForReply loads latest messages in chronological order', async 
   });
 
   assert.deepEqual(queries[0].params, ['conv-1', 3, 'user-1', 'whatsapp', 'customer-1@s.whatsapp.net']);
-  assert.deepEqual(history, [
+  // Project to {role,content}; each item also carries an additive `ts` (time context).
+  assert.deepEqual(history.map(({ role, content }) => ({ role, content })), [
     { role: 'user', content: 'first question' },
     { role: 'assistant', content: 'first answer' },
     { role: 'user', content: 'second question' },
   ]);
+  assert.ok('ts' in history[0], 'each history item carries a ts field for the time-context layer');
 });
 
 test('buildHistoryForReply appends inbound text when not already last user message', async () => {
@@ -63,7 +65,7 @@ test('buildHistoryForReply appends inbound text when not already last user messa
     inboundText: 'new question',
   });
 
-  assert.deepEqual(history, [
+  assert.deepEqual(history.map(({ role, content }) => ({ role, content })), [
     { role: 'user', content: 'old question' },
     { role: 'user', content: 'new question' },
   ]);
@@ -118,7 +120,7 @@ test('buildHistoryForReply starts a fresh session after a long gap and identifie
     inboundText: 'الين بكرة اقدر حاليا اليوم م اقدر اشترك',
   });
 
-  assert.deepEqual(history, [
+  assert.deepEqual(history.map(({ role, content }) => ({ role, content })), [
     {
       role: 'assistant',
       content: 'رسالة من مالك المتجر: السلام عليكم اكدي لنا اذا حابه التفعيل اليوم عشان قبل ما نقفل النظام',
