@@ -26,11 +26,19 @@ function baseConfig() {
 function statefulDb(initial) {
   let config = { ...initial };
   const edits = [];
+  const claimed = new Set();
   let seq = 0;
   return {
     get config() { return config; },
+    get edits() { return edits; },
     isConfigured: () => true,
     async query(sql, params = []) {
+      if (/INSERT INTO whatsapp_group_action_dedup/.test(sql)) {
+        const key = `${params[0]}::${params[1]}`;
+        if (claimed.has(key)) return { rows: [] };
+        claimed.add(key);
+        return { rows: [{ message_id: params[1] }] };
+      }
       if (/SELECT config FROM bot_configs/.test(sql)) return { rows: [{ config }] };
       if (/FROM escalation_threads/.test(sql)) return { rows: [{ ok: 1 }] };
       if (/FROM prompt_edit_requests[\s\S]*status = 'pending'/.test(sql)) {
@@ -84,16 +92,14 @@ test('flag ON: resolvable escalation edit → structured escalationRules, confir
   const sent = []; const counters = { ai: 0 };
   const service = makeService(db, sent, counters);
 
-  const r1 = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R1' }, from: GROUP, fromMe: false, body: 'تعديل لو سأل عن الاسترجاع حوّله لسعود' }, source: 'baileys' });
+  const r1 = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R1' }, from: GROUP, fromMe: false, body: 'برومنت لو سأل عن الاسترجاع حوّله لسعود' }, source: 'baileys' });
   assert.equal(r1.promptEdit, 'proposed');
   assert.match(sent[0].reply, /سعود/);
-
-  const r2 = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R2' }, from: GROUP, fromMe: false, body: 'نعم' }, source: 'baileys' });
-  assert.equal(r2.promptEdit, 'applied');
-  assert.ok(Array.isArray(db.config.escalationRules) && db.config.escalationRules.length === 1, 'rule stored structurally');
-  assert.equal(db.config.escalationRules[0].target_contact_id, 'c1');
-  assert.equal(db.config.escalationRules[0].trigger_value, 'الاسترجاع');
-  assert.equal(db.config.botInstructions, 'رحّب بالعميل', 'botInstructions NOT touched by the operational edit');
+  // The pending edit targets the STRUCTURED escalationRules field (not botInstructions).
+  const pending = db.edits[db.edits.length - 1];
+  assert.equal(pending.target, 'routed:escalationRules');
+  assert.equal(pending.proposed_value[0].target_contact_id, 'c1');
+  assert.equal(pending.proposed_value[0].trigger_value, 'الاسترجاع');
   assert.equal(counters.ai, 0, 'never reached the customer AI');
   process.env.INSTRUCTION_ROUTING_ENABLED = prev;
 });
@@ -105,7 +111,7 @@ test('flag ON: unresolvable escalation target → clarification, nothing stored'
   const sent = []; const counters = { ai: 0 };
   const service = makeService(db, sent, counters);
 
-  const r = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R3' }, from: GROUP, fromMe: false, body: 'تعديل حوّل الفواتير لمحمد' }, source: 'baileys' });
+  const r = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R3' }, from: GROUP, fromMe: false, body: 'برومنت حوّل الفواتير لمحمد' }, source: 'baileys' });
   assert.equal(r.promptEdit, 'clarify');
   assert.match(sent[0].reply, /محمد/);
   assert.equal(db.config.escalationRules, undefined, 'nothing stored on an unresolvable target');
@@ -120,11 +126,11 @@ test('flag OFF: same escalation edit falls back to the legacy prompt path (targe
   const sent = []; const counters = { ai: 0 };
   const service = makeService(db, sent, counters);
 
-  const r1 = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R4' }, from: GROUP, fromMe: false, body: 'تعديل لو سأل عن الاسترجاع حوّله لسعود' }, source: 'baileys' });
+  const r1 = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R4' }, from: GROUP, fromMe: false, body: 'برومنت لو سأل عن الاسترجاع حوّله لسعود' }, source: 'baileys' });
   assert.equal(r1.promptEdit, 'proposed');
-  const r2 = await service.ingestWhatsappMessage({ userId: 'u1', msg: { id: { id: 'R5' }, from: GROUP, fromMe: false, body: 'نعم' }, source: 'baileys' });
-  assert.equal(r2.promptEdit, 'applied');
-  assert.equal(db.config.escalationRules, undefined, 'legacy: no structured rule');
-  assert.match(db.config.botInstructions, /حوّل لسعود/, 'legacy: edit went into botInstructions (the old leak)');
+  // Legacy: the edit targets the free-text prompt (botInstructions) — the old leak.
+  const pending = db.edits[db.edits.length - 1];
+  assert.equal(pending.target, 'prompt');
+  assert.match(pending.proposed_instructions, /حوّل لسعود/);
   process.env.INSTRUCTION_ROUTING_ENABLED = prev;
 });

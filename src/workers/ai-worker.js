@@ -29,6 +29,12 @@ const { getPlatformSetting } = require('../services/platform/platform-settings')
 const { installProcessSafetyNet } = require('../runtime/process-safety');
 const { customerRequestedEscalation } = require('../services/ai/reply-validator');
 const { compactQualityGateAudit } = require('../services/ai/reply-quality-gate');
+const {
+  loadConversationState,
+  saveConversationState,
+  extractConversationState,
+} = require('../services/ai/conversation-state.service');
+const { isSemanticDuplicate, detectResolvedReopen } = require('../services/ai/conversation-state');
 const { isAutoReplyEnabled } = require('../services/bot/auto-reply-control');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
@@ -282,7 +288,7 @@ async function loadPendingInboundMessages({
          AND direction = 'outbound'
          AND role = 'assistant'
      )
-     SELECT id, sender, content, provider_message_id, raw_payload
+     SELECT id, sender, content, provider_message_id, raw_payload, inbound_seq
      FROM messages m
      WHERE conversation_id = $1
        AND user_id = $2
@@ -485,7 +491,27 @@ async function markConversationMessagesAutoReplyDisabled({ database = db, userId
   return { retired: result.rowCount || 0 };
 }
 
-async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, database = db }) {
+// Recent assistant replies with their stored intent label, for semantic dedup.
+// Tenant-scoped, fail-open (any error → [] so dedup degrades to string-based).
+async function loadRecentAssistantReplies({ database = db, userId, conversationId, limit = 6 } = {}) {
+  if (!userId || !conversationId || !database?.isConfigured?.()) return [];
+  try {
+    const r = await database.query(
+      `SELECT content, raw_payload->>'replyIntent' AS intent
+         FROM messages
+        WHERE user_id = $1 AND conversation_id = $2
+          AND direction = 'outbound' AND role = 'assistant'
+        ORDER BY created_at DESC
+        LIMIT $3`,
+      [userId, conversationId, limit],
+    );
+    return r.rows.map(x => ({ content: String(x.content || ''), intent: x.intent || '' }));
+  } catch (_) {
+    return [];
+  }
+}
+
+async function storeAssistantMessage({ userId, conversationId, sender, reply, jobId, qualityGateAudit, generatedAgainstSeq = null, replyIntent = null, database = db }) {
   // provider_message_id must be unique per reply (the UNIQUE constraint is on
   // (user_id, provider_message_id)). The jobId is shared across all replies for
   // the same conversation (BullMQ uses conversation-${id} as the job key for
@@ -506,6 +532,8 @@ async function storeAssistantMessage({ userId, conversationId, sender, reply, jo
         source: WORKER_NAME,
         jobId,
         qualityGate: compactQualityGateAudit(qualityGateAudit),
+        generatedAgainstSeq,
+        replyIntent,
       }),
     ],
   );
@@ -1006,9 +1034,47 @@ async function processAiReply(job) {
       },
     });
 
+    // ── Generic conversation-state engine (#176, flagged). Load prior state,
+    // extract updated state from the customer's new turns BEFORE generating,
+    // persist it, and inject only when the stored state is current (fail-soft).
+    const stateEnabled = process.env.CONVERSATION_STATE_ENABLED === 'true';
+    const latestInboundId = enrichedMessages.length ? enrichedMessages[enrichedMessages.length - 1].id : null;
+    let convStateRow = { state: undefined, extraction_ok: false, reflects_message_id: null };
+    if (stateEnabled) {
+      try {
+        convStateRow = await loadConversationState({ userId, conversationId: conversation.id });
+      } catch (stateErr) { logger.warn('state', `load failed: ${stateErr.message}`); }
+      try {
+        const extracted = await extractConversationState({
+          userId,
+          conversationId: conversation.id,
+          previousState: convStateRow.state,
+          newTurns: [{ role: 'user', content: text }],
+          lastBotReply: [...history].reverse().find(m => m.role === 'assistant')?.content || '',
+          config,
+          aiClient: ai,
+          systemFacts: { escalationPending },
+        });
+        await saveConversationState({
+          userId,
+          conversationId: conversation.id,
+          sender: conversation.sender,
+          state: extracted.state,
+          extractionOk: extracted.extraction_ok,
+          reflectsMessageId: extracted.extraction_ok ? latestInboundId : null,
+        });
+        if (extracted.extraction_ok) {
+          convStateRow = { state: extracted.state, extraction_ok: true, reflects_message_id: latestInboundId };
+        }
+      } catch (stateErr) { logger.warn('state', `extract failed: ${stateErr.message}`); }
+    }
+    const conversationStateCanInject = stateEnabled
+      && convStateRow.extraction_ok === true
+      && convStateRow.reflects_message_id === latestInboundId;
+
     let reply;
     try {
-      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix, escalationPending }) || '').trim();
+      reply = String(await ai.getReply(history, { isFirstMsg: history.filter(m => m.role === 'assistant').length === 0, customerProfile, instantAnswered: combinePrefix, escalationPending, conversationState: convStateRow.state, conversationStateCanInject }) || '').trim();
     } catch (aiErr) {
       if (combinePrefix) {
         // Send the canned part now, but ONLY mark the trigger messages as
@@ -1039,6 +1105,41 @@ async function processAiReply(job) {
       customerReply = combineCannedAndAi(combinePrefix, customerReply);
     }
 
+    // Deterministic resolved-issue reopen guard (#176, flagged). Code-level check
+    // that the drafted reply isn't volunteering steps for an issue the customer
+    // already confirmed resolved (and didn't re-raise). On detection, regenerate
+    // once with a targeted instruction; accept only a non-reopening retry.
+    if (process.env.CONVERSATION_STATE_ENABLED === 'true'
+        && convStateRow.state?.resolved_issues?.length) {
+      try {
+        const reopen = detectResolvedReopen(customerReply, convStateRow.state.resolved_issues, text);
+        if (reopen.reopened) {
+          logger.warn('state', `deterministic reopen guard tripped for "${reopen.issue}" — regenerating`);
+          const retryRaw = await ai.getReply([
+            ...history,
+            { role: 'system', content: `العميل سبق وأكّد حلّ: «${reopen.issue}». لا تقترح خطوات لحلّها ولا تُعِد فتحها؛ جاوب فقط على طلبه الحالي.` },
+          ], {
+            isFirstMsg: false, maxRetries: 1, customerProfile, instantAnswered: combinePrefix,
+            escalationPending, conversationState: convStateRow.state, conversationStateCanInject,
+          }).catch(() => '');
+          const retry = String(retryRaw || '').trim();
+          if (retry) {
+            const retryEsc = prepareEscalation({
+              reply: retry, config, customerSender: conversation.sender,
+              customerPhoneNumber: conversation.phone_number, inboundText: text,
+            });
+            let retryCustomer = (retryEsc.customerReply || '').trim();
+            if (retryCustomer) {
+              if (combinePrefix) retryCustomer = combineCannedAndAi(combinePrefix, retryCustomer);
+              if (!detectResolvedReopen(retryCustomer, convStateRow.state.resolved_issues, text).reopened) {
+                customerReply = retryCustomer;
+              }
+            }
+          }
+        }
+      } catch (reopenErr) { logger.warn('state', `reopen guard failed: ${reopenErr.message}`); }
+    }
+
     // Reply de-duplication: if the candidate reply is near-identical to one of
     // the last few assistant replies, regenerate once with higher penalties and
     // an extra system instruction. If the regenerated reply is STILL a
@@ -1048,7 +1149,7 @@ async function processAiReply(job) {
     // neither the follow-up nor ai-recovery regenerates yet another duplicate.
     let suppressDuplicate = false;
     try {
-      const dup = await findDuplicateRecentReply({
+      let dup = await findDuplicateRecentReply({
         db,
         conversationId: conversation.id,
         candidate: customerReply,
@@ -1056,6 +1157,22 @@ async function processAiReply(job) {
         threshold: 0.85,
         userId,
       });
+      // Semantic dedup (#176, flagged): a candidate whose intent equals a recent
+      // reply's stored intent feeds the SAME regenerate-once path; final
+      // suppression still requires string similarity ≥ 0.85 (safe).
+      if (!dup && process.env.SEMANTIC_DEDUP_ENABLED === 'true') {
+        const candidateIntent = ai.lastDebug?.qualityGate?.intent || '';
+        if (candidateIntent) {
+          const recent = await loadRecentAssistantReplies({ database: db, userId, conversationId: conversation.id, limit: 6 });
+          const semanticMatch = recent.find(r => r.content && isSemanticDuplicate({
+            candidateIntent, recentReplyIntents: [r.intent], hasNewCustomerTurnSinceLastAssistant: false,
+          }));
+          if (semanticMatch) {
+            dup = { content: semanticMatch.content, similarity: replySimilarity(customerReply, semanticMatch.content) };
+            logger.warn('dedup', `semantic intent match "${candidateIntent}" — regenerating`);
+          }
+        }
+      }
       if (dup) {
         logger.warn('dedup', 'duplicate assistant reply detected — regenerating', {
           similarity: Number(dup.similarity).toFixed(3),
@@ -1072,6 +1189,8 @@ async function processAiReply(job) {
           customerProfile,
           instantAnswered: combinePrefix,
           escalationPending,
+          conversationState: convStateRow.state,
+          conversationStateCanInject,
         }).catch(() => '');
         const retry = String(retryRaw || '').trim();
         let regenerated = null;
@@ -1125,6 +1244,13 @@ async function processAiReply(job) {
       return { skipped: true, reason: 'duplicate_suppressed' };
     }
 
+    // Generation reference for the atomic send-time stale guard: the MAX
+    // DB-sourced inbound sequence this reply answered (integer, no clock skew).
+    const generatedAgainstSeq = enrichedMessages.reduce((max, m) => {
+      const seq = Number(m.inbound_seq);
+      return Number.isFinite(seq) && seq > max ? seq : max;
+    }, Number.NEGATIVE_INFINITY);
+    const generatedAgainstSeqValue = Number.isFinite(generatedAgainstSeq) ? generatedAgainstSeq : null;
     const replyMessageId = await storeAssistantMessage({
       userId,
       conversationId: conversation.id,
@@ -1132,6 +1258,8 @@ async function processAiReply(job) {
       reply: customerReply,
       jobId: job.id,
       qualityGateAudit: ai.lastDebug?.qualityGate,
+      generatedAgainstSeq: generatedAgainstSeqValue,
+      replyIntent: ai.lastDebug?.qualityGate?.intent || null,
     });
     const replyDelayMs = resolveReplyDelayMs(config);
 
@@ -1162,6 +1290,7 @@ async function processAiReply(job) {
       source: 'ai_reply',
       preSendReviewRequired: true,
       handoffAcknowledgement: Boolean(escalation.ownerMessage),
+      generatedAgainstSeq: generatedAgainstSeqValue,
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,
@@ -1487,6 +1616,7 @@ module.exports = {
   isConversationEscalationMuted,
   isTransientDatabaseError,
   loadPendingInboundMessages,
+  loadRecentAssistantReplies,
   markInboundMessageFailed,
   markInboundMessagesAnswered,
   markConversationMessagesAutoReplyDisabled,

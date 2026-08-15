@@ -5,6 +5,13 @@ const { normalizeEscalationTarget } = require('../../workers/escalation-routing'
 const { applyProductOp, applyInstantReplyOp, applyDoNotReplyOp } = require('../../../lib/config-edit-appliers');
 const menu = require('../../../lib/edit-menu');
 const { claimGroupAction: defaultClaimGroupAction } = require('../whatsapp/group-action-dedup');
+const { routeEditBody } = require('../instruction-routing/route-edit');
+
+// Structured fields the Instruction Routing Layer (#177) may write to. Whitelist —
+// the field is derived from a fixed SINK map, never raw merchant input.
+const ROUTED_FIELDS = new Set([
+  'escalationRules', 'slaPolicies', 'tenantPolicies', 'actionRequests', 'prohibitions', 'pendingKnowledge',
+]);
 
 // Legacy structured-edit targets (products / instant replies) still store the
 // full computed section value in proposed_value and write it verbatim on apply.
@@ -328,6 +335,32 @@ async function tryHandle({
     return ok('proposed');
   };
 
+  // Instruction Routing Layer (#177, flagged). Before a free-text instruction
+  // reaches botInstructions, try to route it to a STRUCTURED sink. Operational
+  // content (escalation/SLA/policy/action/prohibition) is confirmed into its own
+  // field or bounced back for clarification (unresolvable target / unknown).
+  // Returns a handled result, or null to fall through to the legacy prompt path.
+  const tryRouteInstruction = async (instrText, existing) => {
+    if (process.env.INSTRUCTION_ROUTING_ENABLED !== 'true') return null;
+    let routed = null;
+    try { routed = routeEditBody(instrText, config); } catch (err) {
+      logger?.warn?.('prompt-edit', `instruction routing failed: ${err.message}`);
+      return null;
+    }
+    if (!routed) return null;
+    if (routed.kind === 'clarify') {
+      await send(enqueue, userId, groupJid, routed.message);
+      return ok('clarify');
+    }
+    if (routed.kind === 'store') {
+      return proposeAndConfirm({
+        target: `routed:${routed.field}`, requestText: instrText,
+        existing: existing || null, proposedValue: routed.value, summary: routed.summary,
+      });
+    }
+    return null;
+  };
+
   // ── Terminal actions ──────────────────────────────────────────────────────
   const applyPending = async (s) => {
     const target = s.target || 'prompt';
@@ -359,6 +392,10 @@ async function tryHandle({
     try {
       if (target === 'prompt') {
         await applyInstructions(database, userId, s.proposed_instructions);
+      } else if (target.startsWith('routed:')) {
+        const field = target.slice('routed:'.length);
+        if (!ROUTED_FIELDS.has(field)) throw new Error(`unknown routed field: ${field}`);
+        await applySectionValue(database, userId, field, s.proposed_value);
       } else if (SNAPSHOT_FIELD[target]) {
         await applySectionValue(database, userId, SNAPSHOT_FIELD[target], s.proposed_value);
       } else if (target === 'do_not_reply') {
@@ -435,6 +472,8 @@ async function tryHandle({
   // ── Section input handlers ────────────────────────────────────────────────
   const handleSectionInput = async (s) => {
     if (s.section === 'prompt') {
+      const routed = await tryRouteInstruction(text, s);
+      if (routed) return routed;
       let proposal;
       try { proposal = await (await ai()).proposePromptEdit(config.botInstructions || '', text); } catch (err) {
         logger?.warn?.('prompt-edit', `proposePromptEdit failed: ${err.message}`);
@@ -615,6 +654,8 @@ async function tryHandle({
 
   // Explicit "برومنت …" shortcut: section is unambiguous → straight to confirm.
   if (isForcePrompt) {
+    const routed = await tryRouteInstruction(body, session || null);
+    if (routed) return routed;
     let proposal;
     try { proposal = await (await ai()).proposePromptEdit(config.botInstructions || '', body); } catch (err) {
       logger?.warn?.('prompt-edit', `proposePromptEdit failed: ${err.message}`);
