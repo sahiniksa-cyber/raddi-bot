@@ -3,8 +3,5 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "npm run start:all"
-restartPolicyType = "ALWAYS"
-restartPolicyMaxRetries = 100
-healthcheckPath = "/health"
-healthcheckTimeout = 300
+startCommand = "node scripts/staging-stale-concurrency-check.js 25"
+restartPolicyType = "NEVER"
