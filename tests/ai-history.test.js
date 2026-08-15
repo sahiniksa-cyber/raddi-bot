@@ -71,6 +71,38 @@ test('buildHistoryForReply appends inbound text when not already last user messa
   ]);
 });
 
+test('P1: appended inbound uses the REAL inbound timestamp (no fabricated new Date())', async () => {
+  const database = { query: async () => ({ rows: [] }) };
+  const realTs = new Date('2026-08-15T18:25:00Z');
+  const history = await buildHistoryForReply({
+    database,
+    userId: 'user-1',
+    conversationId: 'conv-1',
+    customerId: 'customer-1@s.whatsapp.net',
+    config: { memoryMessages: 5 },
+    inboundText: 'كم؟',
+    inboundCreatedAt: realTs,
+  });
+  const appended = history[history.length - 1];
+  assert.equal(appended.content, 'كم؟');
+  assert.equal(appended.ts.getTime(), realTs.getTime(), 'uses the provided real timestamp');
+});
+
+test('P1: appended inbound ts is null (unknown) when no real timestamp is available — never fabricated', async () => {
+  const database = { query: async () => ({ rows: [] }) };
+  const history = await buildHistoryForReply({
+    database,
+    userId: 'user-1',
+    conversationId: 'conv-1',
+    customerId: 'customer-1@s.whatsapp.net',
+    config: { memoryMessages: 5 },
+    inboundText: 'كم؟',
+    // no inboundCreatedAt provided
+  });
+  const appended = history[history.length - 1];
+  assert.equal(appended.ts, null, 'unknown time stays null, not new Date()');
+});
+
 test('buildHistoryForReply starts a fresh session after a long gap and identifies the owner message', async () => {
   const database = {
     query: async () => ({

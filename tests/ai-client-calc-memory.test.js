@@ -52,16 +52,26 @@ test('P2 scenario: prior product/package reference REACHES the model (raw histor
     { role: 'assistant', content: 'الرسوم حسب إعداد المتجر', ts: null },
     { role: 'user', content: 'كم؟', ts: null },
   ];
-  const msgs = client(STORE_A).composeMessages(history, {});
+  const msgs = client(STORE_A).composeMessages(history, { latestUserText: 'كم؟' });
   // The earlier package reference is present in what the model receives — the
   // model can resolve "كم؟" from context, not lose it.
   const joined = msgs.map((m) => m.content).join('\n');
   assert.match(joined, /الباقة X/);
   assert.match(joined, /كم؟/);
-  // And the authoritative rule (10%) + base price (100) are in the system prompt,
-  // so the answer is computable deterministically without escalation.
-  assert.match(msgs[0].content, /10\s*%|10%/);
-  assert.match(msgs[0].content, /100/);
+  // The reply path actually RAN computePrice() and injected the computed total as
+  // a fact — not "here's 100 and 10%, you do the math".
+  assert.match(msgs[0].content, /calculated_total=110/);
+});
+
+test('P2: two tenants each get their OWN computed total injected (110 vs 210), no leak', () => {
+  const askX = [{ role: 'user', content: 'أبي الباقة X', ts: null }, { role: 'user', content: 'كم؟', ts: null }];
+  const askZ = [{ role: 'user', content: 'أبي المنتج Z', ts: null }, { role: 'user', content: 'كم؟', ts: null }];
+  const a = client(STORE_A).composeMessages(askX, { latestUserText: 'كم؟' })[0].content;
+  const b = client(STORE_B).composeMessages(askZ, { latestUserText: 'كم؟' })[0].content;
+  assert.match(a, /calculated_total=110/);
+  assert.doesNotMatch(a, /calculated_total=210/);
+  assert.match(b, /calculated_total=210/);
+  assert.doesNotMatch(b, /calculated_total=110/);
 });
 
 test('P2: a tenant with NO pricing rule gets no calc block (zero impact)', () => {

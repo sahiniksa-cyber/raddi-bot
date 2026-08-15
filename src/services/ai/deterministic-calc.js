@@ -98,4 +98,138 @@ ${lines.join('\n')}
 - إجراء عملية حسابية سعرية ليس سبباً للتصعيد إطلاقاً؛ أنت تجاوب عليها مباشرة.`;
 }
 
-module.exports = { computePrice, parseAmount, buildCalculationBlock, tenantRules };
+// ── Reply-path resolution: bind "كم؟" to a product/variant + actually compute ──
+// This is what makes the calculation DETERMINISTIC end-to-end: the reply path
+// resolves the referenced product from conversation context (tenant data only),
+// pulls the trusted base price + the tenant's rule, and calls computePrice()
+// HERE — then the computed total is handed to the model as a fact.
+
+function normArabic(s) {
+  return String(s == null ? '' : s)
+    .replace(/[ً-ْٰ]/g, '')
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .toLowerCase()
+    .trim();
+}
+
+const PRICE_Q_RE = /(كم|بكم|السعر|سعر|المجموع|الاجمالي|الإجمالي|التكلفه|التكلفة|كم يطلع|كم يصير|كم يكلف|كم صار)/;
+function detectPriceQuestion(text) {
+  return PRICE_Q_RE.test(normArabic(text));
+}
+
+function conversationText(history = [], latestUserText = '') {
+  const parts = (Array.isArray(history) ? history : []).map((m) => String(m && m.content || ''));
+  parts.push(String(latestUserText || ''));
+  return parts;
+}
+
+// Which of the tenant's products are referenced anywhere in the conversation?
+function mentionedProducts(products, texts) {
+  const normTexts = texts.map(normArabic);
+  return (Array.isArray(products) ? products : []).filter((p) => {
+    const name = normArabic(p && p.name);
+    return name && normTexts.some((t) => t.includes(name));
+  });
+}
+
+/**
+ * Resolve the product the customer is asking the price of, from conversation
+ * context + tenant products only. { status:'resolved'|'ambiguous'|'none' }.
+ */
+function resolveProductReference({ history, latestUserText, products } = {}) {
+  const texts = conversationText(history, latestUserText);
+  const hits = mentionedProducts(products, texts);
+  const distinct = [];
+  for (const p of hits) if (!distinct.find((q) => normArabic(q.name) === normArabic(p.name))) distinct.push(p);
+  if (distinct.length === 1) return { status: 'resolved', product: distinct[0] };
+  if (distinct.length > 1) return { status: 'ambiguous', candidates: distinct.map((p) => p.name) };
+  return { status: 'none' };
+}
+
+// Pick the variant the customer chose (by label appearing in the conversation).
+function resolveVariant(product, texts) {
+  const variants = Array.isArray(product && product.variants) ? product.variants.filter((v) => v && (v.label || v.price)) : [];
+  if (!variants.length) return { kind: 'no_variants' };
+  const normTexts = texts.map(normArabic);
+  const chosen = variants.filter((v) => {
+    const label = normArabic(v.label);
+    return label && normTexts.some((t) => t.includes(label));
+  });
+  if (chosen.length === 1) return { kind: 'chosen', variant: chosen[0] };
+  return { kind: 'ambiguous', variants: variants.map((v) => v.label) };
+}
+
+// Pick the tenant rule to apply. One rule → it. Many → match by label token in
+// the conversation; exactly one match → it; otherwise ambiguous.
+function resolveRule(config, texts) {
+  const rules = tenantRules(config);
+  if (rules.length === 0) return { kind: 'none', rule: null };
+  if (rules.length === 1) return { kind: 'one', rule: rules[0] };
+  const normTexts = texts.map(normArabic);
+  const matched = rules.filter((r) => {
+    const label = normArabic(r.label);
+    return label && normTexts.some((t) => t.includes(label));
+  });
+  if (matched.length === 1) return { kind: 'one', rule: matched[0] };
+  return { kind: 'ambiguous', rules: rules.map((r) => r.label || r.type) };
+}
+
+/**
+ * The reply-path entry point. Returns a discriminated result; when 'computed',
+ * `computation` is the ACTUAL computePrice() output (deterministic, in code).
+ */
+function resolvePriceComputation({ history, latestUserText, config } = {}) {
+  const cfg = config || {};
+  if (!detectPriceQuestion(latestUserText)) return { status: 'not_a_calc' };
+
+  const ref = resolveProductReference({ history, latestUserText, products: cfg.products });
+  if (ref.status === 'none') return { status: 'no_reference' };
+  if (ref.status === 'ambiguous') return { status: 'ambiguous_product', candidates: ref.candidates };
+
+  const product = ref.product;
+  const texts = conversationText(history, latestUserText);
+
+  let basePrice = product.price;
+  let variant = null;
+  const v = resolveVariant(product, texts);
+  if (v.kind === 'ambiguous') return { status: 'ambiguous_variant', product, variants: v.variants };
+  if (v.kind === 'chosen') { variant = v.variant; basePrice = v.variant.price; }
+
+  if (parseAmount(basePrice) == null) return { status: 'unknown_base', product };
+
+  const rr = resolveRule(cfg, texts);
+  if (rr.kind === 'ambiguous') return { status: 'ambiguous_rule', product, rules: rr.rules };
+
+  // Deterministic computation happens HERE, in code — not left to the LLM.
+  const computation = computePrice({ basePrice, quantity: 1, rule: rr.rule });
+  if (!computation.ok) return { status: 'unknown_base', product };
+  return { status: 'computed', product, variant, rule: rr.rule, computation };
+}
+
+function buildPriceComputationBlock(resolution) {
+  const r = resolution || {};
+  switch (r.status) {
+    case 'computed': {
+      const label = r.rule && r.rule.label ? r.rule.label : (r.rule ? r.rule.type : 'بدون رسوم');
+      const vlabel = r.variant && r.variant.label ? ` (${r.variant.label})` : '';
+      return `\n\n💰 حساب فوري (احتُسب في النظام آلياً — حقيقة ثابتة، اذكر الرقم كما هو ولا تُعِد حسابه): ${r.product.name}${vlabel} → calculated_total=${r.computation.total} (السعر الأساسي ${r.computation.basePrice}${r.rule ? ` + قاعدة «${label}»` : ''}). أعطِ العميل هذا الرقم مباشرة.`;
+    }
+    case 'ambiguous_product':
+      return `\n\n❓ العميل يسأل عن السعر لكن لم يحدّد أي منتج (${(r.candidates || []).join('، ')}). اسأله سؤالاً توضيحياً واحداً فقط ليحدّد المنتج. لا تصعّد ولا تحوّله لأحد.`;
+    case 'ambiguous_variant':
+      return `\n\n❓ العميل يسأل عن سعر «${r.product.name}» لكن لم يحدّد الباقة (${(r.variants || []).join('، ')}). اسأله سؤالاً توضيحياً واحداً فقط ليحدّد الباقة. لا تصعّد.`;
+    case 'ambiguous_rule':
+      return `\n\n❓ العميل يسأل عن السعر لكن طريقة الدفع/الرسوم غير محدّدة (${(r.rules || []).join('، ')}). اسأله سؤالاً توضيحياً واحداً فقط. لا تصعّد.`;
+    case 'unknown_base':
+      return `\n\n⚠️ السعر الأساسي لـ«${r.product ? r.product.name : 'المنتج'}» غير مسجّل في بيانات المتجر. لا تخترع رقماً؛ اعتذر بلطف واطلب التوضيح إن لزم. لا تصعّد لمجرد ذلك.`;
+    default:
+      return '';
+  }
+}
+
+module.exports = {
+  computePrice, parseAmount, buildCalculationBlock, tenantRules,
+  detectPriceQuestion, resolveProductReference, resolvePriceComputation, buildPriceComputationBlock,
+};

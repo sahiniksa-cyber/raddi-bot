@@ -77,6 +77,7 @@ async function buildHistoryForReply({
   userId,
   channelId = 'whatsapp',
   customerId,
+  inboundCreatedAt = null,
 }) {
   if (!userId) throw new Error('userId is required for AI history');
   const memSize = normalizeMemoryLimit(config);
@@ -99,8 +100,11 @@ async function buildHistoryForReply({
   const last = history[history.length - 1];
 
   if (text && (!last || last.role !== 'user' || last.content !== text)) {
-    // The pending inbound just arrived → its clock time is "now".
-    history.push({ role: 'user', content: text, ts: new Date() });
+    // Use the REAL inbound timestamp (from the DB row / event) — never a
+    // fabricated new Date(). If it isn't available, ts stays null (unknown): the
+    // time layer then renders no clock for this turn rather than inventing one.
+    const ts = inboundCreatedAt != null ? new Date(inboundCreatedAt) : null;
+    history.push({ role: 'user', content: text, ts: (ts && !Number.isNaN(ts.getTime())) ? ts : null });
   }
   if (history.length > memSize) history.splice(0, history.length - memSize);
   return history;
