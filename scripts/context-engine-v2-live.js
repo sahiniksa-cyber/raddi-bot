@@ -34,8 +34,12 @@ const {
 } = require('../src/services/ai/conversation-state');
 const { deriveResolvedPricingContext, resolvePriceComputation } = require('../src/services/ai/deterministic-calc');
 const { prepareEscalation } = require('../src/workers/escalation-routing');
+const { applyDeterministicEscalation } = require('../src/services/instruction-routing/escalation-rules');
+const { reviewOutgoingReplyBeforeSend } = require('../src/services/ai/pre-send-review');
 
+// Mirror production flags in-process (never touches Railway). Both are ON in prod.
 process.env.CONVERSATION_STATE_ENABLED = 'true';
+process.env.INSTRUCTION_ROUTING_ENABLED = 'true';
 
 const TOKEN_METRICS_MIN_SAMPLES = 20; // below this we cannot honestly report percentiles
 
@@ -153,6 +157,85 @@ function scrub(text) {
   return String(text || '').replace(/\d[\d\s-]{6,}\d/g, '[رقم محجوب]').replace(/[\w.+-]+@[\w.-]+\.\w+/g, '[بريد محجوب]');
 }
 
+// A pre-send reviewer that calls the REAL production reviewOutgoingReplyBeforeSend
+// with the REAL AIClient reviewer (bot.reviewReplyBeforeSend → ai.reviewBeforeSend)
+// but a no-write in-memory DB (reads only) and replyMessageId=null (no persist).
+function makeLiveReviewer(ai, { userId, conversationId, sender, getHistory }) {
+  const bot = { reviewReplyBeforeSend: (input) => ai.reviewBeforeSend(input) };
+  const fakeDb = {
+    isConfigured: () => true,
+    async query(sql) {
+      // Serve the pre-send-review "recent history" SELECT from the live history
+      // (newest-first, as the real query returns), everything else empty.
+      if (/FROM messages/i.test(sql) && /direction = 'inbound'/i.test(sql)) {
+        const h = getHistory();
+        const base = 1_700_000_000_000; // fixed epoch; only ordering matters
+        const rows = h.map((m, i) => ({
+          role: m.role,
+          direction: m.role === 'user' ? 'inbound' : 'outbound',
+          content: m.content,
+          status: m.role === 'user' ? 'received' : 'sent',
+          raw_payload: null,
+          created_at: new Date(base + i * 1000).toISOString(),
+        }));
+        return { rows: rows.reverse() }; // DESC, like the production query
+      }
+      return { rows: [] };
+    },
+  };
+  return async ({ draft, source }) => reviewOutgoingReplyBeforeSend({
+    database: fakeDb,
+    bot,
+    payload: { preSendReviewRequired: true, source: source || 'ai_reply', customerId: sender, sender, channelId: 'whatsapp', conversationId },
+    userId,
+    conversationId,
+    replyMessageId: null, // no DB write
+    draft,
+  });
+}
+
+/**
+ * The FULL production send-boundary pipeline (no DB/WhatsApp writes):
+ *   getReply → applyDeterministicEscalation → prepareEscalation (ai-worker step)
+ *   → pre-send AI review (reviewOutgoingReplyBeforeSend) → final prepareEscalation
+ *   (the handoff detection routePreSendEscalation performs) → FINAL CUSTOMER TEXT.
+ * `escalated` and `finalText` are read AFTER the last layer — not after getReply.
+ * Layer fns are injectable so the anti-false-pass tests can force each scenario.
+ */
+async function runSendPipeline({
+  ai, config, history, latestUserText, state, canInject, intent = '', slaBreached = false,
+  reviewBeforeSend, sender = 's', userId = 'u', conversationId = 'c', getReplyImpl,
+}) {
+  const routingEnabled = process.env.INSTRUCTION_ROUTING_ENABLED === 'true';
+  const draft = getReplyImpl
+    ? String(await getReplyImpl() || '').trim()
+    : String(await ai.getReply(history, { conversationState: state, conversationStateCanInject: canInject, escalationPending: false, latestUserText }) || '').trim();
+
+  // Layer 2: deterministic escalation (may inject a [تحويل:] marker).
+  let reply = draft; let detEscalated = false;
+  if (routingEnabled) {
+    const det = applyDeterministicEscalation(reply, config, { text: latestUserText, intent, slaBreached });
+    reply = det.reply; detEscalated = det.escalated === true;
+  }
+  // Layer 3: ai-worker escalation prep.
+  const esc1 = prepareEscalation({ reply, config, customerSender: sender, customerPhoneNumber: null, inboundText: latestUserText });
+  const escalated1 = !!esc1.ownerMessage;
+  const draftForSend = String(esc1.customerReply || '').trim();
+
+  // Layer 4: pre-send AI review (fail-closed in prod; here it may rewrite/suppress).
+  const preSend = await reviewBeforeSend({ draft: draftForSend, source: 'ai_reply' });
+  if (preSend && preSend.suppressed) {
+    return { draft, finalText: null, status: 'suppressed', suppressed: true, escalated: detEscalated || escalated1, requiresHuman: preSend.requiresHuman === true };
+  }
+  // Layer 5: final handoff detection at the send boundary (the same prepareEscalation
+  // that routePreSendEscalation runs) — on the POST-REVIEW text.
+  const reviewedReply = String((preSend && preSend.reply) || draftForSend).trim();
+  const finalEsc = prepareEscalation({ reply: reviewedReply, config, customerSender: sender, customerPhoneNumber: null, inboundText: latestUserText });
+  const finalText = String(finalEsc.customerReply || '').trim();
+  const escalated = detEscalated || escalated1 || (preSend && preSend.requiresHuman === true) || !!finalEsc.ownerMessage;
+  return { draft, finalText, status: 'sent', suppressed: false, escalated, requiresHuman: preSend ? preSend.requiresHuman === true : false };
+}
+
 // ── Scenarios ──────────────────────────────────────────────────────────────
 const B_CONFIG = { products: [{ name: 'برنامج ألفا', price: 100 }, { name: 'برنامج بيتا', price: 200 }] };
 const D_CONFIG = { products: [{ name: 'باقة سيلفر', price: 100 }, { name: 'باقة قولد', price: 200 }] };
@@ -247,21 +330,23 @@ async function runScenario(sc, config, tokenSamples) {
     if (tok != null) tokenSamples.push(tok);
     state = ex.state;
 
-    let reply = '';
-    try {
-      reply = String(await ai.getReply(history, {
-        conversationState: state, conversationStateCanInject: ex.extraction_ok,
-        escalationPending: false, latestUserText: turn.c,
-      }) || '').trim();
-    } catch (e) { notes.push(`getReply error: ${e.message}`); pass = false; }
-    const esc = prepareEscalation({ reply, config: scConfig, customerSender: 's', customerPhoneNumber: 'p', inboundText: turn.c });
-    const finalReply = (esc.customerReply || '').trim();
-    const escalated = !!esc.ownerMessage || /\[تحويل:/.test(reply);
-    history.push({ role: 'assistant', content: finalReply || reply });
-
     const rc = deriveResolvedPricingContext(state);
     const price = resolvePriceComputation({ history, latestUserText: turn.c, config: scConfig, resolvedContext: rc });
     const trace = buildStateTrace(state, { tenantId: 'staging-tenant', conversationId: sc.id, extractionOk: ex.extraction_ok });
+
+    // Run the FULL production send-boundary pipeline; escalation/suppression are
+    // read AFTER the last layer, not after getReply.
+    const reviewer = makeLiveReviewer(ai, { userId: 'staging-tenant', conversationId: sc.id, sender: 's', getHistory: () => history.slice() });
+    let pipe = { finalText: '', escalated: false, suppressed: false, requiresHuman: false, status: 'sent' };
+    try {
+      pipe = await runSendPipeline({
+        ai, config: scConfig, history, latestUserText: turn.c, state, canInject: ex.extraction_ok,
+        intent: trace.intent || '', reviewBeforeSend: reviewer, sender: 's', userId: 'staging-tenant', conversationId: sc.id,
+      });
+    } catch (e) { notes.push(`pipeline error: ${e.message}`); pass = false; }
+    const finalReply = pipe.finalText || '';
+    const escalated = pipe.escalated;
+    history.push({ role: 'assistant', content: finalReply || (pipe.suppressed ? '(suppressed)' : '') });
 
     if (turn.expect) {
       const ctx = {
@@ -286,8 +371,8 @@ async function runScenario(sc, config, tokenSamples) {
 
     if (!sc.stability) {
       console.log(`\n[${sc.id}] C: ${scrub(turn.c)}`);
-      console.log(`   ok=${ex.extraction_ok} intent=${trace.intent} active=${trace.active_entity} pending=${trace.pending_expectation} price=${price.status}${price.computation ? '/' + price.computation.total : ''} tok=${tok} lat=${latency}ms esc=${escalated}`);
-      console.log(`   BOT: ${scrub(finalReply).slice(0, 200)}`);
+      console.log(`   ok=${ex.extraction_ok} intent=${trace.intent} active=${trace.active_entity} pending=${trace.pending_expectation} price=${price.status}${price.computation ? '/' + price.computation.total : ''} tok=${tok} lat=${latency}ms esc=${escalated} status=${pipe.status}`);
+      console.log(`   BOT: ${pipe.suppressed ? '(suppressed by pre-send review)' : scrub(finalReply).slice(0, 200)}`);
     }
   }
 
@@ -335,6 +420,7 @@ async function main() {
 module.exports = {
   scenarios, buildFiftyTurnScenario, extractWithUsage, resolveLiveConfig,
   checkExpect, tokenStats, tokenMetricsVerdict, stabilityVerdict, pctile, outputTokensOf,
+  runSendPipeline, makeLiveReviewer,
 };
 
 if (require.main === module) {

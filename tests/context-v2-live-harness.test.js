@@ -101,3 +101,65 @@ test('every scenario expectation implicitly requires extraction (no requiresExtr
     }
   }
 });
+
+// ── Anti-false-pass: escalation is detected AFTER the last layer, not after getReply ──
+
+const ESC_CONFIG = {
+  escalationContacts: [{ id: 'c1', name: 'المدير', phone: '966500000000' }],
+  escalationRules: [{ trigger_type: 'keyword', trigger_value: 'مدير', target_contact_id: 'c1' }],
+};
+const passThroughReview = async ({ draft }) => ({ reply: draft, suppressed: false, requiresHuman: false, audit: {} });
+
+test('FALSE-PASS 1: clean draft but DETERMINISTIC escalation fires → harness reports escalated', async () => {
+  const prev = process.env.INSTRUCTION_ROUTING_ENABLED;
+  process.env.INSTRUCTION_ROUTING_ENABLED = 'true';
+  const res = await harness.runSendPipeline({
+    config: ESC_CONFIG, history: [], latestUserText: 'أبي أكلم مدير', state: {}, canInject: false,
+    getReplyImpl: async () => 'تمام أقدر أساعدك في طلبك', // NORMAL draft, no marker
+    reviewBeforeSend: passThroughReview,
+  });
+  assert.equal(res.escalated, true, 'deterministic escalation must be detected in the live path');
+  assert.ok(!/\[تحويل:/.test(res.finalText), 'marker stripped from the final customer text');
+  process.env.INSTRUCTION_ROUTING_ENABLED = prev;
+});
+
+test('FALSE-PASS 2: clean draft but PRE-SEND REVIEW returns a handoff → harness reports escalated at the boundary', async () => {
+  const res = await harness.runSendPipeline({
+    config: { escalationContacts: [{ id: 'c1', name: 'الدعم', phone: '966500000000' }] },
+    history: [], latestUserText: 'عندي مشكلة معقدة', state: {}, canInject: false,
+    getReplyImpl: async () => 'رد عادي بدون أي تصعيد', // clean AFTER getReply
+    reviewBeforeSend: async ({ draft }) => ({ reply: `${draft} [تحويل:الدعم|طلب دعم بشري]`, suppressed: false, requiresHuman: true, audit: { requiresHuman: true } }),
+  });
+  assert.equal(res.escalated, true, 'escalation introduced by the pre-send review must be detected');
+  assert.ok(!/\[تحويل:/.test(res.finalText), 'final send-boundary text has the marker stripped');
+});
+
+test('pre-send review SUPPRESS → final status is suppressed, not a successful reply', async () => {
+  const res = await harness.runSendPipeline({
+    config: {}, history: [], latestUserText: 'شكراً', state: {}, canInject: false,
+    getReplyImpl: async () => 'العفو، تم', reviewBeforeSend: async () => ({ suppressed: true, reply: '' }),
+  });
+  assert.equal(res.status, 'suppressed');
+  assert.equal(res.suppressed, true);
+  assert.equal(res.finalText, null);
+});
+
+test('FINAL TEXT is the actual send-boundary text (post-review rewrite), not the getReply draft', async () => {
+  const res = await harness.runSendPipeline({
+    config: {}, history: [], latestUserText: 'كم السعر؟', state: {}, canInject: false,
+    getReplyImpl: async () => 'مسودة أولية طويلة',
+    reviewBeforeSend: async () => ({ reply: 'النص المنقّح النهائي', suppressed: false, requiresHuman: false }),
+  });
+  assert.equal(res.finalText, 'النص المنقّح النهائي');
+  assert.notEqual(res.finalText, res.draft);
+});
+
+test('normal reply through the full pipeline does NOT escalate (no false positive)', async () => {
+  const res = await harness.runSendPipeline({
+    config: { escalationContacts: [{ id: 'c1', name: 'الدعم', phone: '966500000000' }] },
+    history: [], latestUserText: 'كم سعر الاشتراك؟', state: {}, canInject: false,
+    getReplyImpl: async () => 'السعر 189 ريال', reviewBeforeSend: passThroughReview,
+  });
+  assert.equal(res.escalated, false);
+  assert.equal(res.finalText, 'السعر 189 ريال');
+});
