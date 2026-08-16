@@ -9,10 +9,12 @@
  * REAL system prompt (AIClient.buildSystemPrompt = the model input). It prints the
  * salient state fields per turn and asserts the acceptance invariants (§28).
  *
- * No DB, no Redis, no secrets. The EXTRACTION step is the only stand-in: offline,
- * a deterministic fixture-merger plays the role of the LLM (clearly labelled). On
- * staging the owner can flip CONTEXT_REPLAY_LIVE=1 to use a real provider for the
- * extraction call instead — the consumption path (pricing, prompt) is identical.
+ * No DB, no Redis, no secrets. This script proves the CONSUMPTION PLUMBING
+ * deterministically: the EXTRACTION step is a stand-in (a fixture-merger plays the
+ * role of the LLM, clearly labelled), while resolution, computePrice and the
+ * system prompt are the REAL code. For a fully LIVE run (real extraction model +
+ * real main reply model + validators/escalation → final customer text) use
+ * scripts/context-engine-v2-live.js with a staging provider key.
  *
  * Run: node scripts/context-engine-v2-replay.js
  */

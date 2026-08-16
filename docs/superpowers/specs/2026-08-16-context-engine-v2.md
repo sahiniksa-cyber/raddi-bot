@@ -55,6 +55,31 @@ build a second memory.
   quality + cost.
 - Full suite green.
 
+## Review round 2 (blockers 3–6 fixed + live harness)
+
+- **3 Entity recency/cap/dedupe:** entities are deduped by `type+ref` (newer wins,
+  fields merged), sorted newest-first BEFORE the cap (the newest is never dropped),
+  and a stale V1 `active_entity` no longer overrides a newer V2 entity.
+- **4 Memory recency:** `capMemories` and `selectRelevantMemories` break value/
+  relevance ties by RECENCY (`last_updated` numeric/ISO, else insertion index) —
+  a new high-value memory is never dropped for an equally-valued stale one.
+- **5 Strict budget:** the block length is ALWAYS `<= maxChars` (skip, don't
+  `break`, on oversized sections; whole-line hard trim as a safety net).
+- **6 Extraction output budget:** `compactStateForExtraction` bounds the prompt
+  (relevant memories + newest entities), `max_tokens` is computed (700..1200), and
+  `mergePreservedMemories` re-attaches older memories so nothing is silently lost.
+
+### Live verification (`scripts/context-engine-v2-live.js`)
+
+Runs REAL conversations through the whole path — real extraction model → state →
+context block → pricing → real main reply model → validators + deterministic
+escalation + `prepareEscalation` → the FINAL customer text. No hand-built state.
+Covers the payment failure (item 2) and reference scenarios A–H (item 7), prints
+PII-scrubbed output + extraction success / latency. Needs a STAGING provider key
+(`CONTEXT_LIVE_OPENAI_API_KEY` | `_OPENROUTER_` | `_GOOGLE_`, or
+`CONTEXT_LIVE_CONFIG`). **With no key it prints BLOCKED for every live item and
+never a false PASS.** The offline replay is the deterministic plumbing proof only.
+
 ## Rollout
 
 Code + tests + scripts only. **No feature flag, Railway env, or production
