@@ -555,9 +555,47 @@ function detectResolvedReopen(replyText, resolvedIssues = [], customerText = '',
   return { reopened: false, issue: null };
 }
 
+/**
+ * A privacy-safe diagnostic trace of the state for a failed/observed reply cycle
+ * (spec §27). Emits shape/metadata ONLY — never labels, known_fact values, free
+ * text purposes, phone numbers, emails, API keys, tokens, or the conversation.
+ * Entities are reported as `type:ref` (ref is a slug id, not customer data).
+ */
+function buildStateTrace(state, { tenantId, conversationId, stateVersion, extractionOk, contextBlockSize } = {}) {
+  const s = state || {};
+  const entities = arr(s.active_entities);
+  const ltu = s.last_turn_understanding || {};
+  const refs = arr(ltu.resolved_references);
+  const ae = s.active_entity;
+  const facts = (s.known_facts && typeof s.known_facts === 'object' && !Array.isArray(s.known_facts))
+    ? Object.keys(s.known_facts) : [];
+  return {
+    tenant_id: tenantId != null ? String(tenantId) : null,
+    conversation_id: conversationId != null ? String(conversationId) : null,
+    state_version: Number.isFinite(Number(stateVersion)) ? Number(stateVersion) : null,
+    extraction_ok: extractionOk === true,
+    intent: ltu.intent || null,
+    active_topic: s.active_topic || null,
+    active_entity: ae && ae.type ? `${ae.type}:${ae.ref || '?'}` : null,
+    active_entity_types: [...new Set(entities.map((e) => e && e.type).filter(Boolean))],
+    active_entities_count: entities.length,
+    resolved_references: refs.length,
+    ambiguity_reason: refs.some((r) => r && r.confidence === 'low') ? 'low_confidence_reference' : null,
+    topic_transition: ltu.topic_transition || null,
+    customer_correction: ltu.customer_correction === true,
+    pending_expectation: s.pending_expectation && s.pending_expectation.type ? s.pending_expectation.type : null,
+    known_facts_count: facts.length,
+    memories_selected: arr(s.salient_memories).length,
+    open_issues_count: arr(s.open_issues).length,
+    resolved_issues_count: arr(s.resolved_issues).length,
+    context_block_size: Number.isFinite(Number(contextBlockSize)) ? Number(contextBlockSize) : null,
+  };
+}
+
 module.exports = {
   EMPTY_STATE,
   validateState,
+  buildStateTrace,
   parseExtractionResponse,
   EXTRACTION_SYSTEM_PROMPT,
   buildExtractionRequest,
