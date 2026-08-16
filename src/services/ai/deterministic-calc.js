@@ -114,6 +114,8 @@ ${lines.join('\n')}
 // pulls the trusted base price + the tenant's rule, and calls computePrice()
 // HERE — then the computed total is handed to the model as a fact.
 
+const { isLaterMarker } = require('./conversation-state');
+
 function normArabic(s) {
   return String(s == null ? '' : s)
     .replace(/[ً-ْٰ]/g, '')
@@ -313,7 +315,7 @@ function newestByType(entities, typeSet) {
   if (!list.length) return null;
   let best = list[0];
   for (const e of list) {
-    if (e.last_seen != null && (best.last_seen == null || String(e.last_seen) > String(best.last_seen))) best = e;
+    if (isLaterMarker(e.last_seen, best.last_seen)) best = e;
   }
   return best.label || best.ref;
 }

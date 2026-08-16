@@ -99,8 +99,18 @@ function validateEntity(x) {
   return e;
 }
 
-// The single most-relevant entity: the one with the greatest last_seen marker
-// (lexicographically comparable — sequence numbers or ISO timestamps both work),
+// True when marker `a` is LATER than marker `b`. Numeric sequences compare
+// numerically ('10' > '6'); anything non-numeric (ISO timestamps) compares as
+// strings. A present marker always beats an absent one.
+function isLaterMarker(a, b) {
+  if (a == null) return false;
+  if (b == null) return true;
+  const na = Number(a); const nb = Number(b);
+  if (Number.isFinite(na) && Number.isFinite(nb) && String(a).trim() !== '' && String(b).trim() !== '') return na > nb;
+  return String(a) > String(b);
+}
+
+// The single most-relevant entity: the one with the latest last_seen marker,
 // falling back to the last entry when no markers exist. Keeps V1's `active_entity`
 // meaningful for any code that reads it, derived from the V2 list.
 function deriveActiveEntity(entities) {
@@ -108,7 +118,7 @@ function deriveActiveEntity(entities) {
   if (!list.length) return null;
   let best = list[0];
   for (const e of list) {
-    if (e.last_seen != null && (best.last_seen == null || String(e.last_seen) > String(best.last_seen))) best = e;
+    if (isLaterMarker(e.last_seen, best.last_seen)) best = e;
   }
   return best;
 }
@@ -596,6 +606,7 @@ module.exports = {
   EMPTY_STATE,
   validateState,
   buildStateTrace,
+  isLaterMarker,
   parseExtractionResponse,
   EXTRACTION_SYSTEM_PROMPT,
   buildExtractionRequest,
