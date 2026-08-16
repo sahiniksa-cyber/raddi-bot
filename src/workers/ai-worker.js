@@ -20,6 +20,7 @@ const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { applyDeterministicEscalation } = require('../services/instruction-routing/escalation-rules');
 const { computeSlaBreach } = require('../services/instruction-routing/sla-breach');
+const { resolveTrustedEventTimestamp } = require('../services/ai/trusted-event-time');
 const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
 const { getProfile: getCustomerProfile, extractAsync: extractCustomerProfileAsync } = require('./profile-extractor');
 const { resolveReplyDelayMs } = require('./reply-delay');
@@ -290,7 +291,7 @@ async function loadPendingInboundMessages({
          AND direction = 'outbound'
          AND role = 'assistant'
      )
-     SELECT id, sender, content, provider_message_id, raw_payload, inbound_seq
+     SELECT id, sender, content, provider_message_id, raw_payload, inbound_seq, created_at
      FROM messages m
      WHERE conversation_id = $1
        AND user_id = $2
@@ -997,6 +998,11 @@ async function processAiReply(job) {
     }
     const combinePrefix = instantMatched.length ? cannedPrefix : '';
 
+    // Real inbound timestamp for the current turn (DB insert time of the latest
+    // pending message). Threaded into history so the time layer renders the true
+    // clock — never a fabricated one. Absent → null (unknown).
+    const latestPending = enrichedMessages.length ? enrichedMessages[enrichedMessages.length - 1] : null;
+    const inboundCreatedAt = latestPending && latestPending.created_at != null ? latestPending.created_at : null;
     const history = await buildHistoryForReply({
       database: db,
       conversationId: conversation.id,
@@ -1004,6 +1010,7 @@ async function processAiReply(job) {
       inboundText: text,
       userId,
       customerId: conversation.sender,
+      inboundCreatedAt,
     });
 
     // Customer profile (best-effort). Never blocks the reply: any failure
@@ -1041,13 +1048,19 @@ async function processAiReply(job) {
     let slaBreach = { computable: false, sla_breached: false };
     if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true') {
       try {
+        // Pick the trusted SLA anchor from available sources (extensible: future
+        // order/payment/ticket/status timestamps slot in here — NOT message time).
+        // Only escalation_thread_created_at is wired today.
+        const trusted = resolveTrustedEventTimestamp({
+          escalation_thread_created_at: escalationSince,
+        });
         slaBreach = computeSlaBreach({
-          since: escalationSince,
+          since: trusted ? trusted.timestamp : null,
           now: Date.now(),
           slaPolicies: config.slaPolicies,
         });
         if (slaBreach.sla_breached) {
-          logger.info('routing', `SLA breach computed: pending ${slaBreach.elapsed_human} > ${slaBreach.expected_sla_human}`);
+          logger.info('routing', `SLA breach computed (anchor=${trusted.source}): pending ${slaBreach.elapsed_human} > ${slaBreach.expected_sla_human}`);
         }
       } catch (slaErr) {
         logger.warn('routing', `sla breach compute failed: ${slaErr.message}`);
