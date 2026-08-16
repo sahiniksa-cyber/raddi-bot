@@ -12,7 +12,19 @@
  * database or an LLM.
  */
 
+// Context Engine V2 caps (deterministic bounds — a state must never grow without
+// limit; these are the code-level guarantees behind spec §8 and §19).
+const MAX_ACTIVE_ENTITIES = 20;
+const MAX_RECENT_TOPICS = 12;
+const MAX_SALIENT_MEMORIES = 50;
+const MAX_RESOLVED_REFERENCES = 12;
+
+// V2 state is a strict SUPERSET of V1: every V1 slot is preserved so old DB rows
+// keep working, and the new V2 slots default to empty. `schema_version` marks the
+// shape; the renderer keys off content presence, never the version number.
 const EMPTY_STATE = Object.freeze({
+  schema_version: 2,
+  // ── V1 slots (backward compatible) ──
   open_issues: [],
   resolved_issues: [],
   active_topic: null,
@@ -21,6 +33,17 @@ const EMPTY_STATE = Object.freeze({
   customer_goal: null,
   actions_attempted: [],
   last_reply_intent: null,
+  // ── V2 slots ──
+  active_entities: [],
+  recent_topics: [],
+  pending_expectation: null,
+  salient_memories: [],
+  last_turn_understanding: Object.freeze({
+    intent: null,
+    resolved_references: [],
+    topic_transition: null,
+    customer_correction: false,
+  }),
 });
 
 function plainObject(v) {
@@ -29,8 +52,15 @@ function plainObject(v) {
 function str(v) {
   return v == null ? null : String(v).slice(0, 400);
 }
+function shortStr(v, n = 120) {
+  const s = str(v);
+  return s == null ? null : s.slice(0, n);
+}
 function arr(v) {
   return Array.isArray(v) ? v : [];
+}
+function confidenceOf(v) {
+  return ['high', 'medium', 'low'].includes(v) ? v : null;
 }
 
 function validateIssue(x) {
@@ -47,12 +77,121 @@ function validateIssue(x) {
   return issue;
 }
 
+// Entity type is GENERIC (spec §3): the platform must not be locked to a closed
+// vertical whitelist. Any non-empty, slug-safe type string is accepted (product,
+// service, subscription, plan, variant, order, payment_method, issue, topic, …).
+// It carries lifecycle metadata so the newest/most-relevant entity can be chosen.
+function entityType(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  return s ? s.slice(0, 40) : null;
+}
 function validateEntity(x) {
   const o = plainObject(x);
   if (!o) return null;
-  const type = ['product', 'order', 'service', 'topic'].includes(o.type) ? o.type : null;
+  const type = entityType(o.type);
   if (!type) return null;
-  return { type, ref: str(o.ref) || null, label: str(o.label) || null };
+  const e = { type, ref: shortStr(o.ref) || null, label: shortStr(o.label) || null };
+  // V2 lifecycle metadata (optional; back-compat readers ignore extra keys).
+  e.status = shortStr(o.status, 40) || null;
+  e.confidence = confidenceOf(o.confidence);
+  e.first_seen = shortStr(o.first_seen, 40) || null;
+  e.last_seen = shortStr(o.last_seen, 40) || null;
+  return e;
+}
+
+// The single most-relevant entity: the one with the greatest last_seen marker
+// (lexicographically comparable — sequence numbers or ISO timestamps both work),
+// falling back to the last entry when no markers exist. Keeps V1's `active_entity`
+// meaningful for any code that reads it, derived from the V2 list.
+function deriveActiveEntity(entities) {
+  const list = arr(entities).filter(Boolean);
+  if (!list.length) return null;
+  let best = list[0];
+  for (const e of list) {
+    if (e.last_seen != null && (best.last_seen == null || String(e.last_seen) > String(best.last_seen))) best = e;
+  }
+  return best;
+}
+
+function validatePendingExpectation(x) {
+  const o = plainObject(x);
+  if (!o) return null;
+  const type = shortStr(o.type, 60);
+  if (!type) return null; // an expectation without a type is meaningless
+  return {
+    type,
+    purpose: shortStr(o.purpose, 160) || null,
+    related_entity: shortStr(o.related_entity, 120) || null,
+  };
+}
+
+// Memory sources are AUTHORITY-tagged (spec §9): only these are trusted origins.
+// A model that tries to launder its own claim ("assistant"/anything else) into a
+// memory is normalised to `unknown` (or `previous_bot_statement` when it clearly
+// self-labels), and such a memory is NEVER promoted to a verified known_fact.
+const TRUSTED_MEMORY_SOURCES = new Set(['customer', 'merchant', 'system', 'tool']);
+function memorySource(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (TRUSTED_MEMORY_SOURCES.has(s)) return s;
+  if (s === 'previous_bot_statement' || s === 'bot' || s === 'assistant') return 'previous_bot_statement';
+  return 'unknown';
+}
+function validateMemory(x) {
+  const o = plainObject(x);
+  if (!o) return null;
+  const summary = shortStr(o.summary, 240);
+  if (!summary) return null; // no summary → not a memory
+  return {
+    summary,
+    kind: shortStr(o.kind, 40) || null,
+    related_entities: arr(o.related_entities).map((r) => shortStr(r, 120)).filter(Boolean).slice(0, 6),
+    source: memorySource(o.source),
+    confidence: confidenceOf(o.confidence),
+    message_ref: shortStr(o.message_ref, 60) || null,
+    last_updated: shortStr(o.last_updated, 40) || null,
+  };
+}
+
+// Deterministic value score for capping: trusted sources and higher confidence
+// are worth more; `previous_bot_statement`/`unknown` are cheapest. Used ONLY to
+// decide which memories survive the cap — never to fabricate authority.
+function memoryValue(m) {
+  const srcScore = TRUSTED_MEMORY_SOURCES.has(m.source) ? 2 : (m.source === 'previous_bot_statement' ? 1 : 0);
+  const confScore = m.confidence === 'high' ? 2 : m.confidence === 'medium' ? 1 : 0;
+  return srcScore * 3 + confScore;
+}
+function capMemories(memories) {
+  const list = arr(memories).map(validateMemory).filter(Boolean);
+  if (list.length <= MAX_SALIENT_MEMORIES) return list;
+  // Stable sort by value desc (Array.prototype.sort is stable in Node) so ties
+  // keep insertion order, then keep the top N. Deterministic — no clock, no RNG.
+  return list
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => memoryValue(b.m) - memoryValue(a.m) || a.i - b.i)
+    .slice(0, MAX_SALIENT_MEMORIES)
+    .sort((a, b) => a.i - b.i) // restore original order among survivors
+    .map((x) => x.m);
+}
+
+function validateReference(x) {
+  const o = plainObject(x);
+  if (!o) return null;
+  const text = shortStr(o.text, 120);
+  if (!text) return null; // a reference must name the surface form it resolves
+  return {
+    text,
+    entity: shortStr(o.entity, 160) || null,
+    confidence: confidenceOf(o.confidence),
+  };
+}
+function validateLastTurnUnderstanding(x) {
+  const o = plainObject(x) || {};
+  return {
+    intent: shortStr(o.intent, 80) || null,
+    resolved_references: arr(o.resolved_references).map(validateReference).filter(Boolean).slice(0, MAX_RESOLVED_REFERENCES),
+    topic_transition: shortStr(o.topic_transition, 40) || null,
+    customer_correction: o.customer_correction === true,
+  };
 }
 
 function validateAction(x) {
@@ -79,15 +218,29 @@ function validateFacts(x) {
 
 function validateState(input) {
   const o = plainObject(input) || {};
+  const active_entities = arr(o.active_entities).map(validateEntity).filter(Boolean).slice(0, MAX_ACTIVE_ENTITIES);
+  // active_entity (V1) is either the explicitly-set entity or, for a V2-only
+  // state, DERIVED from the newest active entity — so any legacy reader still
+  // resolves a single active entity.
+  const explicitActive = validateEntity(o.active_entity);
+  const active_entity = explicitActive || deriveActiveEntity(active_entities);
   return {
+    schema_version: 2,
+    // ── V1 slots ──
     open_issues: arr(o.open_issues).map(validateIssue).filter(Boolean),
     resolved_issues: arr(o.resolved_issues).map(validateIssue).filter(Boolean),
     active_topic: str(o.active_topic),
-    active_entity: validateEntity(o.active_entity),
+    active_entity,
     known_facts: validateFacts(o.known_facts),
     customer_goal: str(o.customer_goal),
     actions_attempted: arr(o.actions_attempted).map(validateAction).filter(Boolean),
     last_reply_intent: str(o.last_reply_intent),
+    // ── V2 slots ──
+    active_entities,
+    recent_topics: arr(o.recent_topics).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim().slice(0, 80)).slice(0, MAX_RECENT_TOPICS),
+    pending_expectation: validatePendingExpectation(o.pending_expectation),
+    salient_memories: capMemories(o.salient_memories),
+    last_turn_understanding: validateLastTurnUnderstanding(o.last_turn_understanding),
   };
 }
 
