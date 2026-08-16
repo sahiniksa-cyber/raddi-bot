@@ -46,7 +46,7 @@ test('buildExtractionRequest stays a single JSON call within the token budget (ย
   assert.equal(req.messages.length, 2);
   assert.equal(req.messages[0].role, 'system');
   assert.equal(req.messages[1].role, 'user');
-  assert.ok(req.max_tokens > 0 && req.max_tokens <= 700);
+  assert.ok(req.max_tokens >= 700 && req.max_tokens <= 1200); // computed, bounded ceiling (ยง6)
   assert.ok(req.temperature <= 0.3);
   assert.equal(req.response_format.type, 'json_object');
   // prior state + new turns + last bot reply all present so the model can resolve

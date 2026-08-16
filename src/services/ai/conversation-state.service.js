@@ -10,6 +10,7 @@
 const db = require('../../db/client');
 const {
   EMPTY_STATE, validateState, buildExtractionRequest, parseExtractionResponse, reconcileSystemState,
+  compactStateForExtraction, mergePreservedMemories,
 } = require('./conversation-state');
 
 async function loadConversationState({ userId, conversationId, database = db } = {}) {
@@ -87,7 +88,11 @@ async function extractConversationState({
   const prior = validateState(previousState);
   try {
     if (!aiClient?.raw) throw new Error('no extraction client');
-    const req = buildExtractionRequest({ previousState: prior, newTurns, lastBotReply });
+    // Bound the prompt (§6): send a compacted prior (relevant memories + newest
+    // entities) so the echoed JSON never truncates as the conversation grows.
+    const latestText = [...(Array.isArray(newTurns) ? newTurns : [])].reverse().find((t) => t && t.role !== 'assistant')?.content || '';
+    const compacted = compactStateForExtraction(prior, { latestText });
+    const req = buildExtractionRequest({ previousState: compacted, newTurns, lastBotReply });
     const limit = Number(timeoutMs || process.env.CONVERSATION_STATE_EXTRACT_TIMEOUT_MS || 9000);
     let timer;
     const resp = await Promise.race([
@@ -97,7 +102,10 @@ async function extractConversationState({
     const content = resp?.choices?.[0]?.message?.content || '';
     const { state, extraction_ok } = parseExtractionResponse(content);
     if (!extraction_ok) return { state: reconcileSystemState(prior, systemFacts), extraction_ok: false };
-    return { state: reconcileSystemState(state, systemFacts), extraction_ok: true };
+    // Re-attach older memories the compacted prompt didn't include (no silent
+    // loss); reconcile → validateState re-caps to the memory ceiling.
+    const withMemories = { ...state, salient_memories: mergePreservedMemories(state.salient_memories, prior.salient_memories) };
+    return { state: reconcileSystemState(withMemories, systemFacts), extraction_ok: true };
   } catch (_) {
     return { state: reconcileSystemState(prior, systemFacts), extraction_ok: false };
   }

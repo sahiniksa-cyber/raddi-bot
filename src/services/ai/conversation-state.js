@@ -123,6 +123,48 @@ function deriveActiveEntity(entities) {
   return best;
 }
 
+// Stable identity for dedupe: same type + same ref (or label when ref absent) is
+// the SAME entity mentioned again — not a new one.
+function entityIdentity(e) {
+  return `${e.type}|${e.ref != null ? e.ref : (e.label || '')}`;
+}
+// Merge two records of the same entity: the newer one wins per-field, the older
+// fills any gap; last_seen is the later marker, first_seen the earlier.
+function mergeEntity(older, newer) {
+  return {
+    type: newer.type,
+    ref: newer.ref != null ? newer.ref : older.ref,
+    label: newer.label != null ? newer.label : older.label,
+    status: newer.status != null ? newer.status : older.status,
+    confidence: newer.confidence != null ? newer.confidence : older.confidence,
+    first_seen: older.first_seen != null ? older.first_seen : newer.first_seen,
+    last_seen: isLaterMarker(newer.last_seen, older.last_seen) ? newer.last_seen : older.last_seen,
+  };
+}
+function dedupeEntities(list) {
+  const map = new Map();
+  for (const e of list) {
+    const id = entityIdentity(e);
+    const prev = map.get(id);
+    if (!prev) { map.set(id, e); continue; }
+    const newer = isLaterMarker(e.last_seen, prev.last_seen) ? e : prev;
+    const older = newer === e ? prev : e;
+    map.set(id, mergeEntity(older, newer));
+  }
+  return [...map.values()];
+}
+// Newest-first, stable. Entities with a marker precede those without.
+function sortEntitiesByRecencyDesc(list) {
+  return list
+    .map((e, i) => ({ e, i }))
+    .sort((x, y) => {
+      if (isLaterMarker(x.e.last_seen, y.e.last_seen)) return -1;
+      if (isLaterMarker(y.e.last_seen, x.e.last_seen)) return 1;
+      return x.i - y.i;
+    })
+    .map((x) => x.e);
+}
+
 function validatePendingExpectation(x) {
   const o = plainObject(x);
   if (!o) return null;
@@ -170,16 +212,29 @@ function memoryValue(m) {
   const confScore = m.confidence === 'high' ? 2 : m.confidence === 'medium' ? 1 : 0;
   return srcScore * 3 + confScore;
 }
+// Recency rank: numeric last_updated → its number; ISO date → epoch ms; otherwise
+// the insertion index (later insertion = newer). Higher = newer. Used so that on
+// equal value/relevance the NEWER memory wins — never the stale one.
+function memoryRecency(m, i) {
+  const lu = m && m.last_updated;
+  if (lu != null && String(lu).trim() !== '') {
+    const n = Number(lu);
+    if (Number.isFinite(n)) return n;
+    const t = Date.parse(lu);
+    if (Number.isFinite(t)) return t;
+  }
+  return i;
+}
 function capMemories(memories) {
   const list = arr(memories).map(validateMemory).filter(Boolean);
   if (list.length <= MAX_SALIENT_MEMORIES) return list;
-  // Stable sort by value desc (Array.prototype.sort is stable in Node) so ties
-  // keep insertion order, then keep the top N. Deterministic — no clock, no RNG.
+  // Keep the highest-value memories; break value ties by RECENCY (newer wins) so
+  // a new high-value memory is never dropped for an equally-valued stale one.
   return list
     .map((m, i) => ({ m, i }))
-    .sort((a, b) => memoryValue(b.m) - memoryValue(a.m) || a.i - b.i)
+    .sort((a, b) => memoryValue(b.m) - memoryValue(a.m) || memoryRecency(b.m, b.i) - memoryRecency(a.m, a.i) || a.i - b.i)
     .slice(0, MAX_SALIENT_MEMORIES)
-    .sort((a, b) => a.i - b.i) // restore original order among survivors
+    .sort((a, b) => a.i - b.i) // restore chronological order among survivors
     .map((x) => x.m);
 }
 
@@ -228,12 +283,15 @@ function validateFacts(x) {
 
 function validateState(input) {
   const o = plainObject(input) || {};
-  const active_entities = arr(o.active_entities).map(validateEntity).filter(Boolean).slice(0, MAX_ACTIVE_ENTITIES);
-  // active_entity (V1) is either the explicitly-set entity or, for a V2-only
-  // state, DERIVED from the newest active entity — so any legacy reader still
-  // resolves a single active entity.
-  const explicitActive = validateEntity(o.active_entity);
-  const active_entity = explicitActive || deriveActiveEntity(active_entities);
+  // Entities: validate → dedupe by identity (newer wins) → sort newest-first →
+  // cap. Sorting BEFORE the cap guarantees the newest entity is never dropped
+  // just because the list is full (bug: a trailing latest entity was lost).
+  const deduped = sortEntitiesByRecencyDesc(dedupeEntities(arr(o.active_entities).map(validateEntity).filter(Boolean)));
+  const active_entities = deduped.slice(0, MAX_ACTIVE_ENTITIES);
+  // active_entity (V1): when V2 entities exist, the NEWEST V2 entity wins so a
+  // stale V1 active_entity can never override current context. Only a pure V1 row
+  // (no active_entities) falls back to its explicit active_entity.
+  const active_entity = active_entities.length ? active_entities[0] : validateEntity(o.active_entity);
   return {
     schema_version: 2,
     // ── V1 slots ──
@@ -252,6 +310,32 @@ function validateState(input) {
     salient_memories: capMemories(o.salient_memories),
     last_turn_understanding: validateLastTurnUnderstanding(o.last_turn_understanding),
   };
+}
+
+// Bound the PRIOR state sent to the extractor (spec §6) so the model's echoed
+// JSON stays small and never truncates as the conversation grows. Sends the
+// entities/topics newest-first (already sorted) and only the memories relevant to
+// this turn; memories dropped here are preserved by mergePreservedMemories after
+// extraction, so nothing is silently lost.
+function compactStateForExtraction(state, { latestText = '', maxMemories = 18, maxEntities = 15 } = {}) {
+  const s = validateState(state);
+  return {
+    ...s,
+    active_entities: s.active_entities.slice(0, maxEntities),
+    recent_topics: s.recent_topics.slice(0, 8),
+    salient_memories: selectRelevantMemories(s.salient_memories, latestText, maxMemories)
+      .map((m) => ({ ...m, summary: String(m.summary).slice(0, 160) })),
+  };
+}
+
+// Re-attach prior memories the compacted prompt didn't include, so a long
+// conversation never forgets an older fact just because it wasn't sent this turn.
+// The caller re-validates (which re-caps to MAX_SALIENT_MEMORIES).
+function mergePreservedMemories(modelMemories, priorMemories) {
+  const keyOf = (m) => reopenTokens(m && m.summary).join(' ');
+  const have = new Set(arr(modelMemories).filter((m) => m && m.summary).map(keyOf));
+  const preserved = arr(priorMemories).filter((m) => m && m.summary && !have.has(keyOf(m)));
+  return [...arr(modelMemories), ...preserved];
 }
 
 function parseExtractionResponse(text) {
@@ -296,7 +380,7 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '- When a NEW, distinct problem appears, ADD it to open_issues without dropping other still-open issues.',
   '- HALLUCINATION SAFETY (§9): known_facts must NEVER contain something only the BOT claimed. If the bot said something not yet confirmed by the customer/system, record it as a salient_memory with source="previous_bot_statement" (or as pending_expectation), NEVER as a known_fact.',
   '- You do NOT decide handoff/escalation status and you do NOT mark any systemic action as done. Do NOT set resolved_by="owner" and do NOT set actions_attempted.confirmed_by="system" — those are stamped by the platform (النظام/system), not by you.',
-  '- Keep every summary and label short. Prefer FEW high-value memories over many. Output valid JSON matching the schema and nothing else.',
+  '- Keep every summary and label short. Prefer FEW high-value memories over many — keep at most ~15 salient_memories (أبقِ بحد أقصى 15 ذاكرة). Output valid JSON matching the schema and nothing else.',
 ].join('\n');
 
 function buildExtractionRequest({ previousState = {}, newTurns = [], lastBotReply = '' } = {}) {
@@ -315,13 +399,18 @@ function buildExtractionRequest({ previousState = {}, newTurns = [], lastBotRepl
     '',
     'Return the UPDATED state JSON.',
   ].join('\n');
+  // Computed output ceiling (§6): scales with the (already-compacted) prior so the
+  // echoed JSON is never truncated, with a hard cap so cost stays bounded. Floor
+  // 700 covers a minimal state; ceiling 1200 covers the largest compacted one.
+  const priorChars = JSON.stringify(previousState || {}).length;
+  const max_tokens = Math.min(1200, Math.max(700, Math.ceil(priorChars / 3)));
   return {
     messages: [
       { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
       { role: 'user', content: userContent },
     ],
     temperature: 0.1,
-    max_tokens: 700,
+    max_tokens,
     response_format: { type: 'json_object' },
   };
 }
@@ -357,7 +446,9 @@ function selectRelevantMemories(memories, latestUserText = '', limit = 6) {
     return { m, i, score: overlap * 10 + memoryValue(m) };
   });
   return scored
-    .sort((a, b) => b.score - a.score || a.i - b.i)
+    // relevance first, then authority/confidence (folded into score), then
+    // RECENCY (newer wins) — never the older memory on a tie.
+    .sort((a, b) => b.score - a.score || memoryRecency(b.m, b.i) - memoryRecency(a.m, a.i) || a.i - b.i)
     .slice(0, limit)
     .sort((a, b) => a.i - b.i)
     .map((x) => x.m);
@@ -373,7 +464,7 @@ function selectRelevantMemories(memories, latestUserText = '', limit = 6) {
  */
 function buildConversationStateBlock(state, { canInject, latestUserText = '', maxChars } = {}) {
   if (!canInject || !state) return '';
-  const budget = Math.max(400, Number(maxChars || process.env.CONVERSATION_STATE_BLOCK_MAX_CHARS || 2200));
+  const budget = Number(maxChars || process.env.CONVERSATION_STATE_BLOCK_MAX_CHARS || 2200);
 
   const ltu = state.last_turn_understanding || {};
   const refs = arr(ltu.resolved_references).filter((r) => r && r.text && r.entity);
@@ -458,19 +549,30 @@ function buildConversationStateBlock(state, { canInject, latestUserText = '', ma
     '- لا تدّعِ أن إجراءً تم إلا إذا أكّده النظام أو أداة فعلية.',
   ].join('\n');
 
-  // Assemble within budget (§19): always keep the footer; add sections top-down
-  // until the budget is exhausted. Top-priority sections are added first, so
-  // low-value memory sections are the first to be dropped when space runs out.
-  const reserve = footer.length + header.length + 4;
-  let used = reserve;
+  // Assemble within a STRICT budget (§19). Sections are already in priority
+  // order. Reserve the footer, then add each section that still FITS — skipping
+  // (not break-ing) an oversized section so a smaller, still-important later
+  // section can enter. A final hard cap trims whole trailing lines (never mid-
+  // text) so the result is ALWAYS <= budget, even in pathological cases.
+  const footerLen = footer.length;
+  let used = header.length + footerLen;
   const kept = [];
   for (const s of sections) {
     const text = s.join('\n');
-    if (used + text.length + 1 > budget && kept.length) break;
-    kept.push(text);
-    used += text.length + 1;
+    if (used + text.length + 1 <= budget) { kept.push(text); used += text.length + 1; }
   }
-  return `${header}\n${kept.join('\n')}${footer}`;
+  // If nothing fit but content exists, force the single highest-priority section
+  // in and let the hard cap trim it — better a truncated top section than none.
+  if (!kept.length && sections.length) kept.push(sections[0].join('\n'));
+
+  let out = `${header}\n${kept.join('\n')}${footer}`;
+  if (out.length > budget) {
+    const lines = out.split('\n');
+    while (lines.length > 1 && lines.join('\n').length > budget) lines.pop();
+    out = lines.join('\n');
+    if (out.length > budget) out = out.slice(0, budget); // absolute last resort
+  }
+  return out;
 }
 
 /**
@@ -610,6 +712,8 @@ module.exports = {
   parseExtractionResponse,
   EXTRACTION_SYSTEM_PROMPT,
   buildExtractionRequest,
+  compactStateForExtraction,
+  mergePreservedMemories,
   reconcileSystemState,
   buildConversationStateBlock,
   isSemanticDuplicate,

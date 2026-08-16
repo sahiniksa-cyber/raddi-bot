@@ -47,9 +47,10 @@ test('entity types are generic (not a closed whitelist) — subscription/payment
     ],
   });
   assert.equal(out.active_entities.length, 2);
-  assert.equal(out.active_entities[0].type, 'subscription');
-  assert.equal(out.active_entities[1].type, 'payment_method');
-  assert.equal(out.active_entities[0].confidence, 'high');
+  const types = out.active_entities.map((e) => e.type).sort();
+  assert.deepEqual(types, ['payment_method', 'subscription']);
+  // stored newest-first (t6 > t5), so the payment method leads
+  assert.equal(out.active_entities[0].type, 'payment_method');
 });
 
 test('active_entity is DERIVED from the newest active entity when not set explicitly (back-compat readers)', () => {
@@ -63,13 +64,13 @@ test('active_entity is DERIVED from the newest active entity when not set explic
   assert.equal(out.active_entity.ref, 'b');
 });
 
-test('explicit active_entity is respected over derivation', () => {
+test('when active_entities exist, the newest V2 entity wins over a stale V1 active_entity', () => {
   const out = validateState({
-    active_entity: { type: 'order', ref: 'o1', label: 'الطلب 1' },
+    active_entity: { type: 'order', ref: 'o1', label: 'الطلب 1' }, // stale V1 field
     active_entities: [{ type: 'product', ref: 'a', label: 'A', last_seen: '9' }],
   });
-  assert.equal(out.active_entity.type, 'order');
-  assert.equal(out.active_entity.ref, 'o1');
+  assert.equal(out.active_entity.type, 'product');
+  assert.equal(out.active_entity.ref, 'a');
 });
 
 test('pending_expectation validated; garbage → null', () => {
