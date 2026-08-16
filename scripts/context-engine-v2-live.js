@@ -5,29 +5,26 @@
  *
  * Runs REAL conversations through the ACTUAL reply path with a REAL provider:
  *   real extraction LLM (mirrors extractConversationState, exposing usage)
- *     → validate/reconcile state
- *     → CURRENT CONTEXT block
+ *     → validate/reconcile state → CURRENT CONTEXT block
  *     → pricing/context consumers (deriveResolvedPricingContext + computePrice)
  *     → MAIN reply model (AIClient.getReply → validators + quality gate)
  *     → deterministic escalation + prepareEscalation (final customer text)
- * and prints the FINAL text that would be sent to the customer — no hand-built
- * state anywhere. The bot turns are the model's own real replies.
+ * printing the FINAL text that would be sent to the customer. No hand-built state.
  *
- * Scenarios: the payment failure (item 2) + reference scenarios A–H (item 7) +
- * a dedicated 50-customer-turn extraction-stability run. Real provider `usage`
- * (output tokens per extraction) is aggregated → p50/p95/max.
+ * FALSE-PASS GUARDS (strict): a context assertion FAILS unless the extractor
+ * actually succeeded on that turn (extraction_ok === true) — otherwise the main
+ * model could answer from raw history and mask a Context Engine failure. Product
+ * selection is proven via the DETERMINISTIC computePrice result, pending
+ * expectation via its lifecycle (asked → consumed → not re-asked), resolved/open
+ * issues via the real state, and 50-turn stability requires a full 50/50.
  *
- * PROVIDER: set exactly one of these env vars (a STAGING/test key — never prod):
- *   CONTEXT_LIVE_OPENAI_API_KEY | CONTEXT_LIVE_OPENROUTER_API_KEY | CONTEXT_LIVE_GOOGLE_API_KEY
- * optional: CONTEXT_LIVE_MODEL. Or CONTEXT_LIVE_CONFIG=/path/tenant.json (staging
- * tenant config). If NO key is available the script prints BLOCKED for every live
- * item and exits 0 (never a false PASS).
+ * PROVIDER (staging key, never prod): one of CONTEXT_LIVE_OPENAI_API_KEY |
+ * CONTEXT_LIVE_OPENROUTER_API_KEY | CONTEXT_LIVE_GOOGLE_API_KEY (+ optional
+ * CONTEXT_LIVE_MODEL) or CONTEXT_LIVE_CONFIG=/path/tenant.json. No key → BLOCKED
+ * for every live item, exit 0 (never a false PASS). No DB / WhatsApp / flag / prod.
  *
- * The token capture reuses ONLY the pure exported building blocks
- * (compactStateForExtraction/buildExtractionRequest/parseExtractionResponse/
- * reconcileSystemState/mergePreservedMemories) — no change to production behaviour.
- *
- * Run (staging): CONTEXT_LIVE_OPENAI_API_KEY=sk-... node scripts/context-engine-v2-live.js
+ * Token capture reuses ONLY the exported pure helpers — no production behaviour
+ * change. Run (staging): CONTEXT_LIVE_OPENAI_API_KEY=sk-... node scripts/context-engine-v2-live.js
  */
 
 const AIClient = require('../lib/ai-client');
@@ -39,6 +36,8 @@ const { deriveResolvedPricingContext, resolvePriceComputation } = require('../sr
 const { prepareEscalation } = require('../src/workers/escalation-routing');
 
 process.env.CONVERSATION_STATE_ENABLED = 'true';
+
+const TOKEN_METRICS_MIN_SAMPLES = 20; // below this we cannot honestly report percentiles
 
 // ── Merchant config (generic; "X" = تقسيط, a payment CONDITION not a company) ──
 const BASE_CONFIG = {
@@ -64,7 +63,6 @@ function resolveLiveConfig() {
 }
 
 // Faithful mirror of extractConversationState that ALSO returns provider usage.
-// Uses only the pure exported helpers — identical logic, no production change.
 async function extractWithUsage(ai, { previousState, newTurns, lastBotReply, systemFacts = {} }) {
   const prior = validateState(previousState);
   const latestText = [...(Array.isArray(newTurns) ? newTurns : [])].reverse().find((t) => t && t.role !== 'assistant')?.content || '';
@@ -97,152 +95,131 @@ function pctile(arr, p) {
 function tokenStats(samples) {
   return { count: samples.length, p50: pctile(samples, 50), p95: pctile(samples, 95), max: samples.length ? Math.max(...samples) : null };
 }
-
-function scrub(text) {
-  return String(text || '')
-    .replace(/\d[\d\s-]{6,}\d/g, '[رقم محجوب]')
-    .replace(/[\w.+-]+@[\w.-]+\.\w+/g, '[بريد محجوب]');
+// Honest token verdict: PASS only with enough real usage samples; else BLOCKED.
+function tokenMetricsVerdict(samples, min = TOKEN_METRICS_MIN_SAMPLES) {
+  return (Array.isArray(samples) && samples.length >= min) ? 'PASS' : 'BLOCKED';
 }
+// 50-turn stability requires a FULL 50/50 — anything less is FAIL, never PASS.
+function stabilityVerdict(extractOk, extractTotal, required = 50) {
+  return (extractTotal === required && extractOk === required) ? 'PASS' : 'FAIL';
+}
+
 const softNoClarify = (r) => !/أي\s+(منتج|باقة|اشتراك|مشكلة|واحد)/.test(String(r || ''));
 const softOneClarify = (r) => /\?|؟/.test(String(r || '')) && /أي\s+(باقة|واحد|منتج)/.test(String(r || ''));
+const asksForPhone = (r) => /(رقم\s*(ال)?جوال|جوالك|رقمك|هاتف|رقم\s*التواصل)/.test(String(r || ''));
 
-// ── Scenarios: item 2 (payment) + item 7 (A–H) ─────────────────────────────
+/**
+ * PURE, exported assertion checker (so the guards are unit-testable without a
+ * provider). Returns { pass, notes }. Any `expect` implicitly REQUIRES
+ * ctx.extraction_ok === true on that turn (opt out with requiresExtraction:false).
+ */
+function checkExpect(expect, ctx) {
+  const notes = [];
+  if (!expect) return { pass: true, notes };
+  if (expect.requiresExtraction !== false && ctx.extraction_ok !== true) notes.push('extraction_ok !== true on target turn');
+
+  if (expect.noEscalation && ctx.escalated) notes.push('unexpected escalation');
+  if (expect.intentIncludes && !expect.intentIncludes.some((k) => String(ctx.intent || '').toLowerCase().includes(k))) notes.push(`intent "${ctx.intent}" not a match`);
+  if (expect.total != null) {
+    if (ctx.priceTotal !== expect.total) notes.push(`deterministic total ${ctx.priceTotal} !== ${expect.total}`);
+    if (!String(ctx.finalReply).includes(String(expect.total))) notes.push(`total ${expect.total} not in reply`);
+  }
+  if (expect.selectedProduct) {
+    if (ctx.priceStatus !== 'computed') notes.push(`price not computed (status=${ctx.priceStatus})`);
+    if (!String(ctx.priceProductName || '').includes(expect.selectedProduct)) notes.push(`selected product "${ctx.priceProductName}" != ${expect.selectedProduct}`);
+  }
+  if (expect.referenceResolvedTo) {
+    const inRefs = (ctx.resolvedReferences || []).some((r) => String(r.entity || '').includes(expect.referenceResolvedTo));
+    const inActive = (ctx.activeEntities || []).some((e) => String(e.label || '').includes(expect.referenceResolvedTo)) && String(ctx.activeEntityLabel || '').includes(expect.referenceResolvedTo);
+    if (!inRefs && !inActive) notes.push(`reference not resolved to "${expect.referenceResolvedTo}"`);
+  }
+  if (expect.noClarification && !softNoClarify(ctx.finalReply)) notes.push('unexpected clarification');
+  if (expect.oneClarification && !softOneClarify(ctx.finalReply)) notes.push('expected exactly one clarification');
+  if (expect.botAsksPhone && !asksForPhone(ctx.finalReply)) notes.push('bot did not ask for the phone');
+  if (expect.pendingBecomes && !(ctx.pending && String(ctx.pending.type || '').includes(expect.pendingBecomes))) notes.push(`pending expectation is not "${expect.pendingBecomes}"`);
+  if (expect.pendingCleared) {
+    const wasPhone = ctx.prevPending && /phone/.test(String(ctx.prevPending.type || ''));
+    if (!wasPhone) notes.push('no prior phone expectation to clear');
+    else if (ctx.pending && /phone/.test(String(ctx.pending.type || ''))) notes.push('phone expectation not cleared after the answer');
+  }
+  if (expect.replyNotAskingPhone && asksForPhone(ctx.finalReply)) notes.push('bot re-asked for the phone');
+  if (expect.resolvedIncludes && !(ctx.resolvedIssues || []).some((i) => String(i.summary || '').includes(expect.resolvedIncludes))) notes.push(`"${expect.resolvedIncludes}" not in resolved_issues`);
+  if (expect.openIncludes && !(ctx.openIssues || []).some((i) => String(i.summary || '').includes(expect.openIncludes))) notes.push(`"${expect.openIncludes}" not in open_issues`);
+  if (expect.noReopenOf && ctx.reopenedResolved) notes.push(`re-suggested resolved "${expect.noReopenOf}"`);
+  return { pass: notes.length === 0, notes };
+}
+
+function scrub(text) {
+  return String(text || '').replace(/\d[\d\s-]{6,}\d/g, '[رقم محجوب]').replace(/[\w.+-]+@[\w.-]+\.\w+/g, '[بريد محجوب]');
+}
+
+// ── Scenarios ──────────────────────────────────────────────────────────────
 const B_CONFIG = { products: [{ name: 'برنامج ألفا', price: 100 }, { name: 'برنامج بيتا', price: 200 }] };
 const D_CONFIG = { products: [{ name: 'باقة سيلفر', price: 100 }, { name: 'باقة قولد', price: 200 }] };
 const E_CONFIG = { products: [{ name: 'اشتراك التصميم', price: null, variants: [{ label: 'شهري', price: 20 }, { label: 'سنوي', price: 200 }] }] };
 
 const scenarios = [
-  {
-    id: 'PAYMENT (item 2)',
-    turns: [
-      { c: 'السلام عليكم، عندكم اشتراك التصميم؟' },
-      { c: 'تمام أبيه' },
-      { c: 'تقسيط', expect: { intentIncludes: ['payment', 'دفع', 'select'], noEscalation: true } },
-      { c: 'كم؟', expect: { total: 207.9, noEscalation: true, noClarification: true } },
-    ],
-  },
-  {
-    id: 'A: 20+ turn reference',
-    build: () => {
-      const t = [{ c: 'أبي اشتراك التصميم' }];
-      for (let i = 0; i < 20; i++) t.push({ c: `عندي سؤال جانبي رقم ${i}، كم مدة التوصيل عادة؟` });
-      t.push({ c: 'طيب الاشتراك مضمون؟', expect: { noEscalation: true, referenceResolvedTo: 'التصميم', noClarification: true } });
-      return t;
-    },
-  },
-  {
-    id: 'B: topic switch A→B then price',
-    config: B_CONFIG,
-    turns: [
-      { c: 'عندكم برنامج ألفا؟' },
-      { c: 'طيب وبرنامج بيتا؟' },
-      { c: 'كم سعره؟', expect: { activeEntityIncludes: 'بيتا', noEscalation: true } },
-    ],
-  },
-  {
-    id: 'C: return to old topic A',
-    turns: [
-      { c: 'أبي اشتراك التصميم' },
-      { c: 'بس أول شي، كم رسوم الشحن عندكم؟' },
-      { c: 'خلاص رجعنا للي كنا فيه، هو مضمون؟', expect: { referenceResolvedTo: 'التصميم', noEscalation: true, noClarification: true } },
-    ],
-  },
-  {
-    id: 'D: genuine ambiguity',
-    config: D_CONFIG,
-    turns: [
-      { c: 'وش الفرق بين باقة سيلفر و باقة قولد؟' },
-      { c: 'كم؟', expect: { oneClarification: true, noEscalation: true } },
-    ],
-  },
-  {
-    id: 'E: correction monthly→yearly',
-    config: E_CONFIG,
-    turns: [
-      { c: 'أبي الاشتراك الشهري' },
-      { c: 'لا خلاص الأفضل السنوي' },
-      { c: 'طيب كم يطلع؟', expect: { total: 200, noEscalation: true } },
-    ],
-  },
-  {
-    id: 'F: pending expectation (phone)',
-    turns: [
-      { c: 'أبي اشتراك التصميم وأدفع تقسيط' },
-      { c: '0500000000', expect: { noEscalation: true } },
-    ],
-  },
-  {
-    id: 'G: solved login → activation (no repeat login)',
-    turns: [
-      { c: 'ما أقدر أسجّل دخول لحسابي' },
-      { c: 'تمام ضبط دخلت الحين' },
-      { c: 'بس التفعيل ما يشتغل', expect: { noEscalation: true, noReopenOf: 'دخول' } },
-    ],
-  },
-  {
-    id: 'H: payment method alone',
-    turns: [
-      { c: 'مهتم باشتراك التصميم' },
-      { c: 'تقسيط', expect: { noEscalation: true, intentIncludes: ['payment', 'دفع', 'select'] } },
-    ],
-  },
+  { id: 'PAYMENT (item 2)', turns: [
+    { c: 'السلام عليكم، عندكم اشتراك التصميم؟' },
+    { c: 'تمام أبيه' },
+    { c: 'تقسيط', expect: { intentIncludes: ['payment', 'دفع', 'select'], noEscalation: true } },
+    { c: 'كم؟', expect: { total: 207.9, noEscalation: true, noClarification: true } },
+  ] },
+  { id: 'A: 20+ turn reference', build: () => {
+    const t = [{ c: 'أبي اشتراك التصميم' }];
+    for (let i = 0; i < 20; i++) t.push({ c: `عندي سؤال جانبي رقم ${i}، كم مدة التوصيل عادة؟` });
+    t.push({ c: 'طيب الاشتراك مضمون؟', expect: { noEscalation: true, referenceResolvedTo: 'التصميم', noClarification: true } });
+    return t;
+  } },
+  { id: 'B: topic switch A→B then price', config: B_CONFIG, turns: [
+    { c: 'عندكم برنامج ألفا؟' },
+    { c: 'طيب وبرنامج بيتا؟' },
+    { c: 'كم سعره؟', expect: { selectedProduct: 'بيتا', total: 200, noEscalation: true } },
+  ] },
+  { id: 'C: return to old topic A', turns: [
+    { c: 'أبي اشتراك التصميم' },
+    { c: 'بس أول شي، كم رسوم الشحن عندكم؟' },
+    { c: 'خلاص رجعنا للي كنا فيه، هو مضمون؟', expect: { referenceResolvedTo: 'التصميم', noEscalation: true, noClarification: true } },
+  ] },
+  { id: 'D: genuine ambiguity', config: D_CONFIG, turns: [
+    { c: 'وش الفرق بين باقة سيلفر و باقة قولد؟' },
+    { c: 'كم؟', expect: { oneClarification: true, noEscalation: true } },
+  ] },
+  { id: 'E: correction monthly→yearly', config: E_CONFIG, turns: [
+    { c: 'أبي الاشتراك الشهري' },
+    { c: 'لا خلاص الأفضل السنوي' },
+    { c: 'طيب كم يطلع؟', expect: { total: 200, selectedProduct: 'التصميم', noEscalation: true } },
+  ] },
+  { id: 'F: pending expectation (phone)', turns: [
+    { c: 'أبي اشتراك التصميم وأدفع تقسيط', expect: { botAsksPhone: true, noEscalation: true } },
+    { c: 'طيب', expect: { pendingBecomes: 'phone' } },
+    { c: '0500000000', expect: { pendingCleared: true, replyNotAskingPhone: true, noEscalation: true } },
+  ] },
+  { id: 'G: solved login → activation (no repeat)', turns: [
+    { c: 'ما أقدر أسجّل دخول لحسابي' },
+    { c: 'تمام ضبط دخلت الحين' },
+    { c: 'بس التفعيل ما يشتغل', expect: { resolvedIncludes: 'دخول', openIncludes: 'تفعيل', noReopenOf: 'دخول', noEscalation: true } },
+  ] },
+  { id: 'H: payment method alone', turns: [
+    { c: 'مهتم باشتراك التصميم' },
+    { c: 'تقسيط', expect: { noEscalation: true, intentIncludes: ['payment', 'دفع', 'select'] } },
+  ] },
 ];
 
-// ── Dedicated 50-customer-turn extraction-stability scenario (item 2) ───────
 function buildFiftyTurnScenario() {
-  const turns = [];
-  const push = (c) => turns.push({ c });
-  push('السلام عليكم');
-  push('عندكم اشتراك التصميم؟');
-  push('كم سعره؟');
-  push('طيب فيه باقات ثانية؟');
-  push('وش الفرق بينها؟');
-  push('أبي الأفضل');
-  push('لا خلاص الأرخص');
-  push('كيف أدفع؟');
-  push('تقسيط');
-  push('كم يطلع بالتقسيط؟');
-  push('طيب عندي مشكلة ما أقدر أفعّل الحساب');
-  push('جربت وما زبط');
-  push('لا نفس المشكلة');
-  push('رقم طلبي 10234');
-  push('تمام تفعّل الحين شكراً');
-  push('بخصوص نفس الاشتراك مضمون؟');
-  push('كم مدة الضمان؟');
-  push('طيب عندكم شحن؟');
-  push('كم رسومه؟');
-  push('يوصل خلال كم يوم؟');
-  push('طيب رجعنا للاشتراك، أقدر أغيّر الباقة بعدين؟');
-  push('لو غيّرت رأيي أقدر أسترجع؟');
-  push('كيف الاسترجاع؟');
-  push('طيب خلني أفكر');
-  push('رجعت، أبي أكمل الطلب');
-  push('نفس طريقة الدفع اللي قلت عنها');
-  push('أرسلت المبلغ');
-  push('متى يوصلني الكود؟');
-  push('ما جاني شي لين الحين');
-  push('طيب أنتظر');
-  push('جاني الكود بس ما يشتغل');
-  push('كتبته صح وأكيد');
-  push('طيب جرّبت من جهاز ثاني');
-  push('اشتغل الحين تمام');
-  push('عندي سؤال ثاني عن برنامج مختلف');
-  push('كم سعره؟');
-  push('لا رجعنا للأول');
-  push('هذا يشتغل على ويندوز؟');
-  push('وعلى الجوال؟');
-  push('طيب زين');
-  push('فيه خصم لو أخذت أكثر من واحد؟');
-  push('كم الخصم؟');
-  push('طيب أبي اثنين');
-  push('نفس الدفع');
-  push('أكدت التحويل');
-  push('شكراً على المساعدة');
-  push('آخر سؤال، عندكم فواتير ضريبية؟');
-  push('تمام أبي فاتورة');
-  push('على نفس الإيميل');
-  push('يعطيك العافية خلصنا');
-  return { id: 'FIFTY: 50-turn extraction stability', turns, stability: true };
+  const c = [
+    'السلام عليكم', 'عندكم اشتراك التصميم؟', 'كم سعره؟', 'طيب فيه باقات ثانية؟', 'وش الفرق بينها؟',
+    'أبي الأفضل', 'لا خلاص الأرخص', 'كيف أدفع؟', 'تقسيط', 'كم يطلع بالتقسيط؟',
+    'طيب عندي مشكلة ما أقدر أفعّل الحساب', 'جربت وما زبط', 'لا نفس المشكلة', 'رقم طلبي 10234', 'تمام تفعّل الحين شكراً',
+    'بخصوص نفس الاشتراك مضمون؟', 'كم مدة الضمان؟', 'طيب عندكم شحن؟', 'كم رسومه؟', 'يوصل خلال كم يوم؟',
+    'طيب رجعنا للاشتراك، أقدر أغيّر الباقة بعدين؟', 'لو غيّرت رأيي أقدر أسترجع؟', 'كيف الاسترجاع؟', 'طيب خلني أفكر', 'رجعت، أبي أكمل الطلب',
+    'نفس طريقة الدفع اللي قلت عنها', 'أرسلت المبلغ', 'متى يوصلني الكود؟', 'ما جاني شي لين الحين', 'طيب أنتظر',
+    'جاني الكود بس ما يشتغل', 'كتبته صح وأكيد', 'طيب جرّبت من جهاز ثاني', 'اشتغل الحين تمام', 'عندي سؤال ثاني عن برنامج مختلف',
+    'كم سعره؟', 'لا رجعنا للأول', 'هذا يشتغل على ويندوز؟', 'وعلى الجوال؟', 'طيب زين',
+    'فيه خصم لو أخذت أكثر من واحد؟', 'كم الخصم؟', 'طيب أبي اثنين', 'نفس الدفع', 'أكدت التحويل',
+    'شكراً على المساعدة', 'آخر سؤال، عندكم فواتير ضريبية؟', 'تمام أبي فاتورة', 'على نفس الإيميل', 'يعطيك العافية خلصنا',
+  ].map((t) => ({ c: t }));
+  return { id: 'FIFTY: 50-turn extraction stability', turns: c, stability: true };
 }
 
 async function runScenario(sc, config, tokenSamples) {
@@ -255,6 +232,7 @@ async function runScenario(sc, config, tokenSamples) {
   let extractOk = 0; let extractTotal = 0;
 
   for (const turn of turns) {
+    const prevPending = state && state.pending_expectation ? state.pending_expectation : null;
     history.push({ role: 'user', content: turn.c });
     extractTotal++;
     const t0 = Date.now();
@@ -268,43 +246,55 @@ async function runScenario(sc, config, tokenSamples) {
     const tok = outputTokensOf(ex.usage);
     if (tok != null) tokenSamples.push(tok);
     state = ex.state;
-    const canInject = ex.extraction_ok;
 
     let reply = '';
     try {
       reply = String(await ai.getReply(history, {
-        conversationState: state, conversationStateCanInject: canInject,
+        conversationState: state, conversationStateCanInject: ex.extraction_ok,
         escalationPending: false, latestUserText: turn.c,
       }) || '').trim();
     } catch (e) { notes.push(`getReply error: ${e.message}`); pass = false; }
-
     const esc = prepareEscalation({ reply, config: scConfig, customerSender: 's', customerPhoneNumber: 'p', inboundText: turn.c });
     const finalReply = (esc.customerReply || '').trim();
     const escalated = !!esc.ownerMessage || /\[تحويل:/.test(reply);
     history.push({ role: 'assistant', content: finalReply || reply });
 
+    const rc = deriveResolvedPricingContext(state);
+    const price = resolvePriceComputation({ history, latestUserText: turn.c, config: scConfig, resolvedContext: rc });
     const trace = buildStateTrace(state, { tenantId: 'staging-tenant', conversationId: sc.id, extractionOk: ex.extraction_ok });
-    if (!sc.stability) {
-      console.log(`\n[${sc.id}] C: ${scrub(turn.c)}`);
-      console.log(`   intent=${trace.intent} active=${trace.active_entity} pending=${trace.pending_expectation} refs=${trace.resolved_references} tok=${tok} lat=${latency}ms escalated=${escalated}`);
-      console.log(`   BOT: ${scrub(finalReply).slice(0, 200)}`);
+
+    if (turn.expect) {
+      const ctx = {
+        extraction_ok: ex.extraction_ok,
+        intent: trace.intent,
+        activeEntities: state.active_entities || [],
+        activeEntityLabel: state.active_entity ? state.active_entity.label : null,
+        resolvedReferences: state.last_turn_understanding?.resolved_references || [],
+        pending: state.pending_expectation || null,
+        prevPending,
+        priceStatus: price.status,
+        priceProductName: price.product ? price.product.name : null,
+        priceTotal: price.computation ? price.computation.total : null,
+        finalReply, escalated,
+        resolvedIssues: state.resolved_issues || [],
+        openIssues: state.open_issues || [],
+        reopenedResolved: detectResolvedReopen(finalReply, state.resolved_issues || [], turn.c).reopened,
+      };
+      const r = checkExpect(turn.expect, ctx);
+      if (!r.pass) { pass = false; notes.push(`turn "${scrub(turn.c)}": ${r.notes.join('; ')}`); }
     }
 
-    const e = turn.expect;
-    if (e) {
-      if (e.noEscalation && escalated) { pass = false; notes.push('unexpected escalation'); }
-      if (e.total != null && !finalReply.includes(String(e.total))) { pass = false; notes.push(`total ${e.total} not in reply`); }
-      if (e.intentIncludes && !e.intentIncludes.some((k) => String(trace.intent || '').toLowerCase().includes(k))) { pass = false; notes.push(`intent "${trace.intent}" not a payment selection`); }
-      if (e.referenceResolvedTo && !(state.last_turn_understanding?.resolved_references || []).some((r) => String(r.entity || '').includes(e.referenceResolvedTo))
-        && !String(trace.active_entity || '').includes('design') && !(state.active_entities || []).some((x) => String(x.label || '').includes(e.referenceResolvedTo))) { pass = false; notes.push('reference not resolved to A'); }
-      if (e.activeEntityIncludes && !(state.active_entities || []).some((x) => String(x.label || '').includes(e.activeEntityIncludes))) { pass = false; notes.push(`active entity not ${e.activeEntityIncludes}`); }
-      if (e.noClarification && !softNoClarify(finalReply)) { pass = false; notes.push('unexpected clarification'); }
-      if (e.oneClarification && !softOneClarify(finalReply)) { pass = false; notes.push('expected exactly one clarification'); }
-      if (e.noReopenOf) {
-        const reopened = detectResolvedReopen(finalReply, state.resolved_issues || [], turn.c).reopened;
-        if (reopened) { pass = false; notes.push(`re-suggested resolved "${e.noReopenOf}"`); }
-      }
+    if (!sc.stability) {
+      console.log(`\n[${sc.id}] C: ${scrub(turn.c)}`);
+      console.log(`   ok=${ex.extraction_ok} intent=${trace.intent} active=${trace.active_entity} pending=${trace.pending_expectation} price=${price.status}${price.computation ? '/' + price.computation.total : ''} tok=${tok} lat=${latency}ms esc=${escalated}`);
+      console.log(`   BOT: ${scrub(finalReply).slice(0, 200)}`);
     }
+  }
+
+  // 50-turn stability requires a full 50/50 extraction success.
+  if (sc.stability) {
+    const verdict = stabilityVerdict(extractOk, extractTotal, turns.length);
+    if (verdict !== 'PASS') { pass = false; notes.push(`extraction ${extractOk}/${extractTotal} (< ${turns.length}/${turns.length})`); }
   }
   return { id: sc.id, pass, notes, extractOk, extractTotal };
 }
@@ -315,16 +305,12 @@ async function main() {
   if (!config) {
     console.log('⛔ BLOCKED — no provider key available in this environment.');
     console.log('   Set CONTEXT_LIVE_OPENAI_API_KEY / _OPENROUTER_ / _GOOGLE_ (staging key) to run.\n');
-    const blocked = [
-      'REAL PROVIDER EXTRACTION', 'REAL MAIN REPLY PATH', 'PAYMENT (item 2)',
-      'A: 20+ turn reference', 'B: topic switch', 'C: return to old topic', 'D: ambiguity',
-      'E: correction', 'F: pending expectation', 'G: solved→new (no repeat)', 'H: payment alone',
-      'FIFTY: 50-turn extraction stability',
-    ];
-    for (const it of blocked) console.log(`${it}: BLOCKED`);
+    for (const sc of scenarios) console.log(`${sc.id}: BLOCKED`);
+    console.log('FIFTY: 50-turn extraction stability: BLOCKED');
     console.log('LIVE EXTRACTION SUCCESS: BLOCKED');
+    console.log('50-TURN EXTRACTION STABILITY: BLOCKED');
+    console.log('TOKEN METRICS: BLOCKED');
     console.log('OUTPUT TOKENS p50/p95/max: BLOCKED');
-    console.log('LATENCY p50/p95: BLOCKED');
     return 0;
   }
 
@@ -335,17 +321,21 @@ async function main() {
   results.push(fifty);
 
   console.log('\n════════ LIVE RESULTS ════════');
-  for (const r of results) console.log(`${r.pass ? '✅' : '❌'} ${r.id}${r.notes.length ? ' — ' + r.notes.join('; ') : ''}`);
+  for (const r of results) console.log(`${r.pass ? '✅' : '❌'} ${r.id}${r.notes.length ? ' — ' + r.notes.join(' | ') : ''}`);
   const okTotal = results.reduce((a, r) => a + r.extractOk, 0);
   const total = results.reduce((a, r) => a + r.extractTotal, 0);
   const ts = tokenStats(tokenSamples);
+  const tokenVerdict = tokenMetricsVerdict(tokenSamples);
   console.log('\nLIVE EXTRACTION SUCCESS:', `${okTotal}/${total} (${((okTotal / total) * 100).toFixed(1)}%)`);
-  console.log('50-TURN EXTRACTION SUCCESS:', `${fifty.extractOk}/${fifty.extractTotal}`);
-  console.log('OUTPUT TOKENS p50/p95/max:', ts.p50, '/', ts.p95, '/', ts.max, `(n=${ts.count})`);
+  console.log('50-TURN EXTRACTION STABILITY:', stabilityVerdict(fifty.extractOk, fifty.extractTotal, 50), `(${fifty.extractOk}/${fifty.extractTotal})`);
+  console.log('TOKEN METRICS:', tokenVerdict, tokenVerdict === 'PASS' ? `→ p50/p95/max = ${ts.p50}/${ts.p95}/${ts.max} (n=${ts.count})` : `(only ${ts.count} usage samples; need ≥ ${TOKEN_METRICS_MIN_SAMPLES})`);
   return results.every((r) => r.pass) ? 0 : 1;
 }
 
-module.exports = { scenarios, buildFiftyTurnScenario, extractWithUsage, resolveLiveConfig, tokenStats, pctile, outputTokensOf };
+module.exports = {
+  scenarios, buildFiftyTurnScenario, extractWithUsage, resolveLiveConfig,
+  checkExpect, tokenStats, tokenMetricsVerdict, stabilityVerdict, pctile, outputTokensOf,
+};
 
 if (require.main === module) {
   main().then((code) => process.exit(code)).catch((e) => { console.error(e); process.exit(1); });
