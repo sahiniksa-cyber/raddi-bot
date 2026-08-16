@@ -64,12 +64,22 @@ async function resolveInstagramConfig(userId, deps = {}) {
 
 async function saveInstagramConfig(userId, { enabled, config }, deps = {}) {
   const database = deps.database || db;
+  // MERGE the incoming (possibly PARTIAL) config into the existing stored config
+  // before writing. The dashboard now sends only changed fields (patch); a full
+  // replace here would let a small patch wipe the merchant's other Instagram
+  // settings. Merge is shallow (same shape as the dashboard payload).
+  const existing = await database.query(
+    'SELECT config FROM instagram_ai_settings WHERE user_id = $1',
+    [userId],
+  );
+  const base = (existing.rows[0] && existing.rows[0].config) || {};
+  const merged = stripSensitiveConfig({ ...base, ...(config || {}) });
   await database.query(
     `INSERT INTO instagram_ai_settings (user_id, enabled, seeded_from_whatsapp, config)
      VALUES ($1, $2, true, $3::jsonb)
      ON CONFLICT (user_id) DO UPDATE
        SET enabled = EXCLUDED.enabled, config = EXCLUDED.config, updated_at = NOW()`,
-    [userId, enabled === true, JSON.stringify(stripSensitiveConfig(config))],
+    [userId, enabled === true, JSON.stringify(merged)],
   );
 }
 

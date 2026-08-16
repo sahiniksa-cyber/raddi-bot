@@ -12,12 +12,22 @@
  * The arithmetic is done HERE, in code — never left to the LLM to guess.
  */
 
+// Normalize Arabic-Indic (٠-٩) and Eastern (۰-۹) digits to ASCII, and the Arabic
+// percent sign ٪ to % — so merchant text and prices written in Arabic numerals
+// parse identically. No hardcoded values, just a numeral/locale normalization.
+function toWestern(value) {
+  return String(value == null ? '' : value)
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/٪/g, '%');
+}
+
 // Pull the first numeric value out of a number or a price string like "99 ريال"
-// or "1,250 ر.س". Returns null when there is no number (never fabricates one).
+// or "1,250 ر.س" (Arabic numerals supported). null when there is no number.
 function parseAmount(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (value == null) return null;
-  const cleaned = String(value).replace(/[,٬]/g, '');
+  const cleaned = toWestern(value).replace(/[,٬]/g, '');
   const m = cleaned.match(/-?\d+(?:\.\d+)?/);
   if (!m) return null;
   const n = Number(m[0]);
@@ -157,15 +167,18 @@ function resolveProductReference({ history, latestUserText, products } = {}) {
   return { status: 'none' };
 }
 
-// The variant the CUSTOMER chose (label appears in a customer message).
+// The variant the CUSTOMER chose. `texts` is newest-first, so a later choice
+// (monthly → yearly) wins; a single message naming two variants is ambiguous;
+// none chosen anywhere → ambiguous (ask which).
 function resolveVariant(product, texts) {
   const variants = Array.isArray(product && product.variants) ? product.variants.filter((v) => v && (v.label || v.price)) : [];
   if (!variants.length) return { kind: 'no_variants' };
-  const chosen = variants.filter((v) => {
-    const label = normArabic(v.label);
-    return label && texts.some((t) => normArabic(t).includes(label));
-  });
-  if (chosen.length === 1) return { kind: 'chosen', variant: chosen[0] };
+  for (const t of texts) {
+    const nt = normArabic(t);
+    const hits = variants.filter((v) => v.label && nt.includes(normArabic(v.label)));
+    if (hits.length === 1) return { kind: 'chosen', variant: hits[0] };
+    if (hits.length > 1) return { kind: 'ambiguous', variants: variants.map((v) => v.label) };
+  }
   return { kind: 'ambiguous', variants: variants.map((v) => v.label) };
 }
 
@@ -174,19 +187,42 @@ function resolveVariant(product, texts) {
 // structured rule. Parse the CLEAR forms into the same structured shape. Only
 // emit a rule when BOTH a typed amount AND a trigger are unambiguous — otherwise
 // nothing (never invent a number or guess a trigger). Names are never hardcoded.
-function cleanToken(tok) {
-  return String(tok || '').replace(/^ب[ـ]?/, '').replace(/[،.؛!:؟]+$/u, '').trim();
+// Words that describe a fee but are NOT a payment-method name.
+const TRIGGER_STOPWORDS = new Set(['ثابته', 'ثابت', 'متغيره', 'متغير', 'اضافيه', 'اضافي']);
+function cleanTrigger(tok) {
+  let t = String(tok || '').replace(/[،.؛!:؟%]+$/u, '').replace(/\s+/g, ' ').trim();
+  t = t.replace(/^ب[ـ]?\s*/, ''); // strip leading بـ
+  return t;
 }
+function firstWordIsStopword(phrase) {
+  const first = normArabic(String(phrase).trim().split(/\s+/)[0] || '');
+  return TRIGGER_STOPWORDS.has(first);
+}
+
+// Extract the payment-method / condition (the "trigger") a fee is tied to.
+// General forms, tried most-explicit first; supports multi-word method names.
+// Numbers/percents are never part of a trigger. Names are never hardcoded.
 function extractTrigger(seg) {
-  let m = seg.match(/عند\s+الدفع\s+ب[ـ]?\s*([^\s،.؛!]+)/); // "عند الدفع بـ X"
-  if (m) return cleanToken(m[1]);
-  m = seg.match(/طريقة(?:\s+الدفع)?\s+([^\s،.؛!]+)/);        // "طريقة (الدفع) X"
-  if (m && normArabic(m[1]) !== 'الدفع') return cleanToken(m[1]);
-  m = seg.match(/عند\s+([^\s،.؛!]+)/);                         // "... عند Y"
-  if (m && normArabic(m[1]) !== 'الدفع') return cleanToken(m[1]);
+  const patterns = [
+    /عند\s+الدفع\s+ب[ـ]?\s*([^\d،.؛!%]+?)(?:\s+(?:يزيد|زيد|عليه|عليها|رسوم|اضف|أضف|يضاف)|\s+\d|\s*$)/, // عند الدفع بـ X ...
+    /طريقة(?:\s+الدفع)?\s+([^\d،.؛!%]+?)(?:\s+علي|\s+عليه|\s+عليها|\s*$)/,                          // طريقة (الدفع) X
+    /عند\s+([^\d،.؛!%]+?)(?:\s+\d|\s*$)/,                                                            // ... عند Y
+    /([^\d،.؛!%]+?)\s+علي(?:ه|ها)?\s+رسوم/,                                                          // X عليه رسوم ...
+    /مع\s+([^\d،.؛!%]+?)\s*$/,                                                                       // ... مع X
+    /رسوم\s+([^\d،.؛!%]+?)(?:\s+\d|\s*$)/,                                                           // رسوم X (method)
+  ];
+  for (let i = 0; i < patterns.length; i++) {
+    const m = seg.match(patterns[i]);
+    if (!m) continue;
+    const cand = cleanTrigger(m[1]);
+    if (!cand) continue;
+    if (normArabic(cand) === 'الدفع') continue;              // "عند الدفع" alone isn't a method
+    if (i === 5 && firstWordIsStopword(cand)) continue;      // "رسوم ثابتة ..." → not a method
+    return cand;
+  }
   return null;
 }
-const ADD_RE = /(زياد|اضاف|إضاف|رسوم|أضف|اضف|يضاف|زد)/;
+const ADD_RE = /(زياد|اضاف|إضاف|رسوم|أضف|اضف|يضاف|يزيد|زيد|زد|رفع)/;
 const DISC_RE = /(خصم|حسم|تخفيض)/;
 function extractTypeValue(seg) {
   const pct = seg.match(/(\d+(?:\.\d+)?)\s*%/);
@@ -203,7 +239,7 @@ function extractTypeValue(seg) {
   return null;
 }
 function extractPricingRulesFromInstructions(instructions) {
-  const text = String(instructions || '');
+  const text = toWestern(String(instructions || ''));
   if (!text.trim()) return [];
   const segments = text.split(/[\n.؛!]+/).map((s) => s.trim()).filter(Boolean);
   const rules = [];
@@ -244,15 +280,19 @@ function resolvePricingRules(config = {}) {
 
 const PAY_INTENT_RE = /(ادفع|أدفع|الدفع|دفع|سداد|اسدد|تقسيط|طريقه|طريقة)/;
 
-// Pick the rule matching the CUSTOMER's stated context (payment method = trigger).
-// One clear match → it; a blanket (no-trigger) rule → it; nothing relevant → none
-// (base price). Several methods with none/many matching + a pay intent → ambiguous.
+// Pick the rule matching the CUSTOMER's stated context. `texts` is newest-first,
+// so the LATEST payment method the customer named wins (pay X → switch to Y → Y).
+// A blanket (no-trigger) rule applies when no method matched; nothing relevant →
+// none (base price); several methods with a pay intent but none named → ambiguous.
 function resolveRule(rules, texts) {
   const triggered = rules.filter((r) => r.trigger && String(r.trigger).trim());
   const blanket = rules.filter((r) => !r.trigger || !String(r.trigger).trim());
-  const matched = triggered.filter((r) => texts.some((t) => normArabic(t).includes(normArabic(r.trigger))));
-  if (matched.length === 1) return { kind: 'one', rule: matched[0] };
-  if (matched.length > 1) return { kind: 'ambiguous', rules: matched.map((r) => r.trigger) };
+  for (const t of texts) { // newest first
+    const nt = normArabic(t);
+    const hits = triggered.filter((r) => nt.includes(normArabic(r.trigger)));
+    if (hits.length === 1) return { kind: 'one', rule: hits[0] };
+    if (hits.length > 1) return { kind: 'ambiguous', rules: hits.map((r) => r.trigger) };
+  }
   if (blanket.length === 1) return { kind: 'one', rule: blanket[0] };
   if (blanket.length > 1) return { kind: 'ambiguous', rules: blanket.map((r) => r.label || r.type) };
   const payIntent = texts.some((t) => PAY_INTENT_RE.test(normArabic(t)));
