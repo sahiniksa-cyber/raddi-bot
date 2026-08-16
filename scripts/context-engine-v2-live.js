@@ -72,11 +72,25 @@ async function extractWithUsage(ai, { previousState, newTurns, lastBotReply, sys
   const latestText = [...(Array.isArray(newTurns) ? newTurns : [])].reverse().find((t) => t && t.role !== 'assistant')?.content || '';
   const compacted = compactStateForExtraction(prior, { latestText });
   const req = buildExtractionRequest({ previousState: compacted, newTurns, lastBotReply });
+  const looksTruncated = (c) => {
+    const s = String(c || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    return s.startsWith('{') && !s.endsWith('}');
+  };
   try {
-    const resp = await ai.raw(req);
-    const usage = resp && resp.usage ? resp.usage : null;
-    const content = resp?.choices?.[0]?.message?.content || '';
-    const parsed = parseExtractionResponse(content);
+    let resp = await ai.raw(req);
+    let usage = resp && resp.usage ? resp.usage : null;
+    let content = resp?.choices?.[0]?.message?.content || '';
+    let parsed = parseExtractionResponse(content);
+    // Bug 4: retry once at a higher bounded ceiling on truncation (mirrors the
+    // production extractConversationState so the 50-turn stability is measured
+    // against the same behaviour).
+    if (!parsed.extraction_ok && (resp?.choices?.[0]?.finish_reason === 'length' || looksTruncated(content))) {
+      const retryCeiling = Math.min(1600, Math.max(1200, Number(process.env.CONVERSATION_STATE_EXTRACT_RETRY_MAX_TOKENS) || 1600));
+      resp = await ai.raw({ ...req, max_tokens: retryCeiling });
+      usage = resp && resp.usage ? resp.usage : usage;
+      content = resp?.choices?.[0]?.message?.content || '';
+      parsed = parseExtractionResponse(content);
+    }
     if (!parsed.extraction_ok) return { state: reconcileSystemState(prior, systemFacts), extraction_ok: false, usage };
     const withMemories = { ...parsed.state, salient_memories: mergePreservedMemories(parsed.state.salient_memories, prior.salient_memories) };
     return { state: reconcileSystemState(withMemories, systemFacts), extraction_ok: true, usage };
@@ -108,9 +122,16 @@ function stabilityVerdict(extractOk, extractTotal, required = 50) {
   return (extractTotal === required && extractOk === required) ? 'PASS' : 'FAIL';
 }
 
-const softNoClarify = (r) => !/أي\s+(منتج|باقة|اشتراك|مشكلة|واحد)/.test(String(r || ''));
-const softOneClarify = (r) => /\?|؟/.test(String(r || '')) && /أي\s+(باقة|واحد|منتج)/.test(String(r || ''));
-const asksForPhone = (r) => /(رقم\s*(ال)?جوال|جوالك|رقمك|هاتف|رقم\s*التواصل)/.test(String(r || ''));
+const softNoClarify = (r) => !/(أي|أيّ)\s+(منتج|باقة|اشتراك|مشكلة|واحد)/.test(String(r || ''));
+const softOneClarify = (r) => /\?|؟/.test(String(r || '')) && /(أي|أيّ|اي|وش|أيهما)\s+[^؟?]{0,30}(باقة|منتج|اشتراك|خيار|واحد|تفضّل|تفضل|تبغى|تبي)/.test(String(r || ''));
+// A REQUEST for the phone (question/imperative) — NOT a confirmation like
+// "سأرسل الطلب لرقم الجوال …", which mentions the phone without asking for it.
+const asksForPhone = (r) => {
+  const s = String(r || '');
+  if (/(سأرسل|بأرسل|سوف\s+أرسل|راح\s+أرسل|تم\s+الإرسال|أرسلت)\s+[^؟?]{0,30}(رقم|جوال)/.test(s)) return false;
+  return /(زوّدني|زودني|عطني|أعطني|ابغى|أبغى|ممكن|احتاج|أحتاج|ارسل\s+لي|أرسل\s+لي|اكتب\s+لي)\s*[^.؟?]{0,25}(رقم|جوال|هاتف)/.test(s)
+    || /(رقم\s*(ال)?جوال|رقمك|جوالك|هاتفك)\s*[؟?]/.test(s);
+};
 
 /**
  * PURE, exported assertion checker (so the guards are unit-testable without a
@@ -245,7 +266,7 @@ const scenarios = [
   { id: 'PAYMENT (item 2)', turns: [
     { c: 'السلام عليكم، عندكم اشتراك التصميم؟' },
     { c: 'تمام أبيه' },
-    { c: 'تقسيط', expect: { intentIncludes: ['payment', 'دفع', 'select'], noEscalation: true } },
+    { c: 'تقسيط', expect: { intentIncludes: ['payment', 'دفع', 'select', 'install', 'تقسيط', 'سداد', 'pay'], noEscalation: true } },
     { c: 'كم؟', expect: { total: 207.9, noEscalation: true, noClarification: true } },
   ] },
   { id: 'A: 20+ turn reference', build: () => {
@@ -285,7 +306,7 @@ const scenarios = [
   ] },
   { id: 'H: payment method alone', turns: [
     { c: 'مهتم باشتراك التصميم' },
-    { c: 'تقسيط', expect: { noEscalation: true, intentIncludes: ['payment', 'دفع', 'select'] } },
+    { c: 'تقسيط', expect: { noEscalation: true, intentIncludes: ['payment', 'دفع', 'select', 'install', 'تقسيط', 'سداد', 'pay'] } },
   ] },
 ];
 

@@ -348,6 +348,45 @@ function matchRuleByTrigger(rules, methodStr) {
   return triggered.find((r) => nm.includes(normArabic(r.trigger)) || normArabic(r.trigger).includes(nm)) || null;
 }
 
+// Bug 3 — bind a bare variant mention ("الشهري"/"السنوي") to its PARENT product.
+// Walks customer texts newest-first (so a correction wins), then the resolved
+// context variant. Exactly one parent → resolved; several → ambiguous; none →
+// no guess. Generic, tenant-driven — never invents a product.
+function resolveProductByVariant({ products, texts, preferredVariant } = {}) {
+  const list = Array.isArray(products) ? products : [];
+  const matchesFor = (nl) => {
+    if (!nl) return [];
+    const out = [];
+    for (const p of list) {
+      const vs = Array.isArray(p.variants) ? p.variants.filter((v) => v && (v.label || v.price)) : [];
+      for (const v of vs) {
+        if (v.label && (nl.includes(normArabic(v.label)) || normArabic(v.label).includes(nl))) out.push({ product: p, variant: v });
+      }
+    }
+    return out;
+  };
+  const verdict = (matches) => {
+    const distinct = [...new Set(matches.map((m) => m.product))];
+    if (distinct.length === 1) return { status: 'resolved', product: matches[0].product, variant: matches[0].variant };
+    return { status: 'ambiguous', candidates: distinct.map((p) => p.name) };
+  };
+  for (const t of texts) { // newest-first
+    const nt = normArabic(t);
+    const matches = [];
+    for (const p of list) {
+      for (const v of (Array.isArray(p.variants) ? p.variants : [])) {
+        if (v && v.label && nt.includes(normArabic(v.label))) matches.push({ product: p, variant: v });
+      }
+    }
+    if (matches.length) return verdict(matches);
+  }
+  if (preferredVariant) {
+    const m = matchesFor(normArabic(preferredVariant));
+    if (m.length) return verdict(m);
+  }
+  return { status: 'none' };
+}
+
 /**
  * The reply-path entry point. Returns a discriminated result; when 'computed',
  * `computation` is the ACTUAL computePrice() output (deterministic, in code).
@@ -360,25 +399,36 @@ function resolvePriceComputation({ history, latestUserText, config, resolvedCont
   const cfg = config || {};
   if (!detectPriceQuestion(latestUserText)) return { status: 'not_a_calc' };
   const rc = resolvedContext || {};
-
-  // Product: prefer the Context Engine's resolved product; fall back to regex.
-  let product = rc.activeProduct ? matchConfigProduct(cfg.products, rc.activeProduct) : null;
-  if (!product) {
-    const ref = resolveProductReference({ history, latestUserText, products: cfg.products });
-    if (ref.status === 'none') return { status: 'no_reference' };
-    if (ref.status === 'ambiguous') return { status: 'ambiguous_product', candidates: ref.candidates };
-    product = ref.product;
-  }
   const texts = customerTexts(history, latestUserText);
 
-  let basePrice = product.price;
-  let variant = rc.activeVariant ? matchVariant(product, rc.activeVariant) : null;
-  if (variant) {
-    basePrice = variant.price;
-  } else {
-    const v = resolveVariant(product, texts);
-    if (v.kind === 'ambiguous') return { status: 'ambiguous_variant', product, variants: v.variants };
-    if (v.kind === 'chosen') { variant = v.variant; basePrice = v.variant.price; }
+  // Product resolution, in precedence order:
+  // 1) Regex over CUSTOMER texts. If the customer named MULTIPLE products it is
+  //    genuinely AMBIGUOUS (bug 2) — this wins over any single guessed context.
+  let product = null;
+  let variant = null;
+  const ref = resolveProductReference({ history, latestUserText, products: cfg.products });
+  if (ref.status === 'ambiguous') return { status: 'ambiguous_product', candidates: ref.candidates };
+  if (ref.status === 'resolved') product = ref.product;
+  // 2) Context-resolved product (the customer never named one in text).
+  if (!product && rc.activeProduct) product = matchConfigProduct(cfg.products, rc.activeProduct);
+  // 3) Variant → parent product (bug 3): the customer named only a variant.
+  if (!product) {
+    const byVar = resolveProductByVariant({ products: cfg.products, texts, preferredVariant: rc.activeVariant });
+    if (byVar.status === 'ambiguous') return { status: 'ambiguous_product', candidates: byVar.candidates };
+    if (byVar.status === 'resolved') { product = byVar.product; variant = byVar.variant; }
+  }
+  if (!product) return { status: 'no_reference' };
+
+  let basePrice = variant ? variant.price : product.price;
+  if (!variant) {
+    variant = rc.activeVariant ? matchVariant(product, rc.activeVariant) : null;
+    if (variant) {
+      basePrice = variant.price;
+    } else {
+      const v = resolveVariant(product, texts);
+      if (v.kind === 'ambiguous') return { status: 'ambiguous_variant', product, variants: v.variants };
+      if (v.kind === 'chosen') { variant = v.variant; basePrice = v.variant.price; }
+    }
   }
 
   if (parseAmount(basePrice) == null) return { status: 'unknown_base', product };

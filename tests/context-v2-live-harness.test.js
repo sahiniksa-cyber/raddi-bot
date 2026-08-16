@@ -154,6 +154,20 @@ test('FINAL TEXT is the actual send-boundary text (post-review rewrite), not the
   assert.notEqual(res.finalText, res.draft);
 });
 
+// F/H assertion accuracy (harness heuristics fixed for the live false negatives).
+test('replyNotAskingPhone: a CONFIRMATION mentioning the phone is not a re-ask', () => {
+  const ctx = { ...okCtx(), finalReply: 'شكرًا لك! سأرسل طلب الدفع لرقم الجوال الآن.' };
+  assert.equal(harness.checkExpect({ replyNotAskingPhone: true }, ctx).pass, true);
+});
+test('botAsksPhone: a real request passes; a mere mention does not falsely pass', () => {
+  assert.equal(harness.checkExpect({ botAsksPhone: true }, { ...okCtx(), finalReply: 'ممكن رقم جوالك؟' }).pass, true);
+  assert.equal(harness.checkExpect({ botAsksPhone: true }, { ...okCtx(), finalReply: 'سأرسل الطلب لرقم الجوال.' }).pass, false);
+});
+test('intent match accepts an installment-phrased payment selection', () => {
+  const ctx = { ...okCtx(), intent: 'inquire about installment options' };
+  assert.equal(harness.checkExpect({ intentIncludes: ['payment', 'دفع', 'select', 'install', 'تقسيط'] }, ctx).pass, true);
+});
+
 test('normal reply through the full pipeline does NOT escalate (no false positive)', async () => {
   const res = await harness.runSendPipeline({
     config: { escalationContacts: [{ id: 'c1', name: 'الدعم', phone: '966500000000' }] },
