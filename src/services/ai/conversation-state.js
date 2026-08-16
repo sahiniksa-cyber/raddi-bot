@@ -260,18 +260,33 @@ function parseExtractionResponse(text) {
 }
 
 const EXTRACTION_SYSTEM_PROMPT = [
-  'You maintain a STRUCTURED STATE of an ongoing customer-service conversation for an online store.',
-  'The store may sell anything (physical goods, bookings, software, services). Stay fully generic — never assume a product, brand, vertical, or payment provider.',
-  'You receive the PRIOR state (JSON) and the NEW messages since it was computed. Output the UPDATED state as STRICT JSON only — no prose, no code fences.',
+  'You maintain a STRUCTURED STATE of an ongoing customer-service conversation for an online store, so a colleague can understand the customer\'s WHOLE story — not just the latest message.',
+  'The store may sell anything (physical goods, bookings, software, subscriptions, services). Stay fully generic — never assume a product, brand, vertical, or payment provider.',
+  'You receive the PRIOR state (JSON), the LAST bot reply, and the NEW messages since the state was computed. Output the UPDATED state as STRICT JSON only — no prose, no code fences. Do everything in THIS one response.',
   '',
-  'Schema keys: open_issues[], resolved_issues[], active_topic, active_entity{type,ref,label}, known_facts{}, customer_goal, actions_attempted[], last_reply_intent.',
+  'Schema keys:',
+  '- open_issues[], resolved_issues[] : each {id, summary, status}. resolved_by="customer_confirmed" when the customer confirms.',
+  '- active_topic : the topic being discussed right now (string).',
+  '- recent_topics[] : short list of earlier topics still worth remembering (so the customer can return to one).',
+  '- active_entities[] : every product/service/subscription/plan/variant/order/payment_method/issue/topic that has come up. Each {type, ref, label, status, confidence:"high|medium|low", first_seen, last_seen}. Set last_seen to the LATEST turn marker where it appeared so the newest is identifiable. Keep MANY entities (the customer may switch and return), not just one.',
+  '- active_entity : the single most-relevant entity right now (usually the newest active_entities item).',
+  '- known_facts{} : ONLY facts the CUSTOMER stated explicitly, or facts from merchant/system/tool sources (e.g. a phone number they gave, a package they chose). Flat map of short strings.',
+  '- customer_goal : what the customer is ultimately trying to achieve.',
+  '- actions_attempted[] : {action, outcome:"worked|failed|unknown", confirmed_by:"customer"|null} — steps already tried, so they are not blindly repeated.',
+  '- pending_expectation : if the BOT asked the customer for something and is waiting (a phone number, an order id, an email, a name, a package choice, a payment method, a yes/no, a photo), set {type, purpose, related_entity}. Clear it (null) once the customer supplies it.',
+  '- salient_memories[] : durable things worth remembering. Each {summary, kind, related_entities[], source:"customer|merchant|system|tool|previous_bot_statement", confidence, message_ref, last_updated}. Extract only what matters (a choice, a correction, an ongoing problem, a fact the customer gave, a step tried and its result, an unresolved question, a topic that may come back). Do NOT copy the whole transcript.',
+  '- last_turn_understanding : {intent, resolved_references[], topic_transition:"continue|switch|return", customer_correction:true|false} for the LATEST customer message.',
+  '',
+  'REFERENCE RESOLUTION (important): customers rarely repeat names. When the latest message uses a short reference or pronoun (الاشتراك، المنتج، الطلب، المشكلة، هو، هي، هذا، هذي، ذاك، الثاني، الأول، اللي قلت لك عنه، نفس المشكلة، نفس الاشتراك), resolve it to the concrete entity from context and record it in last_turn_understanding.resolved_references as {text, entity, confidence}. Resolve automatically when ONE strong candidate fits; only leave it low-confidence when two candidates are genuinely equal. Precedence when choosing: (1) the customer\'s explicit latest statement, (2) a customer correction/change, (3) a compatible current entity, (4) the current topic, (5) a recent relevant entity, (6) an older salient memory. Merely having two old entities in history is NOT ambiguity.',
+  '',
+  'CORRECTIONS (§6): if the customer changes their mind ("لا خلاص السنوي", "لا Y أفضل", "لا المشكلة بالتفعيل مو الدخول"), the NEW choice wins: update active_entity/active_topic/open_issues accordingly and set last_turn_understanding.customer_correction=true. Keep the old value in history (recent_topics/active_entities/salient_memories) but it is no longer the active context.',
   '',
   'Rules:',
-  '- When the customer confirms a step/issue is done (any language: "تم", "دخلت", "وصل", "اشتغل", "ضبط", "جاني الكود", "done", "worked"), MOVE that issue from open_issues to resolved_issues with resolved_by="customer_confirmed". Never keep a customer-confirmed issue open.',
+  '- When the customer confirms a step/issue is done (any language: "تم", "دخلت", "وصل", "اشتغل", "ضبط", "جاني الكود", "done", "worked"), MOVE that issue from open_issues to resolved_issues with resolved_by="customer_confirmed". Never keep a customer-confirmed issue open, and do not reopen it unless the customer says it came back.',
   '- When a NEW, distinct problem appears, ADD it to open_issues without dropping other still-open issues.',
-  '- known_facts contains ONLY facts the customer stated explicitly (e.g. a payment method they have, an address they gave). Never invent facts.',
-  '- You do NOT decide handoff/escalation status and you do NOT mark any systemic action as done. Do NOT set resolved_by="owner" and do NOT set actions_attempted.confirmed_by="system" — those are stamped by the platform (النظام), not by you.',
-  '- Keep summaries short. Output valid JSON matching the schema and nothing else.',
+  '- HALLUCINATION SAFETY (§9): known_facts must NEVER contain something only the BOT claimed. If the bot said something not yet confirmed by the customer/system, record it as a salient_memory with source="previous_bot_statement" (or as pending_expectation), NEVER as a known_fact.',
+  '- You do NOT decide handoff/escalation status and you do NOT mark any systemic action as done. Do NOT set resolved_by="owner" and do NOT set actions_attempted.confirmed_by="system" — those are stamped by the platform (النظام/system), not by you.',
+  '- Keep every summary and label short. Prefer FEW high-value memories over many. Output valid JSON matching the schema and nothing else.',
 ].join('\n');
 
 function buildExtractionRequest({ previousState = {}, newTurns = [], lastBotReply = '' } = {}) {
@@ -296,7 +311,7 @@ function buildExtractionRequest({ previousState = {}, newTurns = [], lastBotRepl
       { role: 'user', content: userContent },
     ],
     temperature: 0.1,
-    max_tokens: 600,
+    max_tokens: 700,
     response_format: { type: 'json_object' },
   };
 }
@@ -316,34 +331,133 @@ function reconcileSystemState(llmState, systemFacts = {}) {
   return s;
 }
 
+// Select the salient memories most relevant to the latest customer message
+// (spec §13: RETRIEVE relevant context, don't dump all). Deterministic scoring:
+// token overlap with the latest message + a small value bonus; recency breaks
+// ties. With no latest message, fall back to the highest-value memories. No LLM,
+// no vector DB — just state + token relevance.
+function selectRelevantMemories(memories, latestUserText = '', limit = 6) {
+  const list = arr(memories).filter((m) => m && m.summary);
+  if (list.length <= 1) return list.slice(0, limit);
+  const q = new Set(reopenTokens(latestUserText));
+  const scored = list.map((m, i) => {
+    const toks = new Set(reopenTokens(`${m.summary} ${(m.related_entities || []).join(' ')}`));
+    let overlap = 0;
+    for (const t of toks) if (q.has(t)) overlap += 1;
+    return { m, i, score: overlap * 10 + memoryValue(m) };
+  });
+  return scored
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .slice(0, limit)
+    .sort((a, b) => a.i - b.i)
+    .map((x) => x.m);
+}
+
 /**
- * Render the state as an internal system-prompt block. Fail-soft: emits nothing
- * unless `canInject` is true (the caller only sets it when the stored state is
- * current and extraction succeeded — a stale/failed state is never shown as
- * truth). Emits nothing when there is nothing worth saying.
+ * Render the state as the internal CURRENT CUSTOMER CONTEXT block (spec §14).
+ * Fail-soft: emits nothing unless `canInject` is true (the caller sets it only
+ * when the stored state is current and extraction succeeded — a stale/failed
+ * state is never shown as truth). Sections are assembled in PRIORITY order and
+ * kept within a character budget (§19) so context never balloons; the behavioural
+ * footer is always preserved. Backward compatible with V1-shaped states.
  */
-function buildConversationStateBlock(state, { canInject } = {}) {
+function buildConversationStateBlock(state, { canInject, latestUserText = '', maxChars } = {}) {
   if (!canInject || !state) return '';
-  const resolved = Array.isArray(state.resolved_issues) ? state.resolved_issues.filter((i) => i && i.summary) : [];
-  const open = Array.isArray(state.open_issues) ? state.open_issues.filter((i) => i && i.summary) : [];
-  const facts = state.known_facts && typeof state.known_facts === 'object' && !Array.isArray(state.known_facts)
+  const budget = Math.max(400, Number(maxChars || process.env.CONVERSATION_STATE_BLOCK_MAX_CHARS || 2200));
+
+  const ltu = state.last_turn_understanding || {};
+  const refs = arr(ltu.resolved_references).filter((r) => r && r.text && r.entity);
+  const entities = arr(state.active_entities).filter((e) => e && (e.label || e.ref));
+  const open = arr(state.open_issues).filter((i) => i && i.summary);
+  const resolved = arr(state.resolved_issues).filter((i) => i && i.summary);
+  const facts = (state.known_facts && typeof state.known_facts === 'object' && !Array.isArray(state.known_facts))
     ? Object.entries(state.known_facts) : [];
-  const lines = [];
-  if (resolved.length) {
-    lines.push('✅ أمور تأكّد حلّها في هذه المحادثة — لا تقترحها ولا تُعِد خطواتها إلا إذا أبلغ العميل بعودتها:');
-    for (const i of resolved) lines.push(`- ${i.summary}`);
+  const actions = arr(state.actions_attempted).filter((a) => a && a.action);
+  const memories = arr(state.salient_memories).filter((m) => m && m.summary);
+  const trustedMem = memories.filter((m) => m.source !== 'previous_bot_statement' && m.source !== 'unknown');
+  const unverifiedMem = memories.filter((m) => m.source === 'previous_bot_statement');
+  const pe = state.pending_expectation;
+
+  // Priority-ordered sections (§19). Each is an array of lines; empty ones drop.
+  const sections = [];
+  if (refs.length) {
+    const s = ['🔎 مراجع محلولة في رسالة العميل الأخيرة (اعتمد المعنى المقصود مباشرة):'];
+    for (const r of refs) s.push(`- "${r.text}" ← ${r.entity}${r.confidence ? ` (${r.confidence})` : ''}`);
+    sections.push(s);
   }
+  if (state.customer_goal) sections.push([`🎯 هدف العميل: ${state.customer_goal}`]);
+  {
+    const s = [];
+    if (state.active_topic) s.push(`🧵 الموضوع النشط الآن: ${state.active_topic}`);
+    if (entities.length) {
+      s.push('📦 كيانات نشطة في المحادثة (الأحدث أهم):');
+      for (const e of entities.slice(0, 8)) s.push(`- ${e.label || e.ref}${e.type ? ` [${e.type}]` : ''}${e.status ? ` — ${e.status}` : ''}`);
+    }
+    if (s.length) sections.push(s);
+  }
+  if (ltu.intent) sections.push([`🧭 نية الرسالة الأخيرة: ${ltu.intent}`]);
   if (open.length) {
-    lines.push('🟡 أمور ما زالت مفتوحة — عالجها:');
-    for (const i of open) lines.push(`- ${i.summary}`);
+    const s = ['🟡 أمور ما زالت مفتوحة — عالجها:'];
+    for (const i of open) s.push(`- ${i.summary}`);
+    sections.push(s);
+  }
+  if (resolved.length) {
+    const s = ['✅ أمور تأكّد حلّها في هذه المحادثة — لا تقترحها ولا تُعِد خطواتها إلا إذا أبلغ العميل بعودتها:'];
+    for (const i of resolved) s.push(`- ${i.summary}`);
+    sections.push(s);
+  }
+  if (pe && pe.type) {
+    sections.push([`⏳ بانتظار رد العميل: طلبتَ منه (${pe.type}${pe.purpose ? ` — ${pe.purpose}` : ''}). أي رد قصير مناسب فسّره كإجابة على هذا الطلب، لا كرسالة مبهمة.`]);
   }
   if (facts.length) {
-    lines.push('📌 معلومات مؤكدة عن العميل (لا تطلبها من جديد):');
-    for (const [k, v] of facts) lines.push(`- ${k}: ${v}`);
+    const s = ['📌 معلومات مؤكدة عن العميل (لا تطلبها من جديد):'];
+    for (const [k, v] of facts) s.push(`- ${k}: ${v}`);
+    sections.push(s);
   }
-  if (state.active_topic) lines.push(`🎯 الموضوع النشط الآن: ${state.active_topic}`);
-  if (!lines.length) return '';
-  return `\n\n🧭 حالة المحادثة (مرجع داخلي — لا تذكرها للعميل):\n${lines.join('\n')}`;
+  if (ltu.customer_correction) sections.push(['✏️ العميل صحّح/غيّر اختياره في رسالته الأخيرة — اعتمد الأحدث، وتجاهل الاختيار القديم كسياق نشط.']);
+  if (actions.length) {
+    const s = ['🔁 خطوات سبق تجربتها (لا تُكررها بلا داعٍ):'];
+    for (const a of actions) s.push(`- ${a.action}${a.outcome && a.outcome !== 'unknown' ? ` (${a.outcome})` : ''}`);
+    sections.push(s);
+  }
+  const relTrusted = selectRelevantMemories(trustedMem, latestUserText, 6);
+  if (relTrusted.length) {
+    const s = ['🗂️ ذاكرة ذات صلة:'];
+    for (const m of relTrusted) s.push(`- ${m.summary}`);
+    sections.push(s);
+  }
+  const relUnverified = selectRelevantMemories(unverifiedMem, latestUserText, 3);
+  if (relUnverified.length) {
+    const s = ['⚠️ سبق أن قاله البوت (غير مؤكد — لا تعتمده كحقيقة إلا إذا أكّده العميل أو النظام):'];
+    for (const m of relUnverified) s.push(`- ${m.summary}`);
+    sections.push(s);
+  }
+
+  if (!sections.length) return '';
+
+  const header = '\n\n🧭 حالة المحادثة (سياق داخلي — لا تذكره للعميل):';
+  const footer = [
+    '',
+    'تعليمات استخدام السياق:',
+    '- اعتبر المراجع المحلولة عالية الثقة هي المعنى المقصود، ولا تسأل عن معلومة معروفة أصلاً هنا.',
+    '- لا تُعِد خطوة تأكّد حلّها ولا خطوة سبق تجربتها إلا إذا استدعى السياق إعادتها.',
+    '- اسأل سؤال توضيح واحد فقط عند غموض حقيقي (مرشحان متساويان)؛ ومجرد وجود الغموض ليس سبباً للتصعيد.',
+    '- لا تدّعِ أن إجراءً تم إلا إذا أكّده النظام أو أداة فعلية.',
+  ].join('\n');
+
+  // Assemble within budget (§19): always keep the footer; add sections top-down
+  // until the budget is exhausted. Top-priority sections are added first, so
+  // low-value memory sections are the first to be dropped when space runs out.
+  const reserve = footer.length + header.length + 4;
+  let used = reserve;
+  const kept = [];
+  for (const s of sections) {
+    const text = s.join('\n');
+    if (used + text.length + 1 > budget && kept.length) break;
+    kept.push(text);
+    used += text.length + 1;
+  }
+  return `${header}\n${kept.join('\n')}${footer}`;
 }
 
 /**
