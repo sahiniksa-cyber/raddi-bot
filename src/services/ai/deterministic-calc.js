@@ -300,36 +300,100 @@ function resolveRule(rules, texts) {
   return { kind: 'none', rule: null };
 }
 
+// ── Context Engine → pricing bridge (spec §15/§16) ────────────────────────
+// The Context Engine already RESOLVED which product/variant/payment-method the
+// customer means (across short replies, corrections and pronouns). Turn its
+// active_entities into a preferred-resolution hint for the calc. The calc still
+// reads the TRUSTED base price from config and does the arithmetic — the context
+// only chooses WHICH item, never supplies a price (authority order §10).
+const PRODUCT_ENTITY_TYPES = new Set(['product', 'subscription', 'service', 'item', 'package']);
+const VARIANT_ENTITY_TYPES = new Set(['variant', 'plan', 'tier']);
+function newestByType(entities, typeSet) {
+  const list = (Array.isArray(entities) ? entities : []).filter((e) => e && typeSet.has(e.type) && (e.label || e.ref));
+  if (!list.length) return null;
+  let best = list[0];
+  for (const e of list) {
+    if (e.last_seen != null && (best.last_seen == null || String(e.last_seen) > String(best.last_seen))) best = e;
+  }
+  return best.label || best.ref;
+}
+function deriveResolvedPricingContext(state) {
+  const entities = state && Array.isArray(state.active_entities) ? state.active_entities : [];
+  return {
+    activeProduct: newestByType(entities, PRODUCT_ENTITY_TYPES),
+    activeVariant: newestByType(entities, VARIANT_ENTITY_TYPES),
+    activePaymentMethod: newestByType(entities, new Set(['payment_method'])),
+  };
+}
+
+// Find the config product whose name matches a resolved-context product string.
+function matchConfigProduct(products, nameStr) {
+  const t = normArabic(nameStr);
+  if (!t) return null;
+  const list = Array.isArray(products) ? products : [];
+  return list.find((p) => { const n = normArabic(p && p.name); return n && (t.includes(n) || n.includes(t)); }) || null;
+}
+function matchVariant(product, variantStr) {
+  const nv = normArabic(variantStr);
+  if (!nv) return null;
+  const variants = Array.isArray(product && product.variants) ? product.variants.filter((v) => v && (v.label || v.price)) : [];
+  return variants.find((v) => v.label && (nv.includes(normArabic(v.label)) || normArabic(v.label).includes(nv))) || null;
+}
+function matchRuleByTrigger(rules, methodStr) {
+  const nm = normArabic(methodStr);
+  if (!nm) return null;
+  const triggered = (rules || []).filter((r) => r.trigger && String(r.trigger).trim());
+  return triggered.find((r) => nm.includes(normArabic(r.trigger)) || normArabic(r.trigger).includes(nm)) || null;
+}
+
 /**
  * The reply-path entry point. Returns a discriminated result; when 'computed',
  * `computation` is the ACTUAL computePrice() output (deterministic, in code).
+ * `resolvedContext` (optional, from the Context Engine) is the PREFERRED
+ * resolution for product/variant/payment-method; every field falls back to the
+ * existing regex resolution when absent or not matchable — so behaviour is
+ * byte-identical when no context is supplied (backward compatible).
  */
-function resolvePriceComputation({ history, latestUserText, config } = {}) {
+function resolvePriceComputation({ history, latestUserText, config, resolvedContext } = {}) {
   const cfg = config || {};
   if (!detectPriceQuestion(latestUserText)) return { status: 'not_a_calc' };
+  const rc = resolvedContext || {};
 
-  const ref = resolveProductReference({ history, latestUserText, products: cfg.products });
-  if (ref.status === 'none') return { status: 'no_reference' };
-  if (ref.status === 'ambiguous') return { status: 'ambiguous_product', candidates: ref.candidates };
-
-  const product = ref.product;
+  // Product: prefer the Context Engine's resolved product; fall back to regex.
+  let product = rc.activeProduct ? matchConfigProduct(cfg.products, rc.activeProduct) : null;
+  if (!product) {
+    const ref = resolveProductReference({ history, latestUserText, products: cfg.products });
+    if (ref.status === 'none') return { status: 'no_reference' };
+    if (ref.status === 'ambiguous') return { status: 'ambiguous_product', candidates: ref.candidates };
+    product = ref.product;
+  }
   const texts = customerTexts(history, latestUserText);
 
   let basePrice = product.price;
-  let variant = null;
-  const v = resolveVariant(product, texts);
-  if (v.kind === 'ambiguous') return { status: 'ambiguous_variant', product, variants: v.variants };
-  if (v.kind === 'chosen') { variant = v.variant; basePrice = v.variant.price; }
+  let variant = rc.activeVariant ? matchVariant(product, rc.activeVariant) : null;
+  if (variant) {
+    basePrice = variant.price;
+  } else {
+    const v = resolveVariant(product, texts);
+    if (v.kind === 'ambiguous') return { status: 'ambiguous_variant', product, variants: v.variants };
+    if (v.kind === 'chosen') { variant = v.variant; basePrice = v.variant.price; }
+  }
 
   if (parseAmount(basePrice) == null) return { status: 'unknown_base', product };
 
-  const rr = resolveRule(resolvePricingRules(cfg), texts);
-  if (rr.kind === 'ambiguous') return { status: 'ambiguous_rule', product, rules: rr.rules };
+  // Rule: prefer the resolved payment method; fall back to regex resolution.
+  const rules = resolvePricingRules(cfg);
+  let rule = rc.activePaymentMethod ? matchRuleByTrigger(rules, rc.activePaymentMethod) : null;
+  if (!rule) {
+    const rr = resolveRule(rules, texts);
+    if (rr.kind === 'ambiguous') return { status: 'ambiguous_rule', product, rules: rr.rules };
+    rule = rr.rule;
+  }
 
   // Deterministic computation happens HERE, in code — not left to the LLM.
-  const computation = computePrice({ basePrice, quantity: 1, rule: rr.rule });
+  const computation = computePrice({ basePrice, quantity: 1, rule });
   if (!computation.ok) return { status: 'unknown_base', product };
-  return { status: 'computed', product, variant, rule: rr.rule, computation };
+  return { status: 'computed', product, variant, rule, computation };
 }
 
 function buildPriceComputationBlock(resolution) {
@@ -356,5 +420,5 @@ function buildPriceComputationBlock(resolution) {
 module.exports = {
   computePrice, parseAmount, buildCalculationBlock, tenantRules,
   detectPriceQuestion, resolveProductReference, resolvePriceComputation, buildPriceComputationBlock,
-  extractPricingRulesFromInstructions, resolvePricingRules,
+  extractPricingRulesFromInstructions, resolvePricingRules, deriveResolvedPricingContext,
 };

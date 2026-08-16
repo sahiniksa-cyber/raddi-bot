@@ -374,7 +374,10 @@ function buildConversationStateBlock(state, { canInject, latestUserText = '', ma
     ? Object.entries(state.known_facts) : [];
   const actions = arr(state.actions_attempted).filter((a) => a && a.action);
   const memories = arr(state.salient_memories).filter((m) => m && m.summary);
-  const trustedMem = memories.filter((m) => m.source !== 'previous_bot_statement' && m.source !== 'unknown');
+  // Relevant-context memories (customer/merchant/system/tool/unknown) — shown as
+  // context, NOT as confirmed facts. Only a self-labelled bot claim is quarantined
+  // into the explicitly-unverified section (§9).
+  const relevantMem = memories.filter((m) => m.source !== 'previous_bot_statement');
   const unverifiedMem = memories.filter((m) => m.source === 'previous_bot_statement');
   const pe = state.pending_expectation;
 
@@ -420,7 +423,7 @@ function buildConversationStateBlock(state, { canInject, latestUserText = '', ma
     for (const a of actions) s.push(`- ${a.action}${a.outcome && a.outcome !== 'unknown' ? ` (${a.outcome})` : ''}`);
     sections.push(s);
   }
-  const relTrusted = selectRelevantMemories(trustedMem, latestUserText, 6);
+  const relTrusted = selectRelevantMemories(relevantMem, latestUserText, 6);
   if (relTrusted.length) {
     const s = ['🗂️ ذاكرة ذات صلة:'];
     for (const m of relTrusted) s.push(`- ${m.summary}`);
