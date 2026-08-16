@@ -42,6 +42,8 @@ const { createHealthRoutes } = require('./routes/health.routes');
 const { detectApiKeyError } = require('./controllers/health.controller');
 const { createQueueRoutes } = require('./routes/queue.routes');
 const { createInstagramRoutes } = require('./routes/instagram.routes');
+const { createSallaRoutes } = require('./routes/salla.routes');
+const { createSallaCrmRoutes } = require('./routes/salla-crm.routes');
 const { createCampaignRoutes } = require('./routes/campaign.routes');
 const { RuntimeBot, cleanupRuntimeStorage, resolveConfigForAI } = require('./services/bot/runtime-bot');
 const { createBillingAccessGate, createBillingApiGate } = require('./middleware/billing-access');
@@ -237,6 +239,7 @@ function createApp() {
   const RAW_BODY_PATHS = new Set([
     '/billing/moyasar/webhook',
     '/instagram/webhook',
+    '/salla/webhook',
   ]);
   app.use((req, res, next) => {
     if (RAW_BODY_PATHS.has(req.path)) return next();
@@ -343,6 +346,10 @@ function createApp() {
   app.get('/conversations.css', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'conversations.css')));
   app.get('/instagram.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'instagram.js')));
   app.get('/campaigns.js', requireAuth, (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'campaigns.js')));
+  // Salla section script — injected as a native tab inside the dashboard SPA
+  // (index.html loads it like instagram.js/campaigns.js). Explicit route because
+  // the dashboard is served by explicit file routes, not a static root.
+  app.get('/salla-crm.js', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'salla-crm.js')));
   // Public legal pages required by Meta to publish the app. No auth: they must
   // be reachable by Meta's reviewers and by end users.
   app.get('/privacy', (req, res) => res.sendFile(path.join(process.cwd(), 'dashboard', 'privacy.html')));
@@ -378,6 +385,12 @@ function createApp() {
   // Instagram module (isolated; every route self-guards on INSTAGRAM_ENABLED).
   // The webhook is in RAW_BODY_PATHS above and mounts its own express.raw.
   app.use(createInstagramRoutes(routeDeps));
+  // Salla Partner-app webhook (captures OAuth tokens via Easy Mode). Inert until
+  // SALLA_WEBHOOK_SECRET is set. Path is in RAW_BODY_PATHS; mounts own express.raw.
+  app.use(createSallaRoutes(routeDeps));
+  // Salla Customer-Intelligence dashboard API (سلة → العملاء). Every route
+  // self-guards on SALLA_CRM_ENABLED (default off) → ships dark.
+  app.use(createSallaCrmRoutes(routeDeps));
 
   const wrapBotController = require('./controllers/bot.controller').createBotController({ getUserBot: syncBotLookup, database: db });
   const configControllerModule = require('./controllers/config.controller');

@@ -821,6 +821,285 @@ const statements = [
     BEFORE UPDATE ON instagram_conversations
     FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Salla Partner-app integration (added 2026-08-09). Captures the merchant's
+  // OAuth tokens delivered via the `app.store.authorize` webhook ("Easy Mode"),
+  // encrypted at rest, so the AI can later read the store's data (products,
+  // orders, customers). Keyed by Salla merchant_id — the authorize webhook has
+  // no logged-in session — with a nullable user_id linked separately. Inert
+  // until SALLA_WEBHOOK_SECRET is configured.
+  // ─────────────────────────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS salla_stores (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merchant_id TEXT NOT NULL UNIQUE,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    store_name TEXT,
+    access_token_encrypted TEXT,
+    access_token_iv TEXT,
+    access_token_tag TEXT,
+    access_token_plain TEXT,
+    refresh_token_encrypted TEXT,
+    refresh_token_iv TEXT,
+    refresh_token_tag TEXT,
+    refresh_token_plain TEXT,
+    token_expires_at TIMESTAMPTZ,
+    scope TEXT,
+    status TEXT NOT NULL DEFAULT 'authorized',
+    installed_at TIMESTAMPTZ,
+    uninstalled_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // Breadcrumb of every received webhook (signature outcome + small detail).
+  // Proves delivery without Railway logs, and lets us decide later what the bot
+  // does with store events (orders, products, customers).
+  `CREATE TABLE IF NOT EXISTS salla_webhook_events (
+    id BIGSERIAL PRIMARY KEY,
+    merchant_id TEXT,
+    event TEXT,
+    signature_ok BOOLEAN NOT NULL DEFAULT FALSE,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_salla_webhook_events_merchant
+    ON salla_webhook_events (merchant_id, created_at DESC)`,
+
+  `DROP TRIGGER IF EXISTS trg_salla_stores_updated_at ON salla_stores`,
+  `CREATE TRIGGER trg_salla_stores_updated_at
+    BEFORE UPDATE ON salla_stores
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Customer Intelligence / CRM layer (added 2026-08-10). A canonical customer
+  // per real person per merchant, unifying WhatsApp (Jawab) activity with Salla
+  // store data (customers/orders/carts). Identity resolution keys on
+  // canonical_phone (see services/identity/phone.js) and salla_customer_id;
+  // NEVER on name. Metrics/segments are DERIVED and fully recomputable from raw
+  // sources (crm_orders/crm_carts/messages/timeline) so classification policy
+  // and attribution windows can change without data loss. All tables scoped by
+  // user_id (merchant). Feature-isolated: link columns on existing tables are
+  // nullable, so nothing breaks until the layer is populated.
+  // ─────────────────────────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS crm_customers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    canonical_phone TEXT,
+    display_name TEXT,
+    email TEXT,
+    salla_customer_id TEXT,
+    first_seen_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uniq_crm_customers_user_phone
+    ON crm_customers (user_id, canonical_phone) WHERE canonical_phone IS NOT NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uniq_crm_customers_user_salla
+    ON crm_customers (user_id, salla_customer_id) WHERE salla_customer_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_crm_customers_user ON crm_customers (user_id)`,
+
+  // Every external key that resolves to a customer (the identity layer).
+  `CREATE TABLE IF NOT EXISTS crm_identities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES crm_customers(id) ON DELETE CASCADE,
+    identity_type TEXT NOT NULL,
+    identity_value TEXT NOT NULL,
+    match_reason TEXT,
+    confidence NUMERIC(5,4) NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, identity_type, identity_value)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_crm_identities_customer ON crm_identities (customer_id)`,
+
+  // Audit of every merge — external ids are never deleted, so a wrong match is
+  // debuggable and (conceptually) reversible.
+  `CREATE TABLE IF NOT EXISTS crm_merge_history (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kept_customer_id UUID NOT NULL,
+    merged_customer_id UUID NOT NULL,
+    reason TEXT NOT NULL,
+    matched_on JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // Derived rollup — one row per customer. Everything here is recomputable.
+  `CREATE TABLE IF NOT EXISTS crm_customer_metrics (
+    customer_id UUID PRIMARY KEY REFERENCES crm_customers(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    has_orders BOOLEAN NOT NULL DEFAULT FALSE,
+    orders_count INTEGER NOT NULL DEFAULT 0,
+    first_order_at TIMESTAMPTZ,
+    last_order_at TIMESTAMPTZ,
+    last_order_status_slug TEXT,
+    total_order_value NUMERIC(14,2) NOT NULL DEFAULT 0,
+    avg_order_value NUMERIC(14,2) NOT NULL DEFAULT 0,
+    last_order_value NUMERIC(14,2) NOT NULL DEFAULT 0,
+    first_product TEXT,
+    last_products JSONB NOT NULL DEFAULT '[]'::jsonb,
+    has_whatsapp_conversation BOOLEAN NOT NULL DEFAULT FALSE,
+    first_conversation_at TIMESTAMPTZ,
+    last_conversation_at TIMESTAMPTZ,
+    conversation_count INTEGER NOT NULL DEFAULT 0,
+    last_message_at TIMESTAMPTZ,
+    has_abandoned_cart BOOLEAN NOT NULL DEFAULT FALSE,
+    active_abandoned_carts_count INTEGER NOT NULL DEFAULT 0,
+    last_abandoned_cart_at TIMESTAMPTZ,
+    last_abandoned_cart_value NUMERIC(14,2),
+    last_abandoned_cart_id TEXT,
+    cart_recovered BOOLEAN NOT NULL DEFAULT FALSE,
+    recovered_at TIMESTAMPTZ,
+    first_contact_at TIMESTAMPTZ,
+    contacted_before_purchase BOOLEAN,
+    time_to_conversion_seconds BIGINT,
+    conversion_order_id TEXT,
+    conversion_conversation_id UUID,
+    lifecycle TEXT,
+    computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_crm_metrics_user ON crm_customer_metrics (user_id)`,
+
+  // Mirror of qualifying Salla orders (raw status always kept).
+  `CREATE TABLE IF NOT EXISTS crm_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES crm_customers(id) ON DELETE SET NULL,
+    salla_order_id TEXT NOT NULL,
+    reference_id TEXT,
+    status_slug TEXT,
+    status_raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_qualified_purchase BOOLEAN NOT NULL DEFAULT FALSE,
+    total_amount NUMERIC(14,2),
+    currency TEXT,
+    items JSONB NOT NULL DEFAULT '[]'::jsonb,
+    coupon_code TEXT,
+    placed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, salla_order_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_crm_orders_customer ON crm_orders (customer_id, placed_at)`,
+
+  // Mirror of abandoned carts (status: abandoned | purchased | recovered).
+  `CREATE TABLE IF NOT EXISTS crm_carts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES crm_customers(id) ON DELETE SET NULL,
+    salla_cart_id TEXT NOT NULL,
+    total_amount NUMERIC(14,2),
+    currency TEXT,
+    status TEXT NOT NULL DEFAULT 'abandoned',
+    checkout_url TEXT,
+    abandoned_at TIMESTAMPTZ,
+    converted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, salla_cart_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_crm_carts_customer ON crm_carts (customer_id)`,
+
+  // Unified journey (append-only). occurred_at is the REAL event time.
+  `CREATE TABLE IF NOT EXISTS crm_timeline_events (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES crm_customers(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    source TEXT NOT NULL DEFAULT 'system',
+    ref_type TEXT,
+    ref_id TEXT,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_crm_timeline_customer
+    ON crm_timeline_events (user_id, customer_id, occurred_at)`,
+  // Idempotent event insertion (webhook retries must not duplicate timeline rows).
+  `CREATE UNIQUE INDEX IF NOT EXISTS uniq_crm_timeline_ref
+    ON crm_timeline_events (user_id, event_type, ref_type, ref_id)
+    WHERE ref_id IS NOT NULL`,
+
+  // Saved segments = rules that re-evaluate over time (materialized to a
+  // snapshot only at campaign send). Quick segments are seeded rows.
+  `CREATE TABLE IF NOT EXISTS crm_segments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_quick BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // Initial + reconciliation sync progress (for the "8,420 / 12,300" UI).
+  `CREATE TABLE IF NOT EXISTS salla_sync_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    merchant_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    phase TEXT,
+    customers_total INTEGER NOT NULL DEFAULT 0,
+    customers_done INTEGER NOT NULL DEFAULT 0,
+    orders_total INTEGER NOT NULL DEFAULT 0,
+    orders_done INTEGER NOT NULL DEFAULT 0,
+    carts_total INTEGER NOT NULL DEFAULT 0,
+    carts_done INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // Per-merchant ready-made WhatsApp message templates, keyed by Salla order
+  // status slug. When an order.status.updated webhook arrives and a template is
+  // enabled for that status, the bot sends it to the customer.
+  `CREATE TABLE IF NOT EXISTS salla_status_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status_slug TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    message_text TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, status_slug)
+  )`,
+
+  // Nullable link columns on existing tables — backfilled by identity
+  // resolution; all existing logic keeps working while they are NULL.
+  `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES crm_customers(id) ON DELETE SET NULL`,
+  `ALTER TABLE campaign_contacts ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES crm_customers(id) ON DELETE SET NULL`,
+  `ALTER TABLE customer_product_signals ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES crm_customers(id) ON DELETE SET NULL`,
+  `ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES crm_customers(id) ON DELETE SET NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_conversations_customer ON conversations (customer_id) WHERE customer_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_campaign_contacts_customer ON campaign_contacts (customer_id) WHERE customer_id IS NOT NULL`,
+
+  `DROP TRIGGER IF EXISTS trg_crm_customers_updated_at ON crm_customers`,
+  `CREATE TRIGGER trg_crm_customers_updated_at
+    BEFORE UPDATE ON crm_customers
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+  `DROP TRIGGER IF EXISTS trg_crm_orders_updated_at ON crm_orders`,
+  `CREATE TRIGGER trg_crm_orders_updated_at
+    BEFORE UPDATE ON crm_orders
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+  `DROP TRIGGER IF EXISTS trg_crm_carts_updated_at ON crm_carts`,
+  `CREATE TRIGGER trg_crm_carts_updated_at
+    BEFORE UPDATE ON crm_carts
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+  `DROP TRIGGER IF EXISTS trg_crm_segments_updated_at ON crm_segments`,
+  `CREATE TRIGGER trg_crm_segments_updated_at
+    BEFORE UPDATE ON crm_segments
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+  `DROP TRIGGER IF EXISTS trg_salla_sync_jobs_updated_at ON salla_sync_jobs`,
+  `CREATE TRIGGER trg_salla_sync_jobs_updated_at
+    BEFORE UPDATE ON salla_sync_jobs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+  `DROP TRIGGER IF EXISTS trg_salla_status_messages_updated_at ON salla_status_messages`,
+  `CREATE TRIGGER trg_salla_status_messages_updated_at
+    BEFORE UPDATE ON salla_status_messages
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at()`,
+
   // ── Campaign center: durable drafts, smart customer segmentation, imported
   //    contacts, multiple media assets, approval snapshots and per-recipient
   //    delivery state. Campaign delivery intentionally has its own queue/worker
