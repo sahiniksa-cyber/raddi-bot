@@ -132,6 +132,29 @@
       </div>
     </section>
 
+    <section id="adminPlatformAlertSection" class="panel" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
+        <div>
+          <b style="font-size:16px">🔔 تنبيهات المنصة</b>
+          <div class="sub">إعداد خاص بإدارة المنصة. يصل تنبيه لهذا الرقم عند فصل ربط واتساب لأي متجر. إذا تُرك الرقم فارغاً لا يُرسل أي تنبيه.</div>
+        </div>
+      </div>
+      <div style="padding:16px;display:flex;flex-direction:column;gap:14px;max-width:600px">
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700">
+          رقم جوال تنبيهات المنصة
+          <input type="text" id="platformAlertPhone" placeholder="9665XXXXXXXX" dir="ltr" style="width:100%;border:1px solid var(--border);border-radius:7px;padding:9px 11px;font-family:inherit;font-size:13px">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700">
+          رابط المنصة
+          <input type="text" id="platformUrl" placeholder="https://jwap.net" dir="ltr" style="width:100%;border:1px solid var(--border);border-radius:7px;padding:9px 11px;font-family:inherit;font-size:13px">
+        </label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button type="button" onclick="savePlatformAlert()" style="padding:7px 18px;border:1px solid var(--border);background:#fff;border-radius:7px;cursor:pointer;font-weight:700;font-size:12px;color:var(--green)">حفظ</button>
+          <span class="sub" id="platformAlertStatus" style="flex:1"></span>
+        </div>
+      </div>
+    </section>
+
     <div class="toolbar">
       <input id="search" type="search" placeholder="بحث بالاسم أو البريد" oninput="render()">
       <button onclick="loadCustomers()">تحديث</button>
@@ -712,11 +735,45 @@ async function saveQuotaStopMessage(){
     if(st)st.textContent='';
   }catch(e){toast('خطأ: '+e.message,true)}
 }
+async function loadPlatformAlert(){
+  try{
+    const r=await fetch('/api/admin/platform-alert',{credentials:'same-origin'});
+    if(!r.ok)return;
+    const d=await r.json();
+    if(!d.success)return;
+    const s=d.setting||{};
+    const ph=document.getElementById('platformAlertPhone');
+    const url=document.getElementById('platformUrl');
+    if(ph)ph.value=s.phone||'';
+    if(url)url.value=s.url||'';
+  }catch(_){}
+}
+async function savePlatformAlert(){
+  const ph=document.getElementById('platformAlertPhone');
+  const url=document.getElementById('platformUrl');
+  const st=document.getElementById('platformAlertStatus');
+  try{
+    const r=await fetch('/api/admin/platform-alert',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify({phone:ph?ph.value:'',url:url?url.value:''})
+    });
+    const d=await r.json();
+    if(!d.success)throw new Error(d.message||'فشل الحفظ');
+    const s=d.setting||{};
+    if(ph)ph.value=s.phone||'';
+    if(url)url.value=s.url||'';
+    toast('تم حفظ إعدادات التنبيهات ✓');
+    if(st)st.textContent='';
+  }catch(e){toast('خطأ: '+e.message,true)}
+}
 loadCustomers();
 loadCoupons();
 loadPreActivations();
 loadHealth();
 loadQuotaStopMessage();
+loadPlatformAlert();
 (async function loadVersion(){
   try{
     const d=await fetch('/api/admin/version',{credentials:'same-origin'}).then(r=>r.json());

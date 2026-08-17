@@ -2613,6 +2613,7 @@ function setModel(m){
 
 // ── STATUS POLL ──
 let lastQrVersion=0;
+let lastTruth=null;
 let lastAutoReplyEnabled=null;
 let lastAutoRestartAt=0;
 function updateLiveLogs(logs){
@@ -2696,8 +2697,9 @@ async function poll(){
     const qv=d.qrVersion||0;
     const autoReplyEnabled=d.autoReplyEnabled!==false;
     renderBotAutoReplyState(d);
-    if(d.status===lastStatus&&qv===lastQrVersion&&autoReplyEnabled===lastAutoReplyEnabled)return;
-    lastStatus=d.status;lastQrVersion=qv;lastAutoReplyEnabled=autoReplyEnabled;
+    const truth=d.connectionTruth||null;
+    if(d.status===lastStatus&&truth===lastTruth&&qv===lastQrVersion&&autoReplyEnabled===lastAutoReplyEnabled)return;
+    lastStatus=d.status;lastTruth=truth;lastQrVersion=qv;lastAutoReplyEnabled=autoReplyEnabled;
     const dot=document.getElementById('sDot'),txt=document.getElementById('sTxt');
     const ctrlTxt=document.getElementById('ctrlStatusTxt'),ctrlDot=document.getElementById('ctrlDot');
     const startBtn=document.getElementById('ctrlStartBtn');
@@ -2711,8 +2713,15 @@ async function poll(){
       connected:   {sc:'connected',   dc:'green',  badge:'متصل ✓',           ctrl:'✅ متصل',       cd:'on',  showS:false,showX:true},
       disconnected:{sc:'disconnected',dc:'yellow', badge:'انقطع...',          ctrl:'🔌 انقطع',     cd:'pulse',showS:false,showX:true},
       error:       {sc:'error',       dc:'blink',  badge:'خطأ',             ctrl:'❌ خطأ',         cd:'',    showS:true, showX:false},
+      qr_required: {sc:'disconnected',dc:'yellow', badge:'تم فصل الربط — أعد الربط', ctrl:'🔌 تم فصل الربط', cd:'pulse',showS:true, showX:false},
     };
-    const s=S[d.status]||S.connecting;
+    // The real connection state wins over the raw socket status: a terminal
+    // loggedOut leaves status='stopped' but connectionTruth='QR_REQUIRED', so the
+    // dashboard shows "re-link" immediately without waiting for a button press.
+    // A session already showing a QR keeps its own qr/waiting screen.
+    let statusKey=d.status;
+    if(truth==='QR_REQUIRED'&&d.status!=='qr_ready'&&d.status!=='waiting_qr')statusKey='qr_required';
+    const s=S[statusKey]||S.connecting;
     showSc(s.sc);
     dot.className='dot '+s.dc; txt.textContent=s.badge;
     if(ctrlTxt)ctrlTxt.textContent=s.ctrl;
