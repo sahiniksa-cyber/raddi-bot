@@ -296,6 +296,7 @@ async function processOutgoingWhatsapp(job, {
   getAutoReplyEnabled = loadAutoReplyEnabled,
   scopeValidator = validateOutgoingScope,
   enqueueOutgoing = enqueueOutgoingWhatsapp,
+  isOwnerPaused = isConversationOwnerPaused,
 }) {
   const payload = job.data || {};
   const userId = payload.userId;
@@ -371,6 +372,7 @@ async function processOutgoingWhatsapp(job, {
       getUserBot,
       reviewBeforeSend,
       enqueueOutgoing,
+      isOwnerPaused,
     });
   }
 
@@ -395,7 +397,7 @@ async function processOutgoingWhatsapp(job, {
     return { skipped: true, reason: 'bot_stopped_by_owner' };
   }
 
-  if (!payload.escalation && await isConversationOwnerPaused({
+  if (!payload.escalation && await isOwnerPaused({
     userId,
     conversationId: payload.conversationId,
     sender,
@@ -547,6 +549,29 @@ async function processOutgoingWhatsapp(job, {
   finalReply = String(routed.reply || '').trim();
   if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
 
+  // FINAL owner-pause re-check at the send boundary. The start guard (above) can
+  // pass, then waitForConnectedBot (≤10s) + the pre-send AI review (an LLM call)
+  // open a window in which the merchant may reply manually. The start-of-job
+  // stale guard only catches newer INBOUND (customer) messages, not an OUTBOUND
+  // owner reply — so without this the AI reply is sent AFTER a human takeover.
+  // Re-check here, at the last point before the send.
+  if (!payload.escalation && await isOwnerPaused({
+    userId,
+    conversationId: payload.conversationId,
+    sender,
+    replyMessageId,
+    ignoreEscalationPause: payload.handoffAcknowledgement === true,
+  })) {
+    const message = 'outgoing reply canceled at send boundary: owner replied during the pre-send window';
+    await markReplyMessage(replyMessageId, 'canceled', {
+      sentBy: WORKER_NAME, canceledAt: new Date().toISOString(), error: message,
+    }, messageScope(payload));
+    await updateJobStatus(job.id, {
+      status: 'canceled', finished_at: new Date(), attempts: job.attemptsMade, last_error: message,
+    });
+    return { skipped: true, reason: 'owner_paused_presend' };
+  }
+
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
   const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
@@ -633,6 +658,7 @@ async function handleLidOutgoing({
   getUserBot,
   reviewBeforeSend = reviewOutgoingReplyBeforeSend,
   enqueueOutgoing = enqueueOutgoingWhatsapp,
+  isOwnerPaused = isConversationOwnerPaused,
 }) {
   // Try a best-effort send first. Some sessions can deliver to @lid even though
   // it's unreliable in general — better to attempt than to silently drop.
@@ -646,7 +672,7 @@ async function handleLidOutgoing({
     // the @lid branch (which is the VAST majority of customers on privacy-masked
     // numbers) sent the AI reply even after the owner had replied manually, so
     // "stop when I step in" silently never worked for ~98% of conversations.
-    if (!payload.escalation && await isConversationOwnerPaused({
+    if (!payload.escalation && await isOwnerPaused({
       userId,
       conversationId: payload.conversationId,
       sender,
@@ -747,6 +773,25 @@ async function handleLidOutgoing({
     });
     finalReply = String(routed.reply || '').trim();
     if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
+    // FINAL owner-pause re-check at the send boundary (mirrors the main path).
+    // The @lid branch is the VAST majority of customers, so the pre-send race was
+    // silently sending AI replies after a human takeover here most of all.
+    if (!payload.escalation && await isOwnerPaused({
+      userId,
+      conversationId: payload.conversationId,
+      sender,
+      replyMessageId,
+      ignoreEscalationPause: payload.handoffAcknowledgement === true,
+    })) {
+      const message = 'outgoing reply canceled at send boundary: owner replied during the pre-send window';
+      await markReplyMessage(replyMessageId, 'canceled', {
+        sentBy: WORKER_NAME, canceledAt: new Date().toISOString(), error: message,
+      }, messageScope(payload));
+      await updateJobStatus(job.id, {
+        status: 'canceled', finished_at: new Date(), attempts: job.attemptsMade, last_error: message,
+      });
+      return { skipped: true, reason: 'owner_paused_presend', lid: true };
+    }
     const lidResult = await bot.client.sendMessage(sender, finalReply);
     await recordWhatsappMessageId({
       userId,

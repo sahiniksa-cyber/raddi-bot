@@ -77,5 +77,8 @@ test('normal and lid sends ignore only the acknowledgement own escalation pause'
   const wiring = outgoingWorkerSrc.match(
     /ignoreEscalationPause:\s*payload\.handoffAcknowledgement\s*===\s*true/g,
   ) || [];
-  assert.equal(wiring.length, 2);
+  // Two guards per send path: the start-of-job guard AND the send-boundary
+  // re-check (closes the manual-reply race during the pre-send window). Normal
+  // path (2) + @lid path (2) = 4.
+  assert.equal(wiring.length, 4);
 });
