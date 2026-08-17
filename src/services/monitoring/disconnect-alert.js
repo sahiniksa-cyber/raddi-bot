@@ -20,11 +20,22 @@
 
 const dbDefault = require('../../db/client');
 const { getPlatformAlertPhone, getPlatformUrl } = require('../platform/platform-alert-config');
-const { recordIncidentOpen, recordIncidentResolved, markIncidentChannels, getOpenIncident } = require('./incident-store');
+const { recordIncidentOpen, recordIncidentResolved, markIncidentChannels, getOpenIncident, listOpenUnnotifiedIncidents } = require('./incident-store');
 
 const INCIDENT_COMPONENT = 'whatsapp_link';
 
 let deps = { getOwnerBot: null, database: dbDefault };
+
+// Bounded retry state (in-process). The first alert send can fail — the owner
+// bot (the independent transport) may be momentarily disconnected — leaving the
+// incident open-but-unnotified. A periodic sweep (driven by the existing health
+// monitor tick) re-attempts delivery until one channel succeeds.
+const __retryCooldown = new Map(); // userId -> last retry-attempt epoch ms
+let __retrySweepInFlight = false;   // single-flight: never run two sweeps at once
+
+function retryCooldownMs() {
+  return parseInt(process.env.DISCONNECT_ALERT_RETRY_COOLDOWN_MS || '60000', 10);
+}
 
 function configureDisconnectAlerts({ getOwnerBot = null, database = dbDefault } = {}) {
   deps = { getOwnerBot, database };
@@ -113,10 +124,45 @@ async function sendDisconnectAlert({ userId } = {}) {
   return { channels };
 }
 
+// Periodic retry of alerts whose first send failed. Reuses the once-only,
+// notified-aware sendDisconnectAlert: an incident that is already notified is
+// skipped inside it, and a successful send marks it notified so it drops out of
+// the pending set — so this can run every tick without ever double-sending.
+// Guards: a single-flight lock (no parallel sweeps) + a per-incident cooldown
+// (no spam). Cross-replica duplicates are prevented naturally — sendViaOwnerBot
+// only sends from the replica whose owner bot is actually 'connected'.
+async function retryPendingDisconnectAlerts() {
+  if (process.env.DISCONNECT_ALERT_ENABLED === 'false') return { retried: 0, skipped: 'disabled' };
+  if (__retrySweepInFlight) return { retried: 0, skipped: 'in_flight' };
+  __retrySweepInFlight = true;
+  try {
+    const database = deps.database;
+    let pending = [];
+    try { pending = await listOpenUnnotifiedIncidents(database, INCIDENT_COMPONENT); } catch (_) { pending = []; }
+    const now = Date.now();
+    const cooldown = retryCooldownMs();
+    let retried = 0;
+    for (const userId of pending) {
+      const last = __retryCooldown.get(userId) || 0;
+      if (now - last < cooldown) continue; // per-incident cooldown — no rapid re-send
+      __retryCooldown.set(userId, now);
+      const result = await sendDisconnectAlert({ userId });
+      if (result.channels && result.channels.length) {
+        __retryCooldown.delete(userId); // delivered — incident is now notified
+        retried++;
+      }
+    }
+    return { retried };
+  } finally {
+    __retrySweepInFlight = false;
+  }
+}
+
 // Called when a store's session comes back to CONNECTED: closes the open
 // incident so a genuinely new future severance is allowed to alert again.
 async function resolveDisconnectIncident({ userId } = {}) {
   if (!userId) return false;
+  __retryCooldown.delete(userId); // clear any stale retry cooldown for this tenant
   try {
     return await recordIncidentResolved(deps.database, { component: INCIDENT_COMPONENT, scope: userId, detail: 'reconnected' });
   } catch (_) {
@@ -128,6 +174,7 @@ module.exports = {
   buildDisconnectAlertMessage,
   configureDisconnectAlerts,
   sendDisconnectAlert,
+  retryPendingDisconnectAlerts,
   resolveDisconnectIncident,
   INCIDENT_COMPONENT,
 };

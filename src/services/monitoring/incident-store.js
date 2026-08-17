@@ -53,6 +53,19 @@ async function getOpenIncident(database, component, scope = 'global') {
   return result.rows[0] || null;
 }
 
+// Open incidents for `component` that no channel has delivered yet. Drives the
+// bounded retry of alerts whose first send failed (e.g. the owner bot was down).
+async function listOpenUnnotifiedIncidents(database, component) {
+  if (!database.isConfigured?.()) return [];
+  const result = await database.query(
+    `SELECT scope FROM health_incidents
+     WHERE component = $1 AND status = 'open'
+       AND (notified_channels IS NULL OR notified_channels = '[]'::jsonb)`,
+    [component],
+  );
+  return result.rows.map((row) => row.scope);
+}
+
 async function listRecentIncidents(database = db, limit = 30) {
   if (!database.isConfigured?.()) return [];
   const result = await database.query(
@@ -65,4 +78,4 @@ async function listRecentIncidents(database = db, limit = 30) {
   return result.rows;
 }
 
-module.exports = { recordIncidentOpen, recordIncidentResolved, markIncidentChannels, getOpenIncident, listRecentIncidents };
+module.exports = { recordIncidentOpen, recordIncidentResolved, markIncidentChannels, getOpenIncident, listOpenUnnotifiedIncidents, listRecentIncidents };

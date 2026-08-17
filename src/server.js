@@ -67,7 +67,7 @@ const { recoverQueuedAiReplyJobs } = require('./workers/ai-recovery');
 const { getQueues } = require('./queues/message-queue');
 const { HealthMonitor, setActiveMonitor } = require('./services/monitoring/health-monitor');
 const { createAlertDispatcher } = require('./services/monitoring/alerts');
-const { configureDisconnectAlerts } = require('./services/monitoring/disconnect-alert');
+const { configureDisconnectAlerts, retryPendingDisconnectAlerts } = require('./services/monitoring/disconnect-alert');
 const { installProcessSafetyNet } = require('./runtime/process-safety');
 const { prepareEscalation } = require('./workers/escalation-routing');
 const { createMailer } = require('./services/notify/mailer');
@@ -1089,7 +1089,7 @@ async function main() {
       // Instant "WhatsApp link severed" (loggedOut → QR_REQUIRED) alert, sent via
       // the independent owner bot to the platform alert phone (platform_settings).
       configureDisconnectAlerts({ getOwnerBot: resolveOwnerBot });
-      healthMonitor = new HealthMonitor({ getQueues, dispatcher });
+      healthMonitor = new HealthMonitor({ getQueues, dispatcher, alertRetry: retryPendingDisconnectAlerts });
       healthMonitor.start();
       setActiveMonitor(healthMonitor);
       console.log(`${new Date().toISOString()} [server] health monitor started`);
