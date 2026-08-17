@@ -242,6 +242,16 @@ function createBaileysClientWrapper({
         // fromMe echo. If persistence fails, do not send; the queue can retry.
         await reserveBotSend({ messageId, target: normalizedTarget });
       }
+      // FINAL Human-Takeover gate at the transport boundary — the closest possible
+      // point to the real send: AFTER every preparation/lookup/reservation await,
+      // with NO await between this check and sock.sendMessage. Opt-in: only callers
+      // that pass a guard (AI replies) are gated; campaigns/alerts/escalation are
+      // not. Closes the reservation/lookup races: a manual reply landing anywhere
+      // before this line cannot result in an AI send after the human takeover.
+      if (typeof options.beforeTransportSend === 'function') {
+        const abort = await options.beforeTransportSend();
+        if (abort) return { aborted: true, reason: 'human_takeover_before_transport' };
+      }
       const result = await sock.sendMessage(
         normalizedTarget,
         content && typeof content === 'object' && !Buffer.isBuffer(content)

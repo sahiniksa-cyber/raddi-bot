@@ -63,12 +63,18 @@ test('@lid outgoing is CANCELED when the owner has replied (owner-pause honored)
   assert.equal(sendAttempted, false, 'must NOT send to the customer after owner replied');
 });
 
-test('source: handleLidOutgoing checks isConversationOwnerPaused before sending', () => {
+test('source: handleLidOutgoing gates the @lid send with the transport-boundary owner-pause check', () => {
   const src = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'workers', 'outgoing-whatsapp-worker.js'), 'utf8');
   const fnIdx = src.indexOf('async function handleLidOutgoing(');
   assert.ok(fnIdx > 0, 'handleLidOutgoing exists');
-  const checkIdx = src.indexOf('isConversationOwnerPaused', fnIdx);
-  const sendIdx = src.indexOf('bot.client.sendMessage(sender, reply)', fnIdx);
+  // Start-of-job guard is present.
+  const checkIdx = src.indexOf('isOwnerPaused', fnIdx);
   assert.ok(checkIdx > fnIdx, 'owner-pause check exists inside handleLidOutgoing');
-  assert.ok(sendIdx > checkIdx, 'owner-pause check runs BEFORE the @lid send');
+  // The @lid send now carries the transport-boundary gate (beforeTransportSend),
+  // so the final Human-Takeover check runs inside the wrapper, after its bot-send
+  // reservation, immediately before the real sock.sendMessage.
+  const gateIdx = src.indexOf('beforeTransportSend', fnIdx);
+  const sendIdx = src.indexOf('bot.client.sendMessage(sender, finalReply, { beforeTransportSend })', fnIdx);
+  assert.ok(gateIdx > fnIdx, 'a transport-boundary gate is wired inside handleLidOutgoing');
+  assert.ok(sendIdx > gateIdx, 'the @lid send passes beforeTransportSend (final gate at transport)');
 });
