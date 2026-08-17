@@ -549,24 +549,25 @@ async function processOutgoingWhatsapp(job, {
   finalReply = String(routed.reply || '').trim();
   if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
 
-  // Presence indicator FIRST, so the owner-pause re-check below is the LAST await
-  // before the send — no window can open between the check and the send.
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
-  // FINAL owner-pause re-check at the send boundary. The start guard (above) can
-  // pass, then waitForConnectedBot (≤10s) + the pre-send AI review (an LLM call)
-  // + the presence update open a window in which the merchant may reply manually.
-  // The start-of-job stale guard only catches newer INBOUND (customer) messages,
-  // not an OUTBOUND owner reply — so without this the AI reply is sent AFTER a
-  // human takeover. This is the LAST await before sendWhatsappReply.
-  if (!payload.escalation && await isOwnerPaused({
+  // FINAL Human-Takeover gate, applied at the TRANSPORT boundary (inside the client
+  // wrapper, AFTER its bot-send reservation, immediately before the real
+  // sock.sendMessage). Passed down as beforeTransportSend so the check is the last
+  // step before transport — no lookup/reservation/presence await can open a window
+  // after it. The start-of-job guard above is only an early cancel; THIS is the
+  // authoritative gate. Escalation replies are exempt (must always reach the team).
+  const beforeTransportSend = payload.escalation ? undefined : async () => isOwnerPaused({
     userId,
     conversationId: payload.conversationId,
     sender,
     replyMessageId,
     ignoreEscalationPause: payload.handoffAcknowledgement === true,
-  })) {
-    const message = 'outgoing reply canceled at send boundary: owner replied during the pre-send window';
+  });
+
+  const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId, beforeTransportSend });
+  if (sendResult && sendResult.aborted) {
+    const message = 'outgoing reply canceled at transport boundary: owner replied before send';
     await markReplyMessage(replyMessageId, 'canceled', {
       sentBy: WORKER_NAME, canceledAt: new Date().toISOString(), error: message,
     }, messageScope(payload));
@@ -575,8 +576,6 @@ async function processOutgoingWhatsapp(job, {
     });
     return { skipped: true, reason: 'owner_paused_presend' };
   }
-
-  const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
   await recordWhatsappMessageId({
     userId,
     conversationId: payload.conversationId,
@@ -775,17 +774,20 @@ async function handleLidOutgoing({
     });
     finalReply = String(routed.reply || '').trim();
     if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
-    // FINAL owner-pause re-check at the send boundary (mirrors the main path).
-    // The @lid branch is the VAST majority of customers, so the pre-send race was
-    // silently sending AI replies after a human takeover here most of all.
-    if (!payload.escalation && await isOwnerPaused({
+    // FINAL Human-Takeover gate at the TRANSPORT boundary (mirrors the main path).
+    // The @lid branch is the VAST majority of customers. Passed as beforeTransportSend
+    // so the wrapper checks it AFTER its bot-send reservation, immediately before the
+    // real sock.sendMessage — no window after the check.
+    const beforeTransportSend = payload.escalation ? undefined : async () => isOwnerPaused({
       userId,
       conversationId: payload.conversationId,
       sender,
       replyMessageId,
       ignoreEscalationPause: payload.handoffAcknowledgement === true,
-    })) {
-      const message = 'outgoing reply canceled at send boundary: owner replied during the pre-send window';
+    });
+    const lidResult = await bot.client.sendMessage(sender, finalReply, { beforeTransportSend });
+    if (lidResult && lidResult.aborted) {
+      const message = 'outgoing reply canceled at transport boundary: owner replied before @lid send';
       await markReplyMessage(replyMessageId, 'canceled', {
         sentBy: WORKER_NAME, canceledAt: new Date().toISOString(), error: message,
       }, messageScope(payload));
@@ -794,7 +796,6 @@ async function handleLidOutgoing({
       });
       return { skipped: true, reason: 'owner_paused_presend', lid: true };
     }
-    const lidResult = await bot.client.sendMessage(sender, finalReply);
     await recordWhatsappMessageId({
       userId,
       conversationId: payload.conversationId,
@@ -1053,21 +1054,29 @@ async function isConversationOwnerPaused({
   }
 }
 
-async function sendWhatsappReply(bot, { sender, reply, providerMessageId }) {
+async function sendWhatsappReply(bot, { sender, reply, providerMessageId, beforeTransportSend }) {
   const timeoutMs = TIMERS.SEND_MESSAGE_TIMEOUT_MS;
   return Promise.race([
-    sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }),
+    sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId, beforeTransportSend }),
     new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout (30s)')), timeoutMs)),
   ]);
 }
 
-async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId }) {
+async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageId, beforeTransportSend }) {
+  // Human-Takeover gate for the whatsapp-web.js transport branches (reply/chat),
+  // which do NOT pass through the Baileys wrapper's gate. Invoked as the LAST step
+  // before each real transport call, with no await between it and the send. Baileys
+  // sends go through bot.client.sendMessage below, where the wrapper applies the
+  // same gate AFTER its bot-send reservation.
+  const gateAbort = async () => (typeof beforeTransportSend === 'function' && (await beforeTransportSend()) === true);
+
   if (providerMessageId && typeof bot.client.getMessageById === 'function') {
     const original = await bot.client.getMessageById(providerMessageId).catch((err) => {
       bot.log?.(`message reply lookup failed: ${err.message}`);
       return null;
     });
     if (original && typeof original.reply === 'function') {
+      if (await gateAbort()) return { aborted: true, reason: 'human_takeover_before_transport' };
       return original.reply(reply);
     }
   }
@@ -1078,11 +1087,12 @@ async function sendWhatsappReplyUnchecked(bot, { sender, reply, providerMessageI
       return null;
     });
     if (chat && typeof chat.sendMessage === 'function') {
+      if (await gateAbort()) return { aborted: true, reason: 'human_takeover_before_transport' };
       return chat.sendMessage(reply);
     }
   }
 
-  return bot.client.sendMessage(sender, reply);
+  return bot.client.sendMessage(sender, reply, { beforeTransportSend });
 }
 
 function resolveOutgoingSettleMs(bot) {

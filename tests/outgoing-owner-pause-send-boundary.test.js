@@ -32,7 +32,16 @@ function makeBot(sent) {
     appState: { status: 'connected', statusAgeMs: 99999, whatsappEngine: 'baileys' },
     sessionDesiredState: 'running', startBot: async () => {},
     sock: { ws: { readyState: 1 } },
-    client: { sendPresenceUpdate: async () => {}, sendMessage: async (jid, text) => { sent.push({ jid, text }); return { key: { id: 'wa-1' } }; } },
+    client: {
+      sendPresenceUpdate: async () => {},
+      // Mirror the real Baileys wrapper: honor the transport-boundary gate.
+      sendMessage: async (jid, text, options = {}) => {
+        if (options.beforeTransportSend && (await options.beforeTransportSend()) === true) {
+          return { aborted: true, reason: 'human_takeover_before_transport' };
+        }
+        sent.push({ jid, text }); return { key: { id: 'wa-1' } };
+      },
+    },
     log: () => {},
   };
 }
@@ -111,6 +120,59 @@ test('normal path: merchant replies DURING sendPresenceUpdate → send BLOCKED (
   });
   assert.equal(sent.length, 0, 'nothing may be sent — the reply landed during presence, before the final check');
   assert.equal(result.reason, 'owner_paused_presend');
+});
+
+// ── Lookup race (race 4): merchant replies DURING a whatsapp-web.js getMessageById
+// lookup → the gate before original.reply must catch it. ────────────────────
+test('lookup race: merchant replies during getMessageById → send BLOCKED (wwjs reply branch)', async () => {
+  const sent = [];
+  let paused = false;
+  const isOwnerPaused = async () => paused;
+  const bot = makeBot(sent);
+  // whatsapp-web.js-style lookup path: the reply object's send is the transport.
+  bot.client.getMessageById = async () => { paused = true; return { reply: async (text) => { sent.push({ jid: 'via-reply', text }); return { key: { id: 'r' } }; } }; };
+  const job = makeJob(); job.data.providerMessageId = 'provider-abc';
+  const result = await run(job, {
+    getUserBot: async () => bot, scopeValidator: validateScope,
+    reviewBeforeSend: async () => ({ reply: 'النص النهائي', suppressed: false }),
+    isOwnerPaused,
+  });
+  assert.equal(sent.length, 0, 'no send after takeover that landed during the lookup');
+  assert.equal(result.reason, 'owner_paused_presend');
+});
+
+// ── Retry/requeue after takeover: a re-run of the job while paused stays blocked.
+test('retry after takeover: paused at job start on a retry → blocked (owner_paused)', async () => {
+  const sent = [];
+  const isOwnerPaused = pauseSequence([true]);
+  const job = makeJob(); job.attemptsMade = 2; // a BullMQ retry
+  const result = await run(job, {
+    getUserBot: async () => makeBot(sent), scopeValidator: validateScope,
+    reviewBeforeSend: async () => ({ reply: 'x', suppressed: false }),
+    isOwnerPaused,
+  });
+  assert.equal(sent.length, 0);
+  assert.equal(result.reason, 'owner_paused');
+});
+
+// ── Tenant/conversation scope: the gate is asked about THIS job's exact scope. ─
+test('tenant isolation: the pause gate is scoped to this job\'s userId + conversationId + sender', async () => {
+  const sent = [];
+  const seen = [];
+  const isOwnerPaused = async (args) => { seen.push(args); return false; };
+  await run(makeJob('966500000009@s.whatsapp.net'), {
+    getUserBot: async () => makeBot(sent), scopeValidator: validateScope,
+    reviewBeforeSend: async () => ({ reply: 'رد', suppressed: false }),
+    isOwnerPaused,
+  });
+  assert.ok(seen.length >= 1);
+  for (const a of seen) {
+    assert.equal(a.userId, 'user-1');
+    assert.equal(a.conversationId, 'conversation-1');
+    assert.equal(a.sender, '966500000009@s.whatsapp.net');
+  }
+  // never falsely paused → the reply was delivered
+  assert.equal(sent.length, 1);
 });
 
 // ── No false positive: never paused → the reply is sent normally ─────────────
