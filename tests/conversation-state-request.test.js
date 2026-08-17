@@ -11,7 +11,7 @@ test('buildExtractionRequest yields a system+user message pair with prior state 
   });
   assert.equal(req.messages[0].role, 'system');
   assert.equal(req.messages[1].role, 'user');
-  assert.ok(req.max_tokens > 0 && req.max_tokens <= 700);
+  assert.ok(req.max_tokens >= 700 && req.max_tokens <= 1200); // computed, bounded ceiling (§6)
   assert.ok(req.temperature <= 0.3);
   // Generic: the system prompt must NOT hardcode any brand/vertical term.
   const sys = req.messages[0].content;

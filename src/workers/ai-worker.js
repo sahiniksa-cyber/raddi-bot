@@ -37,7 +37,7 @@ const {
   saveConversationState,
   extractConversationState,
 } = require('../services/ai/conversation-state.service');
-const { isSemanticDuplicate, detectResolvedReopen } = require('../services/ai/conversation-state');
+const { isSemanticDuplicate, detectResolvedReopen, buildStateTrace } = require('../services/ai/conversation-state');
 const { isAutoReplyEnabled } = require('../services/bot/auto-reply-control');
 const { buildCustomerUpdateText } = require('../services/escalation/escalation-bridge');
 const { isOriginalMessageStale } = require('../../lib/message-staleness');
@@ -1111,6 +1111,19 @@ async function processAiReply(job) {
     const conversationStateCanInject = stateEnabled
       && convStateRow.extraction_ok === true
       && convStateRow.reflects_message_id === latestInboundId;
+
+    // Privacy-safe diagnostic trace (§27): lets a live-conversation failure be
+    // debugged (which entity/reference/expectation was resolved) with NO secrets.
+    if (stateEnabled) {
+      try {
+        logger.info('state', 'context-v2 trace', buildStateTrace(convStateRow.state, {
+          tenantId: userId,
+          conversationId: conversation.id,
+          stateVersion: convStateRow.state_version,
+          extractionOk: convStateRow.extraction_ok,
+        }));
+      } catch (_) { /* tracing never blocks a reply */ }
+    }
 
     let reply;
     try {

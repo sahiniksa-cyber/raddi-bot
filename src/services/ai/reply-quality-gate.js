@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeArabic } = require('../../../lib/post-process-reply');
+const { resolvePricingRules, computePrice, parseAmount } = require('./deterministic-calc');
 
 const DECISIONS = new Set(['pass', 'repair', 'clarify', 'escalate']);
 const FINAL_DECISIONS = new Set(['pass', 'repair', 'suppress']);
@@ -247,13 +248,32 @@ function extractWordDurationClaims(text) {
 
 function configuredPriceValues(config = {}) {
   const values = new Set();
+  const bases = [];
   const add = (text) => {
     for (const value of normalizeDigits(text).match(/\d+(?:[.,]\d+)?/g) || []) values.add(value.replace(',', '.'));
   };
   for (const product of Array.isArray(config.products) ? config.products : []) {
     add(product?.price || '');
-    for (const variant of Array.isArray(product?.variants) ? product.variants : []) add(variant?.price || '');
+    const pb = parseAmount(product?.price); if (pb != null) bases.push(pb);
+    for (const variant of Array.isArray(product?.variants) ? product.variants : []) {
+      add(variant?.price || '');
+      const vb = parseAmount(variant?.price); if (vb != null) bases.push(vb);
+    }
   }
+  // A total the platform DETERMINISTICALLY computes from the tenant's OWN pricing
+  // rule applied to a configured base price (e.g. 189 + 10% = 207.9) is a legitimate
+  // supported price — the engine computes it and instructs the model to state it —
+  // so grounding must not strip it as "unsupported". Config-only, generic, tenant-
+  // driven; zero effect for tenants without a rule.
+  try {
+    const rules = resolvePricingRules(config);
+    for (const base of bases) {
+      for (const rule of rules) {
+        const c = computePrice({ basePrice: base, quantity: 1, rule });
+        if (c && c.ok) add(String(c.total));
+      }
+    }
+  } catch (_) { /* grounding must never throw */ }
   return values;
 }
 

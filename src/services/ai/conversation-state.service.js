@@ -10,6 +10,7 @@
 const db = require('../../db/client');
 const {
   EMPTY_STATE, validateState, buildExtractionRequest, parseExtractionResponse, reconcileSystemState,
+  compactStateForExtraction, mergePreservedMemories,
 } = require('./conversation-state');
 
 async function loadConversationState({ userId, conversationId, database = db } = {}) {
@@ -87,17 +88,44 @@ async function extractConversationState({
   const prior = validateState(previousState);
   try {
     if (!aiClient?.raw) throw new Error('no extraction client');
-    const req = buildExtractionRequest({ previousState: prior, newTurns, lastBotReply });
+    // Bound the prompt (§6): send a compacted prior (relevant memories + newest
+    // entities) so the echoed JSON never truncates as the conversation grows.
+    const latestText = [...(Array.isArray(newTurns) ? newTurns : [])].reverse().find((t) => t && t.role !== 'assistant')?.content || '';
+    const compacted = compactStateForExtraction(prior, { latestText });
+    const req = buildExtractionRequest({ previousState: compacted, newTurns, lastBotReply });
     const limit = Number(timeoutMs || process.env.CONVERSATION_STATE_EXTRACT_TIMEOUT_MS || 9000);
-    let timer;
-    const resp = await Promise.race([
-      aiClient.raw(req),
-      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('extract timeout')), limit); }),
-    ]).finally(() => clearTimeout(timer));
-    const content = resp?.choices?.[0]?.message?.content || '';
-    const { state, extraction_ok } = parseExtractionResponse(content);
+    const call = async (r) => {
+      let timer;
+      try {
+        return await Promise.race([
+          aiClient.raw(r),
+          new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('extract timeout')), limit); }),
+        ]);
+      } finally { clearTimeout(timer); }
+    };
+    const looksTruncated = (c) => {
+      const s = String(c || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      // JSON that STARTED but was cut off — not a complete non-JSON refusal.
+      return s.startsWith('{') && !s.endsWith('}');
+    };
+    let resp = await call(req);
+    let content = resp?.choices?.[0]?.message?.content || '';
+    let parsed = parseExtractionResponse(content);
+    // Bug 4: a TRUNCATED response (provider says finish_reason=length, or the JSON
+    // is cut) retries EXACTLY ONCE at a higher bounded ceiling — then fail-soft.
+    // A complete non-JSON (refusal) is NOT a truncation and is not retried.
+    if (!parsed.extraction_ok && (resp?.choices?.[0]?.finish_reason === 'length' || looksTruncated(content))) {
+      const retryCeiling = Math.min(1600, Math.max(1200, Number(process.env.CONVERSATION_STATE_EXTRACT_RETRY_MAX_TOKENS) || 1600));
+      resp = await call({ ...req, max_tokens: retryCeiling });
+      content = resp?.choices?.[0]?.message?.content || '';
+      parsed = parseExtractionResponse(content);
+    }
+    const { state, extraction_ok } = parsed;
     if (!extraction_ok) return { state: reconcileSystemState(prior, systemFacts), extraction_ok: false };
-    return { state: reconcileSystemState(state, systemFacts), extraction_ok: true };
+    // Re-attach older memories the compacted prompt didn't include (no silent
+    // loss); reconcile → validateState re-caps to the memory ceiling.
+    const withMemories = { ...state, salient_memories: mergePreservedMemories(state.salient_memories, prior.salient_memories) };
+    return { state: reconcileSystemState(withMemories, systemFacts), extraction_ok: true };
   } catch (_) {
     return { state: reconcileSystemState(prior, systemFacts), extraction_ok: false };
   }

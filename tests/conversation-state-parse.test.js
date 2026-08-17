@@ -5,10 +5,11 @@ const {
   EMPTY_STATE, validateState, parseExtractionResponse,
 } = require('../src/services/ai/conversation-state');
 
-test('EMPTY_STATE has all generic slots and no vertical vocabulary', () => {
+test('EMPTY_STATE has all generic slots (V2 superset) and no vertical vocabulary', () => {
   assert.deepEqual(Object.keys(EMPTY_STATE).sort(), [
-    'actions_attempted', 'active_entity', 'active_topic', 'customer_goal',
-    'known_facts', 'last_reply_intent', 'open_issues', 'resolved_issues',
+    'actions_attempted', 'active_entities', 'active_entity', 'active_topic', 'customer_goal',
+    'known_facts', 'last_reply_intent', 'last_turn_understanding', 'open_issues',
+    'pending_expectation', 'recent_topics', 'resolved_issues', 'salient_memories', 'schema_version',
   ]);
   assert.deepEqual(EMPTY_STATE.open_issues, []);
   assert.equal(EMPTY_STATE.active_topic, null);
