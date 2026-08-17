@@ -49,7 +49,7 @@ const BASE_CONFIG = {
   employeeName: 'موظف خدمة العملاء',
   products: [{ name: 'اشتراك التصميم', price: 189 }],
   pricingRules: [{ type: 'percentage_addition', value: 10, trigger: 'تقسيط', label: 'تقسيط' }],
-  botInstructions: 'أنت موظف خدمة عملاء لمتجر اشتراكات تصميم. اشرح باختصار وأدب. بعد أن يختار العميل طريقة الدفع، اطلب منه رقم الجوال لإرسال طلب الدفع. لا تعرض التحويل لمختص إلا إذا طلب العميل صراحة موظفاً بشرياً.',
+  botInstructions: 'أنت موظف خدمة عملاء لمتجر اشتراكات تصميم. اشرح باختصار وأدب. طرق الدفع المتاحة: نقدًا أو بالتقسيط. عند اختيار التقسيط تُضاف رسوم 10% على السعر الأساسي (النظام يحسب الإجمالي تلقائيًا). بعد أن يختار العميل طريقة الدفع، اطلب منه رقم الجوال لإرسال طلب الدفع. لا تعرض التحويل لمختص إلا إذا طلب العميل صراحة موظفاً بشرياً.',
 };
 
 function resolveLiveConfig() {
@@ -260,7 +260,13 @@ async function runSendPipeline({
 // ── Scenarios ──────────────────────────────────────────────────────────────
 const B_CONFIG = { products: [{ name: 'برنامج ألفا', price: 100 }, { name: 'برنامج بيتا', price: 200 }] };
 const D_CONFIG = { products: [{ name: 'باقة سيلفر', price: 100 }, { name: 'باقة قولد', price: 200 }] };
-const E_CONFIG = { products: [{ name: 'اشتراك التصميم', price: null, variants: [{ label: 'شهري', price: 20 }, { label: 'سنوي', price: 200 }] }] };
+// E is a variant-correction test, NOT a payment one — give it its own instructions
+// so the base config's installment clause does not leak in and make the model
+// speculatively quote a fee instead of the base variant price.
+const E_CONFIG = {
+  products: [{ name: 'اشتراك التصميم', price: null, variants: [{ label: 'شهري', price: 20 }, { label: 'سنوي', price: 200 }] }],
+  botInstructions: 'أنت موظف خدمة عملاء لمتجر اشتراكات تصميم. اشرح باختصار وأدب. اذكر السعر الأساسي للباقة التي يختارها العميل كما هو، ولا تفترض طريقة دفع ولا تُضف أي رسوم غير مذكورة.',
+};
 
 const scenarios = [
   { id: 'PAYMENT (item 2)', turns: [
