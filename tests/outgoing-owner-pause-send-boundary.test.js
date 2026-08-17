@@ -93,6 +93,26 @@ test('pause already active at job start → blocked at the start guard (owner_pa
   assert.equal(result.reason, 'owner_paused');
 });
 
+// ── The residual sub-race: manual reply lands DURING sendPresenceUpdate ──────
+// Proves the final owner-pause check is the LAST await before the send: the
+// merchant's reply happens while the "composing" presence update is in flight,
+// AFTER the initial guard passed. The final check must still catch it.
+test('normal path: merchant replies DURING sendPresenceUpdate → send BLOCKED (last-await guard)', async () => {
+  const sent = [];
+  let paused = false;
+  const isOwnerPaused = async () => paused; // reflects live state at call time
+  const bot = makeBot(sent);
+  // The presence update is the point at which the merchant's manual reply lands.
+  bot.client.sendPresenceUpdate = async () => { paused = true; };
+  const result = await run(makeJob(), {
+    getUserBot: async () => bot, scopeValidator: validateScope,
+    reviewBeforeSend: async () => ({ reply: 'النص النهائي', suppressed: false }),
+    isOwnerPaused,
+  });
+  assert.equal(sent.length, 0, 'nothing may be sent — the reply landed during presence, before the final check');
+  assert.equal(result.reason, 'owner_paused_presend');
+});
+
 // ── No false positive: never paused → the reply is sent normally ─────────────
 test('never paused → reply is sent (no false block from the new re-check)', async () => {
   const sent = [];

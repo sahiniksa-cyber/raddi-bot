@@ -549,12 +549,16 @@ async function processOutgoingWhatsapp(job, {
   finalReply = String(routed.reply || '').trim();
   if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
 
+  // Presence indicator FIRST, so the owner-pause re-check below is the LAST await
+  // before the send — no window can open between the check and the send.
+  try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
+
   // FINAL owner-pause re-check at the send boundary. The start guard (above) can
   // pass, then waitForConnectedBot (≤10s) + the pre-send AI review (an LLM call)
-  // open a window in which the merchant may reply manually. The start-of-job
-  // stale guard only catches newer INBOUND (customer) messages, not an OUTBOUND
-  // owner reply — so without this the AI reply is sent AFTER a human takeover.
-  // Re-check here, at the last point before the send.
+  // + the presence update open a window in which the merchant may reply manually.
+  // The start-of-job stale guard only catches newer INBOUND (customer) messages,
+  // not an OUTBOUND owner reply — so without this the AI reply is sent AFTER a
+  // human takeover. This is the LAST await before sendWhatsappReply.
   if (!payload.escalation && await isOwnerPaused({
     userId,
     conversationId: payload.conversationId,
@@ -571,8 +575,6 @@ async function processOutgoingWhatsapp(job, {
     });
     return { skipped: true, reason: 'owner_paused_presend' };
   }
-
-  try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
   const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
   await recordWhatsappMessageId({
