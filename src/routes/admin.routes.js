@@ -162,6 +162,48 @@ function createQuotaStopMessageHandlers(deps = {}) {
   return { getQuotaStopMessage, putQuotaStopMessage };
 }
 
+// Platform-level alert config: the phone number that receives platform-admin
+// alerts (e.g. "a store's WhatsApp link was severed") and the platform URL used
+// in those alerts. Platform-scoped (belongs to the platform operator, not any
+// store); persisted in platform_settings; no hardcoded defaults; no env fallback.
+function createPlatformAlertHandlers(deps = {}) {
+  const getPS = deps.getPlatformSetting || getPlatformSettingDefault;
+  const setPS = deps.setPlatformSetting || setPlatformSettingDefault;
+  const normalizePhone = (v) => String(v || '').replace(/[^\d]/g, '');
+  const normalizeUrl = (v) => String(v || '').trim();
+  const readField = (s, f) => (s && typeof s === 'object' ? s[f] : s);
+
+  async function getPlatformAlert(req, res) {
+    try {
+      const phoneSetting = await getPS('platformAlertPhone');
+      const urlSetting = await getPS('platformUrl');
+      res.status(200).json({
+        success: true,
+        setting: {
+          phone: normalizePhone(readField(phoneSetting, 'phone')),
+          url: normalizeUrl(readField(urlSetting, 'url')),
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  async function putPlatformAlert(req, res) {
+    try {
+      const phone = normalizePhone(req.body?.phone);
+      const url = normalizeUrl(req.body?.url);
+      await setPS('platformAlertPhone', { phone });
+      await setPS('platformUrl', { url });
+      res.status(200).json({ success: true, setting: { phone, url } });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  return { getPlatformAlert, putPlatformAlert };
+}
+
 function createAdminRoutes(deps = {}) {
   const router = express.Router();
   const requireAuth = deps.requireAuth || ((req, res, next) => next());
@@ -376,6 +418,12 @@ function createAdminRoutes(deps = {}) {
   router.get('/api/admin/quota-stop-message', requireOwner, quotaStopMessageHandlers.getQuotaStopMessage);
   router.put('/api/admin/quota-stop-message', requireOwner, quotaStopMessageHandlers.putQuotaStopMessage);
 
+  // Platform-level alert config: destination phone for platform-admin alerts +
+  // the platform URL used in those alerts.
+  const platformAlertHandlers = createPlatformAlertHandlers();
+  router.get('/api/admin/platform-alert', requireOwner, platformAlertHandlers.getPlatformAlert);
+  router.put('/api/admin/platform-alert', requireOwner, platformAlertHandlers.putPlatformAlert);
+
   const apiKeyHandlers = createAdminApiKeysHandlers();
   router.get('/api/admin/api-keys', requireOwner, apiKeyHandlers.getApiKeys);
   router.put('/api/admin/api-keys', requireOwner, apiKeyHandlers.putApiKey);
@@ -562,4 +610,5 @@ module.exports = {
   createCustomerApiKeysHandlers,
   createQuotaStopMessageHandlers,
   timingSafeEqualStr,
+  createPlatformAlertHandlers,
 };

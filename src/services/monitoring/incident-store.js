@@ -39,6 +39,33 @@ async function markIncidentChannels(database, incident, channels = []) {
   );
 }
 
+// Returns the currently-open incident row for (component, scope), or null.
+// Used to tell "already opened AND notified" apart from "opened but delivery
+// failed" so a failed alert can be retried without re-opening a fresh incident.
+async function getOpenIncident(database, component, scope = 'global') {
+  if (!database.isConfigured?.()) return null;
+  const result = await database.query(
+    `SELECT notified_channels FROM health_incidents
+     WHERE component = $1 AND scope = $2 AND status = 'open'
+     LIMIT 1`,
+    [component, scope],
+  );
+  return result.rows[0] || null;
+}
+
+// Open incidents for `component` that no channel has delivered yet. Drives the
+// bounded retry of alerts whose first send failed (e.g. the owner bot was down).
+async function listOpenUnnotifiedIncidents(database, component) {
+  if (!database.isConfigured?.()) return [];
+  const result = await database.query(
+    `SELECT scope FROM health_incidents
+     WHERE component = $1 AND status = 'open'
+       AND (notified_channels IS NULL OR notified_channels = '[]'::jsonb)`,
+    [component],
+  );
+  return result.rows.map((row) => row.scope);
+}
+
 async function listRecentIncidents(database = db, limit = 30) {
   if (!database.isConfigured?.()) return [];
   const result = await database.query(
@@ -51,4 +78,4 @@ async function listRecentIncidents(database = db, limit = 30) {
   return result.rows;
 }
 
-module.exports = { recordIncidentOpen, recordIncidentResolved, markIncidentChannels, listRecentIncidents };
+module.exports = { recordIncidentOpen, recordIncidentResolved, markIncidentChannels, getOpenIncident, listOpenUnnotifiedIncidents, listRecentIncidents };

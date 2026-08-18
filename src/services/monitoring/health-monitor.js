@@ -16,6 +16,7 @@ class HealthMonitor {
     intervalMs = parseInt(process.env.MONITOR_INTERVAL_MS || '60000', 10),
     thresholds = {},
     persist = true,
+    alertRetry = null,
   } = {}) {
     this.database = database;
     this.redisModule = redisModule;
@@ -25,6 +26,9 @@ class HealthMonitor {
     this.intervalMs = intervalMs;
     this.thresholds = thresholds;
     this.persist = persist;
+    // Optional per-tick hook to re-attempt alerts whose first send failed. Reuses
+    // this existing periodic loop instead of adding a separate timer/queue.
+    this.alertRetry = typeof alertRetry === 'function' ? alertRetry : null;
     this._previous = {};
     this._snapshot = { ok: true, checks: [], at: null };
     this._timer = null;
@@ -56,6 +60,13 @@ class HealthMonitor {
 
     for (const incident of opened) await this._handle('open', incident);
     for (const incident of resolved) await this._handle('resolved', incident);
+
+    // Re-attempt any alerts whose first send failed (best-effort; never breaks a tick).
+    if (this.alertRetry) {
+      try { await this.alertRetry(); } catch (err) {
+        this.logger.warn?.('monitor', `alert retry sweep failed: ${err.message}`);
+      }
+    }
 
     return { checks, opened, resolved };
   }

@@ -19,7 +19,7 @@ const {
   historyImportIdleMs,
   historyImportMaxMs,
 } = require('../whatsapp/history-import.service');
-const { sendUnlinkAlert } = require('../monitoring/unlink-alert');
+const { sendDisconnectAlert, resolveDisconnectIncident } = require('../monitoring/disconnect-alert');
 const { resolveWhatsappEngine } = require('./engine-config');
 const {
   buildPersistSessionStateQuery,
@@ -179,6 +179,9 @@ class RuntimeBot {
     });
     this.connection.on('ready', () => {
       if (this.whatsappEngine === 'whatsapp-web') this.scheduleWhatsappSessionBackup('ready');
+      // Session is back to CONNECTED — close any open "link severed" incident so
+      // a genuinely new future severance is allowed to alert again.
+      resolveDisconnectIncident({ userId: this.userId }).catch(() => {});
     });
     this.connection.on('auth_cleared', ({ reason } = {}) => {
       if (this.whatsappEngine !== 'whatsapp-web') return;
@@ -190,9 +193,11 @@ class RuntimeBot {
       }
     });
     this.connection.on('logged_out', () => {
-      // Device was unlinked — fire the instant owner alert (best-effort,
-      // never blocks the disconnect handling).
-      sendUnlinkAlert({ userId: this.userId, phone: this.connection.phone }).catch(() => {});
+      // Device was unlinked (loggedOut) — the one terminal, QR_REQUIRED signal.
+      // Fire the platform disconnect alert (best-effort, never blocks disconnect
+      // handling). Sent via the independent owner bot to the platform alert
+      // phone — never via this now-dead session.
+      sendDisconnectAlert({ userId: this.userId }).catch(() => {});
     });
     this.connection.on('connection_conflict', () => {
       if (this.sessionDesiredState !== 'running') return;
@@ -326,6 +331,7 @@ class RuntimeBot {
       heartbeatFailures: state.heartbeatFailures || 0,
       statusAgeMs: state.statusAgeMs || 0,
       lastProbeState: state.lastProbeState || null,
+      lastDisconnect: state.lastDisconnect || null,
       historyImportMode: Boolean(state.historyImportMode),
       readOnly: Boolean(state.readOnly),
       desiredState: this.sessionDesiredState,

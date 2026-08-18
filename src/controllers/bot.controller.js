@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { TIMERS } = require('../../lib/constants');
+const { classifyConnectionTruth } = require('../services/whatsapp/connection-truth');
 
 function describeStartState(state = {}) {
   const status = state.status || 'unknown';
@@ -35,8 +36,17 @@ function createBotController({ getUserBot, database = null }) {
       const { qrString, ...rest } = state;
       const logCount = rest.status === 'error' ? 20 : 8;
       setNoStore(res);
+      // The real connection state, derived from durable signals — NOT from
+      // desiredState. Lets the dashboard show QR_REQUIRED the moment a link is
+      // severed, instead of a stale "connected".
+      const connectionTruth = classifyConnectionTruth({
+        status: state.status,
+        desiredState: state.desiredState,
+        lastDisconnect: state.lastDisconnect,
+      });
       res.json({
         ...rest,
+        connectionTruth,
         autoReplyEnabled: bot.config?.autoReplyEnabled !== false,
         totalChatsHandled: bot.totalChatsHandled,
         logs: state.logs.slice(0, logCount),
