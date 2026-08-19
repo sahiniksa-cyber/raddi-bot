@@ -280,6 +280,51 @@ test('scope: UNKNOWN scope (تفعيل) does NOT escalate an unrelated shipping 
   assert.equal(escalationOut(), undefined, 'activation-scoped policy must not fire on shipping');
 });
 
+test('precedence: quantifier + UNKNOWN scope escalates a matching problem (not global)', async () => {
+  reset();
+  S.customerText = 'الكوبون ما يشتغل';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('أي مشكلة في الكوبونات صعّدها للدعم.');
+  await processAiReply(job());
+  assert.ok(escalationOut(), 'coupon-scoped (with quantifier) must escalate a coupon problem');
+});
+
+test('precedence: quantifier + UNKNOWN scope does NOT escalate an unrelated problem', async () => {
+  reset();
+  S.customerText = 'التطبيق ما يفتح';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('أي مشكلة في الكوبونات صعّدها للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'quantifier must NOT make a specific scope global');
+});
+
+test('precedence: quantifier + UNKNOWN scope (تفعيل) does NOT fire on shipping', async () => {
+  reset();
+  S.customerText = 'الشحنة ما وصلت';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('أي مشكلة في التفعيل صعّدها للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'activation scope must not fire on shipping');
+});
+
+test('precedence: pure universal (no scope) still escalates', async () => {
+  reset();
+  S.customerText = 'التطبيق ما يفتح';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('أي مشكلة صعّدها للدعم.');
+  await processAiReply(job());
+  assert.ok(escalationOut(), 'pure universal must escalate any problem');
+});
+
+test('precedence: quantifier + RECOGNIZED scope (الدفع) does NOT fire on app failure', async () => {
+  reset();
+  S.customerText = 'التطبيق ما يفتح';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('أي مشكلة في الدفع صعّدها للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'payment-scoped must not fire on app failure');
+});
+
 test('scope: Tenant B deferred policy never escalates immediately (scoped or not)', async () => {
   reset();
   S.customerText = 'عملية الدفع مرفوضة';

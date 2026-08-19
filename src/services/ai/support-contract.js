@@ -223,6 +223,12 @@ const SCOPE_STOP = new Set([
   'مشكل', 'مشكله', 'مشاكل', 'عطل', 'اعطال', 'خلل', 'شكوي', 'شكوه', 'شكاوي', 'صعوبه', 'عطلان',
   'اي', 'كل', 'جميع', 'كافه', 'في', 'من', 'على', 'مع', 'او', 'التي', 'الذي', 'عند', 'يواجه',
   'تواجه', 'يواجهه', 'العميل', 'الزبون', 'اذا', 'لو', 'صعد', 'صعدها', 'حول', 'بلغ', 'كلم', 'رجع',
+  // actor/general words are never a DOMAIN scope (stemmed forms — SCOPE_STOP is
+  // compared against ال-stripped, plural-stripped tokens)
+  'عميل', 'زبون', 'عملاء', 'زباين', 'زبائن', 'مستخدم', 'مستخدمين', 'ناس', 'احد', 'شخص',
+  // Whole-business / general words are NOT a specific domain — a quantified problem
+  // over them ("أي مشكلة في الخدمة") stays UNIVERSAL, never a scoped token.
+  'خدمه', 'خدمات', 'خدماتنا', 'متجر', 'محل', 'موقعنا', 'عام', 'عامه',
 ]);
 
 function pluralStem(word) {
@@ -427,22 +433,25 @@ function deriveEscalationRulesFromInstructions(config = {}) {
     // only when the customer is BOTH in that scope AND reporting a real problem.
     if (PROBLEM_SCOPE_RE.test(seg.line)) {
       const { universal, scopes, tokens } = classifyEscalationScope(seg.line);
+      // Precedence: a SPECIFIC scope ALWAYS wins over universality — even a
+      // universal quantifier ("أي مشكلة في الكوبونات") stays scoped. Global
+      // problem_intent is used ONLY when there is NO specific scope at all.
       if (scopes.length) {
-        // Recognized structured scope wins (even over a quantifier).
+        // (1) Recognized structured scope (payment/login/order/…).
         for (const sc of scopes) {
           rules.push({ trigger_type: 'scoped_problem_intent', trigger_value: sc, target_contact_id: targetId, _shadow: true });
         }
-      } else if (universal) {
-        // EXPLICITLY universal → a global problem_intent.
-        rules.push({ trigger_type: 'problem_intent', trigger_value: '', target_contact_id: targetId, _shadow: true });
-      } else {
-        // UNKNOWN merchant scope, no universal quantifier → a SAFE merchant-derived
-        // scoped rule (problem intent + the merchant's own domain token). NEVER
-        // promote to global. If no domain token exists, emit nothing (safe).
+      } else if (tokens.length) {
+        // (2) UNKNOWN merchant domain → a SAFE merchant-derived scoped rule (its own
+        // domain token + problem intent). Never global, even with a quantifier.
         for (const tok of tokens) {
           rules.push({ trigger_type: 'scoped_problem_keyword', trigger_value: tok, target_contact_id: targetId, _shadow: true });
         }
+      } else if (universal) {
+        // (3) EXPLICITLY universal AND no specific scope → global problem_intent.
+        rules.push({ trigger_type: 'problem_intent', trigger_value: '', target_contact_id: targetId, _shadow: true });
       }
+      // else: no scope + not explicitly universal → emit nothing (safe).
       continue; // do NOT also emit brittle content-keyword rules for a problem directive
     }
     // Non-problem directive (e.g. "أسئلة الأسعار صعّدها لسعود") → topic/keyword.

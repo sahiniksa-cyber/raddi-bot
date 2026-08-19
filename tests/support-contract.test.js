@@ -209,6 +209,30 @@ for (const scoped of ['مشاكل الكوبونات صعّدها للدعم', '
   });
 }
 
+// SPECIFIC scope wins over UNIVERSALITY even when the scope is unknown/merchant-derived.
+test('precedence: quantifier + UNKNOWN scope → scoped_problem_keyword, NOT global', () => {
+  const rules = derive('أي مشكلة في الكوبونات صعّدها للدعم');
+  assert.ok(!rules.some(r => r.trigger_type === 'problem_intent'), `must NOT be global: ${JSON.stringify(rules)}`);
+  assert.ok(rules.some(r => r.trigger_type === 'scoped_problem_keyword'), 'expected merchant-derived coupon scope');
+});
+
+test('precedence: quantifier + RECOGNIZED scope → scoped_problem_intent, NOT global', () => {
+  const rules = derive('أي مشكلة في الدفع صعّدها للدعم');
+  assert.ok(!rules.some(r => r.trigger_type === 'problem_intent'), 'must NOT be global');
+  assert.ok(rules.some(r => r.trigger_type === 'scoped_problem_intent' && r.trigger_value === 'PAYMENT'), 'expected payment scope');
+});
+
+test('precedence: quantifier with NO specific scope → global problem_intent', () => {
+  const rules = derive('أي مشكلة صعّدها للدعم');
+  assert.ok(rules.some(r => r.trigger_type === 'problem_intent'), 'expected global');
+});
+
+test('precedence: quantifier + whole-service (الخدمة) stays global', () => {
+  const rules = derive('أي مشكلة أو عطل في الخدمة صعّدها للدعم');
+  assert.ok(rules.some(r => r.trigger_type === 'problem_intent'), 'whole-service must remain global');
+  assert.ok(!rules.some(r => r.trigger_type === 'scoped_problem_keyword'), 'service is not a specific token');
+});
+
 test('shadow routing: a general "any problem → escalate" yields a SEMANTIC problem_intent rule', () => {
   const config = {
     botInstructions: 'تكلم سعودي ومختصر. أي مشكلة أو عطل في الخدمة صعّدها للدعم.',
