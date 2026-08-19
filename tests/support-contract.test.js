@@ -13,6 +13,7 @@ const {
   reconcileSupportReply,
   splitInstructionsForPrompt,
   buildHandoffAck,
+  buildNeutralAck,
 } = require('../src/services/ai/support-contract');
 
 // ── detectActionClaim — a reply that claims a handoff/review/callback happened ──
@@ -63,6 +64,53 @@ test('hasGroundingSupport: a topic NOUN without the action is NOT grounding', ()
 test('hasGroundingSupport: a documented re-login IMPERATIVE grounds a re-login step', () => {
   const config = { botInstructions: 'إذا ما ظهر الكود أعد تسجيل الدخول ثم انتظر دقيقة' };
   assert.equal(hasGroundingSupport('جرب تسجيل الدخول مرة ثانية', config), true);
+});
+
+// Blocker 2 — grounding requires POSITIVE evidence (not prohibitions / negations).
+test('grounding: a NEGATED instruction is NOT grounding', () => {
+  const config = { botInstructions: 'لا تطلب من العميل إعادة تسجيل الدخول أبداً' };
+  assert.equal(hasGroundingSupport('جرب تسجيل الدخول مرة ثانية', config), false);
+});
+
+test('grounding: a PROHIBITION field is NOT grounding', () => {
+  const config = { prohibitions: ['إعادة التشغيل', 'مسح الكاش'] };
+  assert.equal(hasGroundingSupport('أعد تشغيل الجهاز', config), false);
+});
+
+test('grounding: a "forbidden wording example" in botInstructions is NOT grounding', () => {
+  const config = { botInstructions: 'ممنوع تقول للعميل: أعد تشغيل الجهاز.' };
+  assert.equal(hasGroundingSupport('أعد تشغيل الجهاز', config), false);
+});
+
+// Blocker 3 — general procedural detector: novel actions (not in any blacklist)
+// must still be caught and require positive grounding.
+for (const step of ['عطّل الـVPN', 'غيّر صلاحيات التطبيق', 'أعد تعيين كلمة المرور', 'احذف الحساب وأضفه من جديد', 'امسح مساحة التخزين']) {
+  test(`procedural (novel, ungrounded): "${step}" is detected AND unsupported`, () => {
+    assert.ok(detectGenericTroubleshooting(step).length >= 1, `not detected as procedural: ${step}`);
+    assert.equal(hasGroundingSupport(step, {}), false);
+  });
+}
+
+test('procedural (grounded): the SAME documented action stays', () => {
+  const config = { botInstructions: 'لو التطبيق يعلّق عطّل الـVPN ثم افتحه من جديد' };
+  assert.equal(hasGroundingSupport('عطّل الـVPN', config), true);
+});
+
+test('reconcile strips a NOVEL ungrounded procedural action', () => {
+  const res = reconcileSupportReply({
+    reply: 'عطّل الـVPN وغيّر صلاحيات التطبيق عشان يشتغل',
+    config: {}, escalationEnqueued: false, escalationPolicyMatched: false, customerText: 'التطبيق ما يفتح',
+  });
+  assert.ok(!/VPN|صلاحيات/.test(res.reply), `novel invented procedure survived: ${res.reply}`);
+  assert.ok(res.diagnostics.includes('ungrounded_troubleshooting_stripped'));
+});
+
+// Blocker 4 — platform safety fallbacks are TONE-NEUTRAL (no emoji / tenant style).
+test('buildNeutralAck & buildHandoffAck are tone-neutral (no emoji)', () => {
+  const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}]/u;
+  assert.ok(!EMOJI.test(buildNeutralAck()), `neutral ack has emoji: ${buildNeutralAck()}`);
+  assert.ok(!EMOJI.test(buildHandoffAck({})), `handoff ack has emoji: ${buildHandoffAck({})}`);
+  assert.ok(!EMOJI.test(buildHandoffAck({ slaPolicies: [{ amount: 12, unit: 'ساعة' }] })), 'sla ack has emoji');
 });
 
 // ── detectGenericTroubleshooting — the invented IT-support clichés ──

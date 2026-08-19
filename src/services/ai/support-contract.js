@@ -95,6 +95,34 @@ const GENERIC_TS_RES = [
   /(?:تحقق|تأكد|راجع)\s*من\s*(?:الإعدادات|الاعدادات|إعداداتك|اعداداتك)/u,
 ];
 
+// Blocker 3 — a GENERAL procedural/operational detector, not a finite blacklist.
+// The invariant: ANY customer-facing procedural instruction (an imperative action
+// verb applied to a device/account/technical object) must have positive verified
+// support. GENERIC_TS_RES above stays only as extra precise phrasings; the general
+// (verb + tech-object) detector catches actions the model invents that no list
+// anticipated ("عطّل الـVPN", "غيّر صلاحيات التطبيق", "أعد تعيين كلمة المرور"…).
+const TATWEEL_RE = /ـ/g;
+function norm(s) {
+  return normalizeArabic(String(s || '')).replace(TATWEEL_RE, '').toLowerCase();
+}
+
+const PROCEDURAL_VERB_RE = /(?:عطل|فعل|غير|اعد|احذف|امسح|اضف|اضيف|ثبت|حمل|نزل|حدث|اضبط|ازل|نظف|صفر|افصل|اوقف|جرب|حاول|شغل|اقفل|اعاده|تاكد|تحقق|راجع|reset|restart|clear|disable|enable|reinstall|reboot)/;
+const TECH_OBJECT_RE = /(?:vpn|في\s?بي\s?ان|التطبيق|تطبيق|البرنامج|الابليكيشن|الصلاحيات|صلاحيات|الاذونات|كلمه\s?المرور|كلمه\s?السر|الباسورد|الباسوورد|الحساب|التخزين|المساحه|الذاكره|الكاش|الكوكيز|الاعدادات|اعدادات|اعداداتك|الجهاز|الهاتف|الجوال|الشبكه|الاتصال|الانترنت|النت|الراوتر|الواي\s?فاي|المتصفح|البروكسي|النظام|تسجيل\s?الدخول|تسجيل\s?الخروج|الدخول|الخروج)/;
+
+function splitClauses(s) {
+  return String(s || '').split(/[\n\r؛•.!?،؟]+/).map(c => c.trim()).filter(Boolean);
+}
+
+// A clause is procedural when it applies a procedural verb to a technical object.
+function detectProceduralSteps(text) {
+  const out = [];
+  for (const clause of splitClauses(text)) {
+    const n = norm(clause);
+    if (PROCEDURAL_VERB_RE.test(n) && TECH_OBJECT_RE.test(n)) out.push(clause);
+  }
+  return out;
+}
+
 function detectGenericTroubleshooting(text) {
   const t = String(text || '');
   const hits = [];
@@ -102,7 +130,33 @@ function detectGenericTroubleshooting(text) {
     const m = t.match(re);
     if (m && m[0].trim()) hits.push(m[0].trim());
   }
-  return hits;
+  for (const clause of detectProceduralSteps(t)) hits.push(clause);
+  return [...new Set(hits)];
+}
+
+function extractTechObjects(normText) {
+  const found = [];
+  const re = new RegExp(TECH_OBJECT_RE.source, 'g');
+  let m;
+  while ((m = re.exec(normText)) !== null) {
+    found.push(m[0].replace(/\s+/g, ' ').trim());
+    if (m.index === re.lastIndex) re.lastIndex += 1;
+  }
+  return [...new Set(found)];
+}
+
+// Blocker 2 — grounding requires POSITIVE documented evidence. Prohibitions are
+// excluded (see groundingParts); a NEGATED clause ("لا تطلب… / ممنوع تقول…") is
+// dropped so a forbidden-wording example never grounds the action it forbids.
+const NEGATION_RE = /(?:لا\s*ت|لا\s*يجوز|لا\s*تقم|ممنوع|تجنّب|تجنب|غير\s*مسموح|مثال\s*خاطئ|صيغة?\s*ممنوع|صيغه?\s*ممنوع)/u;
+function positiveRawClauses(config = {}) {
+  const out = [];
+  for (const part of groundingParts(config)) {
+    for (const clause of splitClauses(part)) {
+      if (!NEGATION_RE.test(clause)) out.push(clause);
+    }
+  }
+  return out;
 }
 
 const GROUND_STOP = new Set([
@@ -131,26 +185,38 @@ function groundingParts(config = {}) {
   const strOf = x => (x == null ? '' : (typeof x === 'string' ? x : (x.text || x.line || x.value || x.policy || JSON.stringify(x))));
   (Array.isArray(config.tenantPolicies) ? config.tenantPolicies : []).forEach(x => push(strOf(x)));
   (Array.isArray(config.policies) ? config.policies : []).forEach(x => push(strOf(x)));
-  (Array.isArray(config.prohibitions) ? config.prohibitions : []).forEach(x => push(strOf(x)));
   (Array.isArray(config.slaPolicies) ? config.slaPolicies : []).forEach(x => push(strOf(x)));
   (Array.isArray(config.knowledge) ? config.knowledge : []).forEach(x => push(strOf(x)));
+  // Blocker 2 — prohibitions are NEVER grounding: they document what NOT to say/do.
+  // Including them would let "لا تقل: جرب تسجيل الدخول" ground "جرب تسجيل الدخول".
   return parts;
 }
 
-// Blocker 3 — ACTION-level grounding, not topic-token overlap. A generic
-// troubleshooting step ("جرب تسجيل الدخول") is grounded ONLY when the tenant
-// documented a directive of the SAME action family (a re-login imperative) — not
-// when the tenant merely mentions the topic noun ("صفحة تسجيل الدخول"). For a
-// non-troubleshooting step we fall back to content-token overlap.
+// Grounding = POSITIVE, ACTION-LEVEL evidence. A procedural step is grounded ONLY
+// when a positive (non-negated, non-prohibition) tenant clause applies a procedural
+// verb to the SAME technical object — never when the tenant merely names the object
+// ("صفحة تسجيل الدخول"), forbids the action, or mentions it in a prohibition. Works
+// for actions no blacklist anticipated because it reasons about verb+object, not a
+// fixed phrase list. A non-procedural step falls back to content-token overlap.
 function hasGroundingSupport(step, config = {}) {
-  const parts = groundingParts(config);
-  if (!parts.length) return false;
-  const raw = parts.join(' \n ');
+  const rawClauses = positiveRawClauses(config);
+  if (!rawClauses.length) return false;
+  const normClauses = rawClauses.map(norm);
+  const s = norm(step);
+  const objects = extractTechObjects(s);
+  const stepIsProcedural = PROCEDURAL_VERB_RE.test(s) && objects.length > 0;
+
+  if (stepIsProcedural) {
+    // Same technical object AND a procedural verb documented positively together.
+    return normClauses.some((c) => PROCEDURAL_VERB_RE.test(c) && objects.some((o) => c.includes(o)));
+  }
+  // Family fallback for a known troubleshooting phrase without an extractable
+  // object (e.g. a bare English "restart"): require the same family, positively.
   const family = GENERIC_TS_RES.find((re) => re.test(step));
-  if (family) return family.test(raw);
-  const corpus = normalizeArabic(raw);
+  if (family) return rawClauses.some((c) => family.test(c));
+  // Non-procedural step → content-token overlap over the positive corpus.
   const tokens = tokenize(step);
-  return tokens.length > 0 && tokens.some((tok) => corpus.includes(tok));
+  return tokens.length > 0 && normClauses.some((c) => tokens.some((tok) => c.includes(tok)));
 }
 
 function stripGenericTroubleshooting(text, config = {}) {
@@ -264,16 +330,18 @@ function firstSlaWindow(config = {}) {
   return null;
 }
 
+// Blocker 4 — platform safety fallbacks are TONE-NEUTRAL: no emoji, no warmth
+// baked in. Any friendliness/emoji is the tenant's STYLE layer, applied later —
+// never hardcoded into the safety contract.
 function buildHandoffAck(config = {}) {
-  const base = 'تمام، تم رفع طلبك للفريق المختص.';
+  const base = 'تم رفع طلبك للفريق المختص.';
   const sla = firstSlaWindow(config);
-  return sla ? `${base} وسيتم الرد خلال ${sla.amount} ${sla.unit} 🌷` : base;
+  return sla ? `${base} وسيتم الرد خلال ${sla.amount} ${sla.unit}.` : base;
 }
 
 function buildNeutralAck() {
-  // Claims NO action. Used when a false promise had to be stripped and nothing
-  // verified remains to say.
-  return 'تمام، وصلتني رسالتك 🌷';
+  // Claims NO action. Tone-neutral (no emoji) — see buildHandoffAck note.
+  return 'وصلتني رسالتك.';
 }
 
 /**

@@ -13,13 +13,18 @@ const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-revie
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { prepareEscalation } = require('./escalation-routing');
 const { buildStaleClaimQuery } = require('../services/ai/conversation-state');
-const { reconcileSupportReply } = require('../services/ai/support-contract');
+const { reconcileSupportReply, buildNeutralAck } = require('../services/ai/support-contract');
 
 // Blocker 2 — apply the Customer-Service Contract as a FINAL deterministic net at
 // the pre-send boundary, catching anything the pre-send review regenerated (a fake
-// handoff claim or invented troubleshooting) after the ai-worker's contract pass.
+// handoff claim or invented troubleshooting) AFTER the ai-worker's contract pass.
 // escalationEnqueued reflects whether THIS customer reply has a real handoff behind
-// it. Secondary net: on error we keep the already-primary-reconciled reply.
+// it.
+//
+// Blocker 1 — this is the LAST deterministic safety gate before transport, so it is
+// FAIL-CLOSED: if reconcile throws, we must NOT ship the (possibly adversarially
+// rewritten) draft — we fall back to a neutral acknowledgement that claims neither
+// a solution nor a handoff. Correctness over availability at the boundary.
 function applyPreSendContract(finalReply, { config, escalationEnqueued, customerText }) {
   if (process.env.SUPPORT_CONTRACT_ENABLED === 'false') return finalReply;
   try {
@@ -33,7 +38,7 @@ function applyPreSendContract(finalReply, { config, escalationEnqueued, customer
     const next = String(contract.reply || '').trim();
     return next || finalReply;
   } catch (_) {
-    return finalReply;
+    return buildNeutralAck();
   }
 }
 const { TIMERS } = require('../../lib/constants');

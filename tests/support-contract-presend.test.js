@@ -56,6 +56,20 @@ test('pre-send net: clean verified answer passes through unchanged', () => {
   assert.equal(out, reply);
 });
 
+test('Blocker 1: pre-send contract is FAIL-CLOSED — a thrown reconcile never ships the unsafe draft', () => {
+  reset();
+  // Force reconcileSupportReply to throw AFTER a (simulated) adversarial pre-send
+  // rewrite reintroduced an unsafe procedure: a config whose field access throws
+  // makes the grounding step throw mid-reconcile.
+  const evilConfig = {};
+  Object.defineProperty(evilConfig, 'botInstructions', { get() { throw new Error('boom'); }, enumerable: true });
+  const unsafe = 'عطّل الـVPN وأعد تشغيل الجهاز عشان يضبط';
+  const out = applyPreSendContract(unsafe, { config: evilConfig, escalationEnqueued: false, customerText: 'مشكلة' });
+  assert.notEqual(out, unsafe, 'the unsafe draft must NOT be returned on contract failure');
+  assert.doesNotMatch(out, /VPN|أعد تشغيل/, `unsafe procedure reached the customer on failure: ${out}`);
+  assert.ok(out.trim().length >= 2, 'fail-closed produces a safe non-empty neutral ack');
+});
+
 test('pre-send net: kill-switch =false → passthrough (rollback)', () => {
   process.env.SUPPORT_CONTRACT_ENABLED = 'false';
   try {

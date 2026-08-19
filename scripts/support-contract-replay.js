@@ -104,6 +104,9 @@ const SCENARIOS = [
   { tenant: 'A', text: 'الاشتراك وقف عندي مشكلة', expect: { escalate: true, target: /96651111111/, decision: 'ESCALATE_REAL' } },
   { tenant: 'B', text: 'ما أقدر أسجل دخول', expect: { escalate: false, decision: 'ANSWER_VERIFIED' }, draft: 'خطوات الدخول: افتح الصفحة واستخدم بريدك وكلمة المرور والكود يوصلك على جوالك.' },
   { tenant: 'NOTARGET', text: 'عندي مشكلة كبيرة', expect: { escalate: false } },
+  // Adversarial NOVEL procedural actions (not in any blacklist) with no documented
+  // support → must be stripped, no fake action.
+  { tenant: 'NOTARGET', text: 'التطبيق ما يفتح', draft: 'عطّل الـVPN وغيّر صلاحيات التطبيق وأعد تعيين كلمة المرور عشان يضبط', expect: { escalate: false, noProcedures: true } },
 ];
 
 async function main() {
@@ -119,6 +122,7 @@ for (const sc of SCENARIOS) {
   const problems = [];
   if (!r.boundedBase) problems.push('blob became prompt base');
   if (/الإنترنت|تسجيل الدخول وجرب|تأكد من اتصالك/.test(r.finalReply)) problems.push('invented troubleshooting leaked');
+  if (sc.expect.noProcedures && /VPN|صلاحيات|كلمة المرور|أعد تعيين|عطّل/.test(r.finalReply)) problems.push('novel invented procedure leaked');
   if (sc.expect.escalate && !r.escalationTarget) problems.push('expected a real escalation, none happened');
   if (!sc.expect.escalate && r.escalationTarget) problems.push('unexpected escalation');
   if (sc.expect.target && !sc.expect.target.test(String(r.escalationTarget))) problems.push('wrong tenant target');
