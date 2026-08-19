@@ -19,6 +19,7 @@ const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { applyDeterministicEscalation } = require('../services/instruction-routing/escalation-rules');
+const { deriveEscalationRulesFromInstructions, reconcileSupportReply } = require('../services/ai/support-contract');
 const { computeSlaBreach } = require('../services/instruction-routing/sla-breach');
 const { resolveTrustedEventTimestamp } = require('../services/ai/trusted-event-time');
 const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
@@ -1151,16 +1152,36 @@ async function processAiReply(job) {
     // escalation machinery below fires deterministically, instead of hoping the
     // LLM volunteered the marker. An unresolved/ambiguous target injects NOTHING
     // (it stays a merchant setup task — never a silent promise to the customer).
-    if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true') {
+    // Escalation policy precedence (§3 step 1). A matching tenant escalation rule
+    // fires a DETERMINISTIC escalation instead of hoping the LLM volunteered it.
+    // Rules come from BOTH the structured config (Instruction Routing) AND a
+    // runtime SHADOW of the merchant's legacy free-text botInstructions (the pure
+    // classifier/router, NO DB migration) so a tenant who only ever wrote
+    // "any problem → escalate" in free text is honored. Runs by DEFAULT; the
+    // SUPPORT_CONTRACT_ENABLED=false kill-switch disables the shadow layer.
+    let escalationPolicyMatched = false;
+    const supportContractOn = process.env.SUPPORT_CONTRACT_ENABLED !== 'false';
+    const routingOn = process.env.INSTRUCTION_ROUTING_ENABLED === 'true';
+    let shadowRules = [];
+    try { shadowRules = supportContractOn ? deriveEscalationRulesFromInstructions(config) : []; }
+    catch (shadowErr) { logger.warn('routing', `shadow escalation derivation failed: ${shadowErr.message}`); }
+    if (routingOn || shadowRules.length) {
       try {
-        const det = applyDeterministicEscalation(reply, config, {
+        const evalConfig = shadowRules.length
+          ? { ...config, escalationRules: [...(Array.isArray(config.escalationRules) ? config.escalationRules : []), ...shadowRules] }
+          : config;
+        const det = applyDeterministicEscalation(reply, evalConfig, {
           text,
           intent: ai.lastDebug?.qualityGate?.intent || '',
           slaBreached: slaBreach.sla_breached === true,
         });
         if (det.escalated) {
           reply = det.reply;
+          escalationPolicyMatched = true;
           logger.info('routing', `deterministic escalation fired → ${det.contact?.name || 'contact'}`);
+        } else if (det.alreadyMarked) {
+          // A rule matched and the LLM already carried a marker — still a policy hit.
+          escalationPolicyMatched = true;
         } else if (det.unresolved) {
           logger.warn('routing', 'escalation rule matched but target unresolved — no customer promise made');
         }
@@ -1178,6 +1199,30 @@ async function processAiReply(job) {
     });
     let customerReply = escalation.customerReply.trim();
     if (!customerReply) throw new Error('AI returned empty customer reply after escalation marker cleanup');
+
+    // Customer-Service Contract (§3/§4/§5/§1). The customer text is reconciled
+    // against what ACTUALLY happens: escalationEnqueued is true only when a real,
+    // resolvable escalation target was produced (escalation.ownerMessage). This is
+    // the invariant enforcement — no fake handoff/review claim survives without a
+    // real escalation, invented troubleshooting the tenant never documented is
+    // stripped, and a matched escalation policy replaces the draft with one concise
+    // handoff ack. Runs by DEFAULT (kill-switch SUPPORT_CONTRACT_ENABLED=false).
+    try {
+      const escalationEnqueued = Boolean(escalation.ownerMessage);
+      const contract = reconcileSupportReply({
+        reply: customerReply,
+        config,
+        escalationEnqueued,
+        escalationPolicyMatched: escalationPolicyMatched && escalationEnqueued,
+        customerText: text,
+      });
+      if (contract.reply !== customerReply) {
+        logger.info('contract', `support contract → ${contract.decision} [${contract.diagnostics.join(',') || 'none'}]`);
+        customerReply = contract.reply;
+      }
+    } catch (contractErr) {
+      logger.warn('contract', `support contract reconcile failed (keeping draft): ${contractErr.message}`);
+    }
 
     if (combinePrefix) {
       customerReply = combineCannedAndAi(combinePrefix, customerReply);

@@ -14,8 +14,9 @@ function scaledMaxLength(maxLen, customerText = '') {
   // Brevity authority: the dashboard maxResponseLength is the ceiling. Multi-
   // question messages still get room (so a 2nd question isn't truncated — the
   // 2026-06-11 fix) but capped at 2x, not 3x, so replies stay near the owner's
-  // configured length instead of ballooning. Flag-gated (default keeps 3x).
-  const cap = process.env.BREVITY_AUTHORITY_ENABLED === 'true' ? 2 : 3;
+  // configured length instead of ballooning. PLATFORM behavior (§6): the 2x cap
+  // is the DEFAULT; an explicit kill-switch (=== 'false') restores the legacy 3x.
+  const cap = process.env.BREVITY_AUTHORITY_ENABLED === 'false' ? 3 : 2;
   const signals = Math.min(cap, Math.max(marks, 1) + batched);
   return base * signals;
 }
@@ -188,7 +189,10 @@ const CLOSING_FILLER_RES = [
 ];
 
 function stripClosingFiller(reply) {
-  if (process.env.CLOSING_FILLER_STRIP_ENABLED !== 'true') return String(reply || '');
+  // PLATFORM behavior (§6): stripping trailing filler is the DEFAULT; an explicit
+  // kill-switch (=== 'false') disables it for rollback. The safe behavior must not
+  // depend on an env flag being switched ON.
+  if (process.env.CLOSING_FILLER_STRIP_ENABLED === 'false') return String(reply || '');
   let out = String(reply || '');
   for (let pass = 0; pass < 5; pass++) {
     let cut = false;

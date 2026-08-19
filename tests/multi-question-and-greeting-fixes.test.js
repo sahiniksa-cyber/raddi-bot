@@ -18,10 +18,10 @@ const { isLearnablePair } = require('../src/services/learning/owner-reply-learne
 // 100 chars; a message carrying a greeting + a real question (or 2-3
 // questions) got truncated down to just the greeting.
 
-test('scaledMaxLength grows the cap with the number of question signals (capped at 3x)', () => {
+test('scaledMaxLength grows the cap with the number of question signals (capped at 2x by default)', () => {
   assert.equal(scaledMaxLength(100, 'سؤال واحد فقط؟'), 100);
   assert.equal(scaledMaxLength(100, 'كم السعر؟ ومتى التوصيل؟'), 200);
-  assert.equal(scaledMaxLength(100, 'سؤال؟ وثاني؟ وثالث؟ ورابع؟ وخامس؟'), 300, 'capped at 3x');
+  assert.equal(scaledMaxLength(100, 'سؤال؟ وثاني؟ وثالث؟ ورابع؟ وخامس؟'), 200, 'capped at 2x (platform default §6)');
   assert.equal(scaledMaxLength(100, 'بدون علامات لكن رسائل العميل المتتالية. أجب عليها كلها'), 200, 'batched multi-message prompt counts');
 });
 
