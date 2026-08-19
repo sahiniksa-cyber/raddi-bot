@@ -183,7 +183,7 @@ function detectProblemIntent(text) {
 }
 
 // A directive contains problem-escalation vocabulary (merchant's own words).
-const PROBLEM_SCOPE_RE = /(?:مشكل|مشاكل|عطل|خلل|شكو|عطلان|يواجه|تواجه|صعوبه|صعوبة|شكوى)/u;
+const PROBLEM_SCOPE_RE = /(?:مشكل|مشاكل|عطل|اعطال|أعطال|خلل|شكو|عطلان|يواجه|تواجه|صعوبه|صعوبة|شكوى)/u;
 
 // Generic SCOPE families (platform-level, tenant-agnostic) used to tell a SCOPED
 // problem directive ("مشاكل الدفع") from a UNIVERSAL one ("أي مشكلة"). A scoped
@@ -203,21 +203,51 @@ function matchesScopeFamily(text, key) {
   return Boolean(re) && re.test(norm(text));
 }
 
+function includesScopeToken(text, token) {
+  const t = norm(token);
+  return Boolean(t) && norm(text).includes(t);
+}
+
 // Cut a directive at its escalation verb so the TARGET ("… للدعم"/"لقسم الطلبات")
 // is never mistaken for the scope. Scope is read from the CONDITION side only.
 const ESC_VERB_CUT_RE = /(?:حوّل|حول|صعّد|صعد|بلّغ|بلغ|كلّم|كلم|رجّع|راجع|حوّله|حوله|صعده)/u;
 
-// UNIVERSAL when no SPECIFIC scope family is named on the condition side (e.g.
-// "أي مشكلة", "كل الأعطال", "أي عطل في الخدمة"). SCOPED when a specific family is
-// named (payment/login/order/…). A specific scope wins even with a quantifier
-// ("أي مشكلة في الدفع" = payment-scoped).
+// EXPLICIT universal only: a universal quantifier on a problem/anything word, or a
+// whole-everything marker. An UNRECOGNIZED scope must NEVER be treated as universal.
+const UNIVERSAL_QUANTIFIER_RE = /(?:^|\s)(?:اي|كل|جميع|كافه|ايّ|أيّ)\s+(?:ال)?(?:مشكل|مشاكل|عطل|اعطال|خلل|شكو|صعوب|شي|شيء|امر|استفسار)/u;
+const UNIVERSAL_GENERAL_RE = /(?:بشكل\s*عام|بشكل\s*عامه|كل\s*شي|اي\s*شي)/u;
+
+// Words that are NOT a scope (problem vocabulary / quantifiers / connectors) — so
+// the merchant-derived scope token is a real domain noun, not "مشكلة"/"أي"/"في".
+const SCOPE_STOP = new Set([
+  'مشكل', 'مشكله', 'مشاكل', 'عطل', 'اعطال', 'خلل', 'شكوي', 'شكوه', 'شكاوي', 'صعوبه', 'عطلان',
+  'اي', 'كل', 'جميع', 'كافه', 'في', 'من', 'على', 'مع', 'او', 'التي', 'الذي', 'عند', 'يواجه',
+  'تواجه', 'يواجهه', 'العميل', 'الزبون', 'اذا', 'لو', 'صعد', 'صعدها', 'حول', 'بلغ', 'كلم', 'رجع',
+]);
+
+function pluralStem(word) {
+  return String(word || '').replace(/^ال/, '').replace(/(?:ات|ون|ين)$/u, '');
+}
+
+// UNIVERSAL when the directive is EXPLICITLY general (quantifier / whole-everything)
+// AND names no specific recognized scope. SCOPED when a specific family is named
+// (a specific scope wins even with a quantifier: "أي مشكلة في الدفع" = payment).
+// Otherwise UNKNOWN: derive a safe merchant scope token from the directive's own
+// domain noun(s) — never promote to universal.
 function classifyEscalationScope(line) {
-  const scopeSource = norm(String(line || '').split(ESC_VERB_CUT_RE)[0] || line);
+  const condition = String(line || '').split(ESC_VERB_CUT_RE)[0] || String(line || '');
+  const scopeSource = norm(condition);
   const scopes = [];
   for (const key of Object.keys(SCOPE_FAMILY_RES)) {
     if (SCOPE_FAMILY_RES[key].test(scopeSource)) scopes.push(key);
   }
-  return { universal: scopes.length === 0, scopes };
+  const explicitUniversal = UNIVERSAL_QUANTIFIER_RE.test(scopeSource) || UNIVERSAL_GENERAL_RE.test(scopeSource);
+  const tokens = scopeSource
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .map(w => pluralStem(w))
+    .filter(w => w.length >= 4 && !SCOPE_STOP.has(w) && !SCOPE_STOP.has(`${w}ه`));
+  return { scopes, universal: explicitUniversal, tokens: [...new Set(tokens)] };
 }
 
 const GROUND_STOP = new Set([
@@ -396,12 +426,21 @@ function deriveEscalationRulesFromInstructions(config = {}) {
     // global problem_intent; a SPECIFIC scope → a scoped_problem_intent that fires
     // only when the customer is BOTH in that scope AND reporting a real problem.
     if (PROBLEM_SCOPE_RE.test(seg.line)) {
-      const { universal, scopes } = classifyEscalationScope(seg.line);
-      if (universal) {
-        rules.push({ trigger_type: 'problem_intent', trigger_value: '', target_contact_id: targetId, _shadow: true });
-      } else {
+      const { universal, scopes, tokens } = classifyEscalationScope(seg.line);
+      if (scopes.length) {
+        // Recognized structured scope wins (even over a quantifier).
         for (const sc of scopes) {
           rules.push({ trigger_type: 'scoped_problem_intent', trigger_value: sc, target_contact_id: targetId, _shadow: true });
+        }
+      } else if (universal) {
+        // EXPLICITLY universal → a global problem_intent.
+        rules.push({ trigger_type: 'problem_intent', trigger_value: '', target_contact_id: targetId, _shadow: true });
+      } else {
+        // UNKNOWN merchant scope, no universal quantifier → a SAFE merchant-derived
+        // scoped rule (problem intent + the merchant's own domain token). NEVER
+        // promote to global. If no domain token exists, emit nothing (safe).
+        for (const tok of tokens) {
+          rules.push({ trigger_type: 'scoped_problem_keyword', trigger_value: tok, target_contact_id: targetId, _shadow: true });
         }
       }
       continue; // do NOT also emit brittle content-keyword rules for a problem directive
@@ -528,5 +567,6 @@ module.exports = {
   splitInstructionsForPrompt,
   detectProblemIntent,
   matchesScopeFamily,
+  includesScopeToken,
   classifyEscalationScope,
 };

@@ -253,6 +253,33 @@ test('scope: LOGIN-scoped policy escalates a LOGIN problem', async () => {
   assert.ok(escalationOut(), 'login-scoped policy must escalate a login problem');
 });
 
+test('scope: UNKNOWN merchant scope (كوبونات) escalates a matching problem (not global)', async () => {
+  reset();
+  S.customerText = 'الكوبون ما يشتغل';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('مشاكل الكوبونات صعّدها للدعم.');
+  await processAiReply(job());
+  assert.ok(escalationOut(), 'coupon-scoped policy must escalate a coupon problem via merchant-derived scope');
+});
+
+test('scope: UNKNOWN merchant scope (كوبونات) does NOT escalate an unrelated problem', async () => {
+  reset();
+  S.customerText = 'التطبيق ما يفتح';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('مشاكل الكوبونات صعّدها للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'unknown-scope policy must NOT become global');
+});
+
+test('scope: UNKNOWN scope (تفعيل) does NOT escalate an unrelated shipping problem', async () => {
+  reset();
+  S.customerText = 'الشحنة ما وصلت';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('مشاكل التفعيل صعّدها للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'activation-scoped policy must not fire on shipping');
+});
+
 test('scope: Tenant B deferred policy never escalates immediately (scoped or not)', async () => {
   reset();
   S.customerText = 'عملية الدفع مرفوضة';

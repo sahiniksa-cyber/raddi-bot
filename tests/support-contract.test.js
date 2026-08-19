@@ -186,6 +186,29 @@ for (const msg of ['كم سعر الاشتراك؟', 'وش الباقات الم
   });
 }
 
+// Blocker (final) — UNKNOWN scope must NEVER become global. Only an EXPLICIT
+// universal quantifier yields global problem_intent.
+function derive(botInstructions) {
+  return deriveEscalationRulesFromInstructions({
+    botInstructions,
+    escalationContacts: [{ name: 'الدعم', phone: '966500000001' }],
+  });
+}
+
+for (const uni of ['أي مشكلة صعّدها للدعم', 'كل المشاكل صعّدها للدعم', 'جميع الأعطال صعّدها للدعم', 'كافة المشاكل صعّدها للدعم', 'أي عطل في الخدمة صعّده للدعم']) {
+  test(`scope: EXPLICIT universal → global problem_intent ("${uni.slice(0, 14)}…")`, () => {
+    assert.ok(derive(uni).some(r => r.trigger_type === 'problem_intent'), `expected global for: ${uni}`);
+  });
+}
+
+for (const scoped of ['مشاكل الكوبونات صعّدها للدعم', 'مشاكل التفعيل صعّدها للدعم', 'مشاكل التطبيق صعّدها للدعم', 'مشاكل الاسترجاع صعّدها للدعم', 'مشاكل الضمان صعّدها للدعم']) {
+  test(`scope: UNKNOWN scope + no quantifier → NEVER global ("${scoped.slice(0, 16)}…")`, () => {
+    const rules = derive(scoped);
+    assert.ok(!rules.some(r => r.trigger_type === 'problem_intent'), `must NOT be global: ${scoped}`);
+    assert.ok(rules.some(r => r.trigger_type === 'scoped_problem_keyword'), `expected a merchant-derived scoped rule: ${JSON.stringify(rules)}`);
+  });
+}
+
 test('shadow routing: a general "any problem → escalate" yields a SEMANTIC problem_intent rule', () => {
   const config = {
     botInstructions: 'تكلم سعودي ومختصر. أي مشكلة أو عطل في الخدمة صعّدها للدعم.',
