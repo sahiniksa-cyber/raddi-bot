@@ -198,6 +198,70 @@ test('Blocker 2: Tenant B (answer-first) does NOT escalate a problem immediately
   assert.doesNotMatch(customerOut().reply, /96651111111/, 'no Tenant A leak');
 });
 
+// ── Scoped-vs-global escalation policy (problem_intent scope) ────────────────
+function tenantWith(botInstructions) {
+  return {
+    learningEnabled: false, memoryMessages: 50,
+    botInstructions,
+    escalationContacts: [{ name: 'الدعم', phone: '966511111111' }],
+  };
+}
+const genericSelfSolve = 'جرب تحدّث الصفحة.';
+
+test('scope: UNIVERSAL policy escalates a problem stated without keywords', async () => {
+  reset();
+  S.customerText = 'الاشتراك وقف';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('أي مشكلة أو عطل في الخدمة صعّدها للدعم.');
+  await processAiReply(job());
+  assert.ok(escalationOut(), 'universal policy must escalate a real problem');
+});
+
+test('scope: PAYMENT-scoped policy escalates a PAYMENT problem', async () => {
+  reset();
+  S.customerText = 'عملية الدفع مرفوضة';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('مشاكل الدفع صعّدها للدعم.');
+  await processAiReply(job());
+  assert.ok(escalationOut(), 'payment-scoped policy must escalate a payment problem');
+});
+
+test('scope: PAYMENT-scoped policy does NOT escalate an UNRELATED problem', async () => {
+  reset();
+  S.customerText = 'التطبيق ما يفتح';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('مشاكل الدفع صعّدها للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'a non-payment problem must NOT hit the payment policy');
+});
+
+test('scope: LOGIN-scoped policy does NOT escalate a shipping problem', async () => {
+  reset();
+  S.customerText = 'الشحنة ما وصلت';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('مشاكل تسجيل الدخول صعّدها للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'a shipping problem must NOT hit the login policy');
+});
+
+test('scope: LOGIN-scoped policy escalates a LOGIN problem', async () => {
+  reset();
+  S.customerText = 'ما اقدر اسجل دخول';
+  S.aiReply = genericSelfSolve;
+  S.config = tenantWith('مشاكل تسجيل الدخول صعّدها للدعم.');
+  await processAiReply(job());
+  assert.ok(escalationOut(), 'login-scoped policy must escalate a login problem');
+});
+
+test('scope: Tenant B deferred policy never escalates immediately (scoped or not)', async () => {
+  reset();
+  S.customerText = 'عملية الدفع مرفوضة';
+  S.aiReply = 'نتحقق ونعطيك الحل الموثق.';
+  S.config = tenantWith('استخدم الحلول الموثقة أولاً وصعّد فقط لو ما انحل للدعم.');
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'deferred policy must not escalate immediately');
+});
+
 // ── §9 multi-tenant proof ──────────────────────────────────────────────────
 test('§9 Tenant A: service issue → Support A escalation, concise, no troubleshooting', async () => {
   reset();

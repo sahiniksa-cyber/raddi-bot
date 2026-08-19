@@ -170,6 +170,8 @@ const PROBLEM_INTENT_RE = new RegExp([
   'مو\\s*(?:شغال|راضي|فاتح|ضابط)',
   'ما\\s*عاد\\s*(?:يفتح|يشتغل|يعمل|اقدر)',
   'مايشتغل', 'مايفتح',
+  // inability = friction/problem ("ما أقدر أسجّل دخول")
+  'ما\\s*اقدر', 'ما\\s*استطيع', 'مو\\s*قادر', 'مب\\s*قادر', 'ما\\s*قدرت', 'عاجز\\s*عن',
   'فشل', 'فشلت', '\\berror\\b', 'خطا', 'ايرور', 'مرفوض', 'رفض\\s*(?:الدفع|العمليه|الطلب)',
   'انقطع', 'ما\\s*(?:وصل|وصلني|استلمت|استلم)', 'ضايع', 'اختفي', 'ما\\s*يظهر',
   'يعلق', 'معلق', 'بطيء', '\\bhang\\b', '\\bcrash\\b', 'كراش', 'يطلع\\s*خطا',
@@ -180,10 +182,43 @@ function detectProblemIntent(text) {
   return PROBLEM_INTENT_RE.test(norm(text));
 }
 
-// A directive is a GENERAL problem-escalation when the merchant's own text scopes
-// it to problems/faults/complaints (their vocabulary), regardless of the customer's
-// literal words. That scope becomes a SEMANTIC problem_intent rule.
+// A directive contains problem-escalation vocabulary (merchant's own words).
 const PROBLEM_SCOPE_RE = /(?:مشكل|مشاكل|عطل|خلل|شكو|عطلان|يواجه|تواجه|صعوبه|صعوبة|شكوى)/u;
+
+// Generic SCOPE families (platform-level, tenant-agnostic) used to tell a SCOPED
+// problem directive ("مشاكل الدفع") from a UNIVERSAL one ("أي مشكلة"). A scoped
+// directive only escalates when the customer's message is BOTH in that scope AND a
+// real problem — so an unrelated failure never triggers another scope's policy.
+const SCOPE_FAMILY_RES = {
+  PAYMENT: /دفع|سداد|فاتوره|فواتير|بطاقه|مدفوع|الدفعه|مبلغ|\bpay(?:ment)?\b|checkout/u,
+  LOGIN: /تسجيل\s*الدخول|تسجيل\s*الخروج|سجل\s*(?:دخول|خروج)|اسجل\s*(?:دخول|خروج)|الدخول|ادخل|كلمه\s*(?:المرور|السر)|الباسورد|\blogin\b/u,
+  ORDER: /الطلبات|طلبات|الطلب|طلبي|طلبيه|\border\b/u,
+  SHIPPING: /شحن|الشحنه|شحنه|توصيل|التوصيل|مندوب|ما\s*وصل|ما\s*وصلت|لم\s*يصل|\bdelivery\b|\bshipment\b/u,
+  ACCOUNT: /الحساب|حسابي|بروفايل|الملف\s*الشخصي|\baccount\b/u,
+  SUBSCRIPTION: /اشتراك|الاشتراك|باقه|الباقه|التجديد|\bsubscription\b/u,
+};
+
+function matchesScopeFamily(text, key) {
+  const re = SCOPE_FAMILY_RES[key];
+  return Boolean(re) && re.test(norm(text));
+}
+
+// Cut a directive at its escalation verb so the TARGET ("… للدعم"/"لقسم الطلبات")
+// is never mistaken for the scope. Scope is read from the CONDITION side only.
+const ESC_VERB_CUT_RE = /(?:حوّل|حول|صعّد|صعد|بلّغ|بلغ|كلّم|كلم|رجّع|راجع|حوّله|حوله|صعده)/u;
+
+// UNIVERSAL when no SPECIFIC scope family is named on the condition side (e.g.
+// "أي مشكلة", "كل الأعطال", "أي عطل في الخدمة"). SCOPED when a specific family is
+// named (payment/login/order/…). A specific scope wins even with a quantifier
+// ("أي مشكلة في الدفع" = payment-scoped).
+function classifyEscalationScope(line) {
+  const scopeSource = norm(String(line || '').split(ESC_VERB_CUT_RE)[0] || line);
+  const scopes = [];
+  for (const key of Object.keys(SCOPE_FAMILY_RES)) {
+    if (SCOPE_FAMILY_RES[key].test(scopeSource)) scopes.push(key);
+  }
+  return { universal: scopes.length === 0, scopes };
+}
 
 const GROUND_STOP = new Set([
   'من', 'في', 'على', 'الى', 'إلى', 'عن', 'مع', 'ثم', 'أو', 'او', 'ما', 'لا', 'إذا', 'اذا', 'لو', 'أي', 'اي',
@@ -356,17 +391,24 @@ function deriveEscalationRulesFromInstructions(config = {}) {
       seen.add(v);
       rules.push({ trigger_type, trigger_value: v, target_contact_id: targetId, _shadow: true });
     };
-    // A GENERAL problem-escalation ("أي مشكلة/عطل/شكوى … صعّد") becomes a SEMANTIC
-    // problem_intent rule that fires on the customer's problem intent regardless of
-    // their literal words — not a brittle keyword match on the merchant's wording.
+    // A problem-escalation directive ("… مشكلة/عطل/شكوى … صعّد") is represented by
+    // a SEMANTIC intent rule, never brittle content keywords. UNIVERSAL scope → a
+    // global problem_intent; a SPECIFIC scope → a scoped_problem_intent that fires
+    // only when the customer is BOTH in that scope AND reporting a real problem.
     if (PROBLEM_SCOPE_RE.test(seg.line)) {
-      rules.push({ trigger_type: 'problem_intent', trigger_value: '', target_contact_id: targetId, _shadow: true });
+      const { universal, scopes } = classifyEscalationScope(seg.line);
+      if (universal) {
+        rules.push({ trigger_type: 'problem_intent', trigger_value: '', target_contact_id: targetId, _shadow: true });
+      } else {
+        for (const sc of scopes) {
+          rules.push({ trigger_type: 'scoped_problem_intent', trigger_value: sc, target_contact_id: targetId, _shadow: true });
+        }
+      }
+      continue; // do NOT also emit brittle content-keyword rules for a problem directive
     }
-    // Keep a specific topic/keyword trigger the router extracted (if any)…
+    // Non-problem directive (e.g. "أسئلة الأسعار صعّدها لسعود") → topic/keyword.
     const t = buildTrigger(seg.line);
     if (t && (t.trigger_type === 'topic' || t.trigger_type === 'keyword')) add('keyword', t.trigger_value);
-    // …and derive keyword triggers from the merchant's OWN content words so a
-    // customer's problem report matches (the model text itself, not a hardcode).
     const targetNorm = normalizeArabic(targetName).replace(/^ال/, '');
     normalizeArabic(seg.line)
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
@@ -485,4 +527,6 @@ module.exports = {
   buildNeutralAck,
   splitInstructionsForPrompt,
   detectProblemIntent,
+  matchesScopeFamily,
+  classifyEscalationScope,
 };

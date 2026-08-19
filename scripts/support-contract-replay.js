@@ -49,6 +49,14 @@ const TENANTS = {
     maxResponseLength: 300,
     replyStyle: { emojiLevel: 'none' },
   },
+  PAYSCOPE: {
+    userId: 'tenant-PayScoped',
+    storeName: 'متجر دال',
+    botInstructions: 'أسلوبك مختصر. مشاكل الدفع صعّدها للدعم.',
+    escalationContacts: [{ name: 'الدعم', phone: '966544444444' }],
+    maxResponseLength: 200,
+    replyStyle: {},
+  },
   NOTARGET: {
     userId: 'tenant-NoTarget',
     storeName: 'متجر جيم',
@@ -107,6 +115,9 @@ const SCENARIOS = [
   { tenant: 'A', text: 'ما عاد يفتح عندي', draft: 'أعد تشغيل الجهاز', expect: { escalate: true, target: /96651111111/, decision: 'ESCALATE_REAL' } },
   // A plain question must NOT escalate even for the "any problem → escalate" tenant
   { tenant: 'A', text: 'كم سعر الاشتراك السنوي؟', draft: 'الاشتراك السنوي بـ250 ريال شامل الضريبة.', expect: { escalate: false, decision: 'ANSWER_VERIFIED' } },
+  // SCOPED policy: payment-scoped escalates a payment problem, ignores unrelated ones
+  { tenant: 'PAYSCOPE', text: 'عملية الدفع مرفوضة', draft: 'جرب مره ثانيه', expect: { escalate: true, target: /96654444444/, decision: 'ESCALATE_REAL' } },
+  { tenant: 'PAYSCOPE', text: 'التطبيق ما يفتح', draft: 'عطّل الـVPN', expect: { escalate: false } },
   { tenant: 'B', text: 'ما أقدر أسجل دخول', expect: { escalate: false, decision: 'ANSWER_VERIFIED' }, draft: 'خطوات الدخول: افتح الصفحة واستخدم بريدك وكلمة المرور والكود يوصلك على جوالك.' },
   { tenant: 'NOTARGET', text: 'عندي مشكلة كبيرة', expect: { escalate: false } },
   // Adversarial NOVEL procedural actions (not in any blacklist) with no documented

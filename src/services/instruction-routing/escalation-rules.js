@@ -12,7 +12,7 @@
  */
 
 const { normalizeArabic, contactHasDestination, contactStableId } = require('./instruction-router');
-const { detectProblemIntent } = require('../ai/support-contract');
+const { detectProblemIntent, matchesScopeFamily } = require('../ai/support-contract');
 
 function resolveContactById(contacts, id) {
   const list = Array.isArray(contacts) ? contacts : [];
@@ -33,6 +33,10 @@ function triggerMatches(rule, { norm, intent, slaBreached, rawText }) {
       // SEMANTIC support/problem intent — fires when the customer reports a
       // malfunction regardless of their literal words (not a keyword match).
       return detectProblemIntent(rawText || norm);
+    case 'scoped_problem_intent':
+      // A problem directive scoped to a family (payment/login/order/…): fires only
+      // when the customer is BOTH in that scope AND reporting a real problem.
+      return matchesScopeFamily(rawText || norm, rule.trigger_value) && detectProblemIntent(rawText || norm);
     case 'sla_breach':
       // The breach itself is computed deterministically upstream (sla-breach.js);
       // here we only fire when the caller has already confirmed a real breach.
