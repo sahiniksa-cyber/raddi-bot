@@ -14,6 +14,7 @@ const {
   splitInstructionsForPrompt,
   buildHandoffAck,
   buildNeutralAck,
+  detectProblemIntent,
 } = require('../src/services/ai/support-contract');
 
 // ── detectActionClaim — a reply that claims a handoff/review/callback happened ──
@@ -96,6 +97,24 @@ test('procedural (grounded): the SAME documented action stays', () => {
   assert.equal(hasGroundingSupport('عطّل الـVPN', config), true);
 });
 
+// Blocker 1 (final) — grounding must match the SAME ACTION FAMILY + SAME object.
+// An opposite action on the same object is a CONTRADICTION, not grounding.
+const OPPOSITE_PAIRS = [
+  ['فعّل الـVPN', 'عطّل الـVPN'],       // enable vs disable
+  ['أضف الحساب', 'احذف الحساب'],        // add vs remove
+  ['شغّل التطبيق', 'أوقف التطبيق'],      // start vs stop
+];
+for (const [documented, opposite] of OPPOSITE_PAIRS) {
+  test(`grounding: opposite action, same object → NOT grounded ("${documented}" ⊬ "${opposite}")`, () => {
+    const config = { botInstructions: `لو صار شي ${documented} من الإعدادات` };
+    assert.equal(hasGroundingSupport(opposite, config), false, `"${documented}" wrongly grounded "${opposite}"`);
+  });
+  test(`grounding: same action, same object → grounded ("${documented}")`, () => {
+    const config = { botInstructions: `لو صار شي ${documented} من الإعدادات` };
+    assert.equal(hasGroundingSupport(documented, config), true);
+  });
+}
+
 test('reconcile strips a NOVEL ungrounded procedural action', () => {
   const res = reconcileSupportReply({
     reply: 'عطّل الـVPN وغيّر صلاحيات التطبيق عشان يشتغل',
@@ -153,6 +172,28 @@ test('shadow routing: unconditional "any problem → escalate" yields a live rul
     rules.some(r => r.trigger_type !== 'intent' && customer.includes(norm(r.trigger_value))),
     `no derived trigger matched a problem report: ${JSON.stringify(rules)}`,
   );
+});
+
+// Blocker 2 (final) — problem/support intent is SEMANTIC, not literal keywords.
+for (const msg of ['الاشتراك وقف', 'الخدمة ما تشتغل', 'ما عاد يفتح عندي', 'توقف فجأة', 'التطبيق يطلّع خطأ']) {
+  test(`detectProblemIntent: true for "${msg}" (no literal مشكلة/عطل)`, () => {
+    assert.equal(detectProblemIntent(msg), true);
+  });
+}
+for (const msg of ['كم سعر الاشتراك؟', 'وش الباقات المتوفرة؟', 'أبغى أعرف مواعيد التوصيل']) {
+  test(`detectProblemIntent: false for a normal question "${msg}"`, () => {
+    assert.equal(detectProblemIntent(msg), false);
+  });
+}
+
+test('shadow routing: a general "any problem → escalate" yields a SEMANTIC problem_intent rule', () => {
+  const config = {
+    botInstructions: 'تكلم سعودي ومختصر. أي مشكلة أو عطل في الخدمة صعّدها للدعم.',
+    escalationContacts: [{ name: 'الدعم', phone: '966500000001' }],
+  };
+  const rules = require('../src/services/ai/support-contract').deriveEscalationRulesFromInstructions(config);
+  assert.ok(rules.some(r => r.trigger_type === 'problem_intent' && r.target_contact_id),
+    `expected a problem_intent rule, got ${JSON.stringify(rules)}`);
 });
 
 test('shadow routing: a DEFERRED "escalate only if unresolved" yields NO immediate rule', () => {

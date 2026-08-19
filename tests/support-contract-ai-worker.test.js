@@ -158,6 +158,46 @@ test('Blocker 1: escalation enqueue FAILURE → no success-claiming ack, job ret
   assert.equal(customerOut(), undefined, 'NO customer acknowledgement may be sent when escalation failed');
 });
 
+// ── Blocker 2 (final): "any problem → escalate" fires on SEMANTIC problem intent,
+//    not literal keywords, and stays tenant-scoped. ─────────────────────────────
+for (const phrase of ['الاشتراك وقف', 'الخدمة ما تشتغل', 'ما عاد يفتح عندي', 'توقف فجأة']) {
+  test(`Blocker 2: Tenant A escalates on "${phrase}" (no literal مشكلة/عطل word)`, async () => {
+    reset();
+    S.customerText = phrase;
+    S.aiReply = 'جرب تسجيل الدخول من جديد'; // model tries to self-solve; policy must win
+    S.config = ESCALATE_TENANT();
+    await processAiReply(job());
+    const esc = escalationOut();
+    assert.ok(esc, `Tenant A must escalate on a problem stated as "${phrase}"`);
+    assert.match(String(esc.sender), /96651111111/, 'to Support A');
+    assert.doesNotMatch(customerOut().reply, /تسجيل الدخول/, 'no self-troubleshooting when policy escalates');
+  });
+}
+
+test('Blocker 2: Tenant A does NOT escalate a normal (non-problem) question', async () => {
+  reset();
+  S.customerText = 'كم سعر الاشتراك السنوي؟';
+  S.aiReply = 'الاشتراك السنوي بـ250 ريال شامل الضريبة.';
+  S.config = ESCALATE_TENANT();
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'a plain price question must not escalate');
+  assert.match(customerOut().reply, /250/, 'the normal answer is delivered');
+});
+
+test('Blocker 2: Tenant B (answer-first) does NOT escalate a problem immediately, no leak', async () => {
+  reset();
+  S.customerText = 'الاشتراك وقف'; // a clear problem, but B answers first
+  S.aiReply = 'نتحقق من الاشتراك، جرّب تحدّث الصفحة والكود يوصلك.';
+  S.config = {
+    learningEnabled: false, memoryMessages: 50,
+    botInstructions: 'لهجتك رسمية. مشكلة الاشتراك استخدم الخطوات الموثقة أولاً وصعّد فقط لو ما انحلّت للدعم.',
+    escalationContacts: [{ name: 'الدعم', phone: '966522222222' }],
+  };
+  await processAiReply(job());
+  assert.equal(escalationOut(), undefined, 'Tenant B answer-first policy must not escalate immediately');
+  assert.doesNotMatch(customerOut().reply, /96651111111/, 'no Tenant A leak');
+});
+
 // ── §9 multi-tenant proof ──────────────────────────────────────────────────
 test('§9 Tenant A: service issue → Support A escalation, concise, no troubleshooting', async () => {
   reset();

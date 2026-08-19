@@ -102,6 +102,11 @@ async function runTurn(config, customerText, modelDraft) {
 
 const SCENARIOS = [
   { tenant: 'A', text: 'الاشتراك وقف عندي مشكلة', expect: { escalate: true, target: /96651111111/, decision: 'ESCALATE_REAL' } },
+  // SEMANTIC problem intent — NO literal "مشكلة/عطل" word, must still escalate (Tenant A)
+  { tenant: 'A', text: 'الاشتراك وقف', draft: 'جرب تسجيل الدخول من جديد', expect: { escalate: true, target: /96651111111/, decision: 'ESCALATE_REAL' } },
+  { tenant: 'A', text: 'ما عاد يفتح عندي', draft: 'أعد تشغيل الجهاز', expect: { escalate: true, target: /96651111111/, decision: 'ESCALATE_REAL' } },
+  // A plain question must NOT escalate even for the "any problem → escalate" tenant
+  { tenant: 'A', text: 'كم سعر الاشتراك السنوي؟', draft: 'الاشتراك السنوي بـ250 ريال شامل الضريبة.', expect: { escalate: false, decision: 'ANSWER_VERIFIED' } },
   { tenant: 'B', text: 'ما أقدر أسجل دخول', expect: { escalate: false, decision: 'ANSWER_VERIFIED' }, draft: 'خطوات الدخول: افتح الصفحة واستخدم بريدك وكلمة المرور والكود يوصلك على جوالك.' },
   { tenant: 'NOTARGET', text: 'عندي مشكلة كبيرة', expect: { escalate: false } },
   // Adversarial NOVEL procedural actions (not in any blacklist) with no documented

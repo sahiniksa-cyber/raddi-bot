@@ -159,6 +159,32 @@ function positiveRawClauses(config = {}) {
   return out;
 }
 
+// Blocker 2 — a SEMANTIC problem/malfunction intent detector, tenant-agnostic and
+// NOT keyword-bound. A customer who says "الاشتراك وقف" / "ما تشتغل" / "ما عاد يفتح"
+// is reporting a problem even without the words مشكلة/عطل. Patterns are matched
+// against normalized text. Deliberately malfunction-focused so a plain question
+// ("كم السعر؟") is NOT a problem.
+const PROBLEM_INTENT_RE = new RegExp([
+  'وقف', 'توقف', 'وقفت', 'متوقف', 'تعطل', 'معطل', 'عطلان', 'خلل', 'مشكل', 'مشاكل', 'شكو',
+  'ما\\s*(?:يشتغل|تشتغل|اشتغل|يعمل|تعمل|يفتح|تفتح|ينفتح|يرسل|يستقبل|يحمل|ينزل|يتصل|يظهر|يستجيب|يرد|راضي|يقبل)',
+  'مو\\s*(?:شغال|راضي|فاتح|ضابط)',
+  'ما\\s*عاد\\s*(?:يفتح|يشتغل|يعمل|اقدر)',
+  'مايشتغل', 'مايفتح',
+  'فشل', 'فشلت', '\\berror\\b', 'خطا', 'ايرور', 'مرفوض', 'رفض\\s*(?:الدفع|العمليه|الطلب)',
+  'انقطع', 'ما\\s*(?:وصل|وصلني|استلمت|استلم)', 'ضايع', 'اختفي', 'ما\\s*يظهر',
+  'يعلق', 'معلق', 'بطيء', '\\bhang\\b', '\\bcrash\\b', 'كراش', 'يطلع\\s*خطا',
+  'شي\\s*غلط', 'في\\s*شي\\s*غلط', 'ما\\s*ضبط', 'ما\\s*يضبط', 'صار\\s*في\\s*شي',
+].join('|'), 'u');
+
+function detectProblemIntent(text) {
+  return PROBLEM_INTENT_RE.test(norm(text));
+}
+
+// A directive is a GENERAL problem-escalation when the merchant's own text scopes
+// it to problems/faults/complaints (their vocabulary), regardless of the customer's
+// literal words. That scope becomes a SEMANTIC problem_intent rule.
+const PROBLEM_SCOPE_RE = /(?:مشكل|مشاكل|عطل|خلل|شكو|عطلان|يواجه|تواجه|صعوبه|صعوبة|شكوى)/u;
+
 const GROUND_STOP = new Set([
   'من', 'في', 'على', 'الى', 'إلى', 'عن', 'مع', 'ثم', 'أو', 'او', 'ما', 'لا', 'إذا', 'اذا', 'لو', 'أي', 'اي',
   'هذا', 'هذه', 'ذلك', 'انت', 'أنت', 'مره', 'مرة', 'ثاني', 'ثانيه', 'جديد', 'وبعدها', 'بعدها', 'قم',
@@ -192,23 +218,75 @@ function groundingParts(config = {}) {
   return parts;
 }
 
-// Grounding = POSITIVE, ACTION-LEVEL evidence. A procedural step is grounded ONLY
-// when a positive (non-negated, non-prohibition) tenant clause applies a procedural
-// verb to the SAME technical object — never when the tenant merely names the object
-// ("صفحة تسجيل الدخول"), forbids the action, or mentions it in a prohibition. Works
-// for actions no blacklist anticipated because it reasons about verb+object, not a
-// fixed phrase list. A non-procedural step falls back to content-token overlap.
+// Action FAMILIES group synonyms and, crucially, SEPARATE antonyms so an opposite
+// action on the same object ("فعّل الـVPN" vs "عطّل الـVPN") is never treated as
+// grounding. Patterns are written in NORMALIZED form (norm() strips shadda/hamza/
+// tatweel and lowercases). "أعد X" resolves by its object word (login/restart/
+// reinstall/reset). Order matters: the specific "اعد …" phrases come before the
+// bare enable/disable verbs.
+const FAMILY_PATTERNS = [
+  ['RELOGIN', /(?:اعد|جرب|حاول|عاود|اعاده)\s*(?:اعاده\s*)?تسجيل\s*(?:الدخول|الخروج)/u],
+  ['RESTART', /(?:اعد|اعاده)\s*(?:تشغيل|التشغيل)|\brestart\b|\breboot\b/u],
+  ['REINSTALL', /(?:اعد|اعاده)\s*(?:تثبيت|التثبيت)|\breinstall\b/u],
+  ['RESET', /(?:اعد|اعاده)\s*(?:تعيين|التعيين|ضبط|الضبط)|صفر|\breset\b/u],
+  ['ENABLE', /فعل|تفعيل|شغل|\benable\b|\bactivate\b/u],
+  ['DISABLE', /عطل|اوقف|ايقاف|افصل|اقفل|تعطيل|\bdisable\b/u],
+  ['ADD', /اضف|اضيف|اضافه|\badd\b/u],
+  ['REMOVE', /احذف|امسح|ازل|حذف|مسح|ازاله|تفريغ|نظف|تنظيف|\bdelete\b|\bremove\b|\bclear\b/u],
+  ['UPDATE', /حدث|تحديث|\bupdate\b/u],
+  ['CHANGE', /غير|بدل|تغيير|\bchange\b/u],
+  ['CHECK', /تاكد|تحقق|راجع|افحص|\bcheck\b|\bverify\b/u],
+];
+
+function actionFamilies(normText) {
+  const fams = new Set();
+  for (const [fam, re] of FAMILY_PATTERNS) if (re.test(normText)) fams.add(fam);
+  return fams;
+}
+
+function proceduralVerbRoots(normText) {
+  const roots = new Set();
+  const re = new RegExp(PROCEDURAL_VERB_RE.source, 'gu');
+  let m;
+  while ((m = re.exec(normText)) !== null) {
+    roots.add(m[0]);
+    if (m.index === re.lastIndex) re.lastIndex += 1;
+  }
+  return roots;
+}
+
+// The comparable action key(s) of a clause: prefer the semantic family; fall back
+// to the exact verb root when no family is recognized (so an unlisted verb still
+// only grounds itself, never an antonym).
+function actionKeys(normText) {
+  const fams = actionFamilies(normText);
+  return fams.size ? fams : proceduralVerbRoots(normText);
+}
+
+// Grounding = POSITIVE, ACTION-LEVEL evidence with matching action FAMILY. A
+// procedural step is grounded ONLY when a positive (non-negated, non-prohibition)
+// tenant clause applies the SAME action family to the SAME technical object. Naming
+// the object ("صفحة تسجيل الدخول"), the opposite action ("فعّل" vs "عطّل"), a
+// prohibition, or a negated example never grounds it. Family-based, so it also
+// covers actions no fixed list anticipated.
 function hasGroundingSupport(step, config = {}) {
   const rawClauses = positiveRawClauses(config);
   if (!rawClauses.length) return false;
-  const normClauses = rawClauses.map(norm);
   const s = norm(step);
   const objects = extractTechObjects(s);
-  const stepIsProcedural = PROCEDURAL_VERB_RE.test(s) && objects.length > 0;
+  const stepKeys = actionKeys(s);
+  const stepIsProcedural = objects.length > 0
+    && (actionFamilies(s).size > 0 || PROCEDURAL_VERB_RE.test(s))
+    && stepKeys.size > 0;
 
   if (stepIsProcedural) {
-    // Same technical object AND a procedural verb documented positively together.
-    return normClauses.some((c) => PROCEDURAL_VERB_RE.test(c) && objects.some((o) => c.includes(o)));
+    return rawClauses.some((c) => {
+      const cn = norm(c);
+      if (!objects.some((o) => cn.includes(o))) return false;
+      const ck = actionKeys(cn);
+      for (const k of stepKeys) if (ck.has(k)) return true;
+      return false;
+    });
   }
   // Family fallback for a known troubleshooting phrase without an extractable
   // object (e.g. a bare English "restart"): require the same family, positively.
@@ -216,7 +294,7 @@ function hasGroundingSupport(step, config = {}) {
   if (family) return rawClauses.some((c) => family.test(c));
   // Non-procedural step → content-token overlap over the positive corpus.
   const tokens = tokenize(step);
-  return tokens.length > 0 && normClauses.some((c) => tokens.some((tok) => c.includes(tok)));
+  return tokens.length > 0 && rawClauses.map(norm).some((c) => tokens.some((tok) => c.includes(tok)));
 }
 
 function stripGenericTroubleshooting(text, config = {}) {
@@ -278,6 +356,12 @@ function deriveEscalationRulesFromInstructions(config = {}) {
       seen.add(v);
       rules.push({ trigger_type, trigger_value: v, target_contact_id: targetId, _shadow: true });
     };
+    // A GENERAL problem-escalation ("أي مشكلة/عطل/شكوى … صعّد") becomes a SEMANTIC
+    // problem_intent rule that fires on the customer's problem intent regardless of
+    // their literal words — not a brittle keyword match on the merchant's wording.
+    if (PROBLEM_SCOPE_RE.test(seg.line)) {
+      rules.push({ trigger_type: 'problem_intent', trigger_value: '', target_contact_id: targetId, _shadow: true });
+    }
     // Keep a specific topic/keyword trigger the router extracted (if any)…
     const t = buildTrigger(seg.line);
     if (t && (t.trigger_type === 'topic' || t.trigger_type === 'keyword')) add('keyword', t.trigger_value);
@@ -400,4 +484,5 @@ module.exports = {
   buildHandoffAck,
   buildNeutralAck,
   splitInstructionsForPrompt,
+  detectProblemIntent,
 };
