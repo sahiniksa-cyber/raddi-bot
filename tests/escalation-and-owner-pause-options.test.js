@@ -69,8 +69,11 @@ test('re-escalation cap uses config.maxEscalationsPerConversation (not a hardcod
   assert.match(aiWorkerSrc, /effectiveMaxEsc > 0 && escStats\.count24h >= effectiveMaxEsc/);
 });
 
-test('customer handoff acknowledgement is identified in the outgoing payload', () => {
-  assert.match(aiWorkerSrc, /handoffAcknowledgement:\s*Boolean\(escalation\.ownerMessage\)/);
+test('customer handoff acknowledgement reflects the REAL escalation delivery (Blocker 1)', () => {
+  // The handoff flag must be the actual delivery result (escalationDelivered),
+  // NOT merely that a target resolved (Boolean(escalation.ownerMessage)).
+  assert.match(aiWorkerSrc, /handoffAcknowledgement:\s*escalationDelivered/);
+  assert.doesNotMatch(aiWorkerSrc, /handoffAcknowledgement:\s*Boolean\(escalation\.ownerMessage\)/);
 });
 
 test('normal and lid sends ignore only the acknowledgement own escalation pause', () => {

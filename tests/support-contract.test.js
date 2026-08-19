@@ -12,6 +12,7 @@ const {
   deriveEscalationRulesFromInstructions,
   reconcileSupportReply,
   splitInstructionsForPrompt,
+  buildHandoffAck,
 } = require('../src/services/ai/support-contract');
 
 // ── detectActionClaim — a reply that claims a handoff/review/callback happened ──
@@ -50,6 +51,18 @@ test('hasGroundingSupport: true when the step overlaps tenant knowledge', () => 
 test('hasGroundingSupport: false when nothing in config supports the step', () => {
   const config = { products: [{ name: 'اشتراك سنوي', price: '250' }] };
   assert.equal(hasGroundingSupport('تأكد من اتصالك بالإنترنت', config), false);
+});
+
+// Blocker 3 — ACTION-level grounding, not topic-token overlap.
+test('hasGroundingSupport: a topic NOUN without the action is NOT grounding', () => {
+  // the tenant mentions the login PAGE (a noun), never tells the customer to re-login
+  const config = { botInstructions: 'صفحة تسجيل الدخول موجودة في أعلى الموقع الرسمي' };
+  assert.equal(hasGroundingSupport('جرب تسجيل الدخول مرة ثانية', config), false);
+});
+
+test('hasGroundingSupport: a documented re-login IMPERATIVE grounds a re-login step', () => {
+  const config = { botInstructions: 'إذا ما ظهر الكود أعد تسجيل الدخول ثم انتظر دقيقة' };
+  assert.equal(hasGroundingSupport('جرب تسجيل الدخول مرة ثانية', config), true);
 });
 
 // ── detectGenericTroubleshooting — the invented IT-support clichés ──
@@ -128,6 +141,18 @@ test('reconcile: escalation policy matched + real escalation → concise handoff
   assert.equal(res.decision, 'ESCALATE_REAL');
   assert.ok(!/الإنترنت|تسجيل الدخول/.test(res.reply), `invented troubleshooting leaked: ${res.reply}`);
   assert.ok(res.reply.length <= 160, `handoff ack not concise: ${res.reply}`);
+});
+
+// Blocker 5 — the ack must be honest: no time promise unless a documented SLA.
+test('buildHandoffAck: NO time promise when the tenant has no documented SLA', () => {
+  const ack = buildHandoffAck({ escalationContacts: [{ name: 'الدعم', phone: '1' }] });
+  assert.ok(/رفع|رفعت|سجّل|سجل/.test(ack), `ack should state the real action: ${ack}`);
+  assert.ok(!/بأقرب وقت|يتواصلون معك|خلال/.test(ack), `unfounded time/contact promise: ${ack}`);
+});
+
+test('buildHandoffAck: includes the documented SLA window when configured', () => {
+  const ack = buildHandoffAck({ slaPolicies: [{ amount: 12, unit: 'ساعة' }] });
+  assert.ok(/12/.test(ack) && /ساعة/.test(ack), `documented SLA missing from ack: ${ack}`);
 });
 
 test('reconcile: action claim WITHOUT a real escalation → claim stripped, no fake promise', () => {

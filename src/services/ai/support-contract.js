@@ -118,7 +118,7 @@ function tokenize(text) {
     .filter(w => w.length >= 4 && !GROUND_STOP.has(w));
 }
 
-function groundingCorpus(config = {}) {
+function groundingParts(config = {}) {
   const parts = [];
   const push = v => { if (v) parts.push(String(v)); };
   push(config.botInstructions);
@@ -134,15 +134,23 @@ function groundingCorpus(config = {}) {
   (Array.isArray(config.prohibitions) ? config.prohibitions : []).forEach(x => push(strOf(x)));
   (Array.isArray(config.slaPolicies) ? config.slaPolicies : []).forEach(x => push(strOf(x)));
   (Array.isArray(config.knowledge) ? config.knowledge : []).forEach(x => push(strOf(x)));
-  return normalizeArabic(parts.join(' \n '));
+  return parts;
 }
 
+// Blocker 3 — ACTION-level grounding, not topic-token overlap. A generic
+// troubleshooting step ("جرب تسجيل الدخول") is grounded ONLY when the tenant
+// documented a directive of the SAME action family (a re-login imperative) — not
+// when the tenant merely mentions the topic noun ("صفحة تسجيل الدخول"). For a
+// non-troubleshooting step we fall back to content-token overlap.
 function hasGroundingSupport(step, config = {}) {
-  const corpus = groundingCorpus(config);
-  if (!corpus) return false;
+  const parts = groundingParts(config);
+  if (!parts.length) return false;
+  const raw = parts.join(' \n ');
+  const family = GENERIC_TS_RES.find((re) => re.test(step));
+  if (family) return family.test(raw);
+  const corpus = normalizeArabic(raw);
   const tokens = tokenize(step);
-  if (!tokens.length) return false;
-  return tokens.some(tok => corpus.includes(tok));
+  return tokens.length > 0 && tokens.some((tok) => corpus.includes(tok));
 }
 
 function stripGenericTroubleshooting(text, config = {}) {
@@ -240,10 +248,26 @@ function splitInstructionsForPrompt(text) {
 }
 
 // ── Concise, action-honest acknowledgements ─────────────────────────────────
+// Blocker 5 — the ack must be tied ONLY to the action that actually happened
+// (the request was raised to the team). It must NOT promise a contact time unless
+// the tenant has a DOCUMENTED SLA window; then, and only then, we state that
+// documented window. No "بأقرب وقت"/"بيتواصلون معك" invented promises.
+function firstSlaWindow(config = {}) {
+  const list = Array.isArray(config.slaPolicies) ? config.slaPolicies : [];
+  for (const p of list) {
+    const amount = p && (p.amount != null ? p.amount : p.value);
+    const unit = p && (p.unit || p.unit_ar);
+    if (Number.isFinite(Number(amount)) && Number(amount) > 0 && unit) {
+      return { amount: Number(amount), unit: String(unit) };
+    }
+  }
+  return null;
+}
+
 function buildHandoffAck(config = {}) {
-  // Real escalation already enqueued → a concise, truthful handoff ack. Generic
-  // and store-agnostic on purpose (no hardcoded name/phone/policy).
-  return 'تمام، سجّلت طلبك ووصل للفريق المختص وراح يتواصلون معك بأقرب وقت 🌷';
+  const base = 'تمام، تم رفع طلبك للفريق المختص.';
+  const sla = firstSlaWindow(config);
+  return sla ? `${base} وسيتم الرد خلال ${sla.amount} ${sla.unit} 🌷` : base;
 }
 
 function buildNeutralAck() {

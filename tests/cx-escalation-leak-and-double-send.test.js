@@ -43,43 +43,56 @@ test('CX-1: a well-formed marker is still extracted and stripped from the reply'
   assert.equal(extracted.contactName, 'المالك');
 });
 
-// ---------- CX-2: a failed escalation side-channel must not cause a duplicate customer reply ----------
+// ---------- CX-2: real escalation ordering + no false promise ----------
 // processAiReply uses the module-level db singleton and can't be unit-run here,
-// so (matching this repo's ai-worker test idiom, e.g. escalation-cooldown.test.js)
-// we assert the structural guarantees on the source.
+// so (matching this repo's ai-worker test idiom) we assert the structural
+// ordering on the source; behavior is proven in support-contract-ai-worker.test.js.
+// Blocker-1 architecture: the REAL team escalation is forwarded BEFORE the customer
+// acknowledgement is enqueued, and the ack's handoff claim is gated on the ACTUAL
+// delivery result (escalationDelivered), never on merely resolving a target.
 
 const aiWorkerSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'workers', 'ai-worker.js'),
   'utf8',
 );
 
-test('CX-2: inbound is marked answered BEFORE the escalation side-channel', () => {
-  const answeredIdx = aiWorkerSource.indexOf('await markInboundMessagesAnswered({');
-  const escalationIdx = aiWorkerSource.indexOf('if (escalation.ownerMessage) {');
-  assert.ok(answeredIdx > 0, 'markInboundMessagesAnswered call must exist');
-  assert.ok(escalationIdx > 0, 'escalation block must exist');
-  assert.ok(
-    answeredIdx < escalationIdx,
-    'markInboundMessagesAnswered must run BEFORE the escalation block so a failed escalation cannot trigger a regenerate/duplicate',
-  );
+test('CX-2 (Blocker 1): team escalation is forwarded BEFORE the customer reply is enqueued', () => {
+  const forwardIdx = aiWorkerSource.indexOf('await forwardTeamEscalation({');
+  const custEnqueueIdx = aiWorkerSource.indexOf('handoffAcknowledgement: escalationDelivered');
+  assert.ok(forwardIdx > 0, 'forwardTeamEscalation call must exist');
+  assert.ok(custEnqueueIdx > 0, 'customer enqueue must gate handoff on escalationDelivered');
+  assert.ok(forwardIdx < custEnqueueIdx, 'escalation must be forwarded before the customer acknowledgement');
 });
 
-test('CX-2: the escalation side-channel is wrapped best-effort (does not rethrow)', () => {
-  assert.match(
-    aiWorkerSource,
-    /escalation side-channel failed \(customer already answered\)/,
-  );
+test('CX-2 (Blocker 1): the customer ack claims a handoff ONLY from the real delivery result', () => {
+  // handoffAcknowledgement and the contract escalationEnqueued must both be the
+  // REAL escalationDelivered boolean — never Boolean(escalation.ownerMessage).
+  assert.match(aiWorkerSource, /escalationEnqueued: escalationDelivered/);
+  assert.match(aiWorkerSource, /handoffAcknowledgement: escalationDelivered/);
+  assert.doesNotMatch(aiWorkerSource, /handoffAcknowledgement: Boolean\(escalation\.ownerMessage\)/);
+});
+
+test('CX-2 (Blocker 6): the contract is fail-closed to a neutral ack, not the dangerous draft', () => {
+  assert.match(aiWorkerSource, /fail-closed to neutral ack/);
+  assert.match(aiWorkerSource, /customerReply = buildNeutralAck\(\)/);
+});
+
+test('Blocker 2: the contract is the LAST gate — it runs AFTER every regeneration path', () => {
+  // reopen-guard regeneration and semantic/dedup regeneration both mutate
+  // customerReply; the contract reconcile (positioned right after the escalation
+  // forward) MUST come after both so a regenerated draft cannot bypass it.
+  const reopenIdx = aiWorkerSource.indexOf('detectResolvedReopen(customerReply');
+  const dedupIdx = aiWorkerSource.indexOf('findDuplicateRecentReply({');
+  const forwardIdx = aiWorkerSource.indexOf('await forwardTeamEscalation({');
+  const contractIdx = aiWorkerSource.indexOf('const contract = reconcileSupportReply({');
+  assert.ok(reopenIdx > 0 && dedupIdx > 0 && forwardIdx > 0 && contractIdx > 0, 'all anchors present');
+  assert.ok(reopenIdx < forwardIdx, 'reopen-guard regeneration runs before the contract');
+  assert.ok(dedupIdx < forwardIdx, 'dedup regeneration runs before the contract');
+  assert.ok(forwardIdx < contractIdx, 'escalation is forwarded before the contract reconciles the ack');
 });
 
 test('CX-2: markInboundMessagesAnswered is invoked at exactly 2 intentional call sites', () => {
-  // There are intentionally TWO call sites — both correct and necessary:
-  //   1. Duplicate-suppression early-return path (suppressDuplicate branch): marks
-  //      the inbound answered so no retry/recovery regenerates a near-duplicate
-  //      reply for a message we already sent a response for.
-  //   2. B1 success path: marks the inbound answered BEFORE enqueueing the outbound
-  //      so a SIGTERM / lock-loss / enqueue-throw cannot leave the inbound in
-  //      'queued_for_ai' and trigger a second AI reply via ai-recovery.
-  // Any count other than 2 signals either a missing guard or an accidental merge.
+  // 1. Duplicate-suppression early-return; 2. B1 success path (before enqueue).
   const matches = aiWorkerSource.match(/await markInboundMessagesAnswered\(\{/g) || [];
-  assert.equal(matches.length, 2, `expected exactly 2 markInboundMessagesAnswered call sites (dedup-suppression + B1 success path), found ${matches.length}`);
+  assert.equal(matches.length, 2, `expected exactly 2 markInboundMessagesAnswered call sites, found ${matches.length}`);
 });

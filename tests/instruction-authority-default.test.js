@@ -47,6 +47,30 @@ test('DEFAULT: style → persona, escalation directive → authoritative facts (
   assert.ok(/صعّد|صعد/.test(sys.slice(sys.indexOf('<معلومات_وسياسات_التاجر>'))), 'escalation directive preserved as a fact');
 });
 
+test('Blocker 4: all-operational instructions → EMPTY persona (blob NOT re-injected as persona)', () => {
+  const prev = process.env.BOUNDED_BOT_INSTRUCTIONS_ENABLED;
+  delete process.env.BOUNDED_BOT_INSTRUCTIONS_ENABLED;
+  const ALL_OPS = 'أي مشكلة يواجهها العميل صعّدها للدعم فوراً. أي طلب استرجاع أو استبدال صعّده للدعم مباشرةً. أي عطل في الخدمة صعّده للدعم دائماً.';
+  try {
+    const c = new AIClient(
+      { storeName: 'متجر جيم', botInstructions: ALL_OPS, escalationContacts: [{ name: 'الدعم', phone: '966500000009' }] },
+      { info() {}, warn() {}, error() {} },
+    );
+    const sys = c.buildSystemPrompt([{ role: 'user', content: 'عندي مشكلة' }], {});
+    const personaStart = sys.indexOf('<شخصية_وأسلوب_الموظف>');
+    if (personaStart !== -1) {
+      const persona = sys.slice(personaStart, sys.indexOf('</شخصية_وأسلوب_الموظف>'));
+      assert.ok(!persona.includes('صعّدها للدعم فوراً'), 'operational blob must NOT be re-injected into persona');
+    }
+    // the operational content is preserved as authoritative facts, not persona
+    assert.ok(sys.includes('<معلومات_وسياسات_التاجر>'), 'facts block present');
+    assert.ok(/صعّد|صعد/.test(sys.slice(sys.indexOf('<معلومات_وسياسات_التاجر>'))), 'directive preserved as fact');
+  } finally {
+    if (prev === undefined) delete process.env.BOUNDED_BOT_INSTRUCTIONS_ENABLED;
+    else process.env.BOUNDED_BOT_INSTRUCTIONS_ENABLED = prev;
+  }
+});
+
 test('kill-switch =false → legacy blob-as-base restored (rollback)', () => {
   const sys = build('false');
   assert.ok(sys.startsWith(LEGACY.slice(0, 20)), 'legacy path starts with raw blob');

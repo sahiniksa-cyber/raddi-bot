@@ -13,6 +13,29 @@ const { reviewOutgoingReplyBeforeSend } = require('../services/ai/pre-send-revie
 const { isAutomatedCustomerReply } = require('../services/bot/auto-reply-control');
 const { prepareEscalation } = require('./escalation-routing');
 const { buildStaleClaimQuery } = require('../services/ai/conversation-state');
+const { reconcileSupportReply } = require('../services/ai/support-contract');
+
+// Blocker 2 — apply the Customer-Service Contract as a FINAL deterministic net at
+// the pre-send boundary, catching anything the pre-send review regenerated (a fake
+// handoff claim or invented troubleshooting) after the ai-worker's contract pass.
+// escalationEnqueued reflects whether THIS customer reply has a real handoff behind
+// it. Secondary net: on error we keep the already-primary-reconciled reply.
+function applyPreSendContract(finalReply, { config, escalationEnqueued, customerText }) {
+  if (process.env.SUPPORT_CONTRACT_ENABLED === 'false') return finalReply;
+  try {
+    const contract = reconcileSupportReply({
+      reply: finalReply,
+      config: config || {},
+      escalationEnqueued: escalationEnqueued === true,
+      escalationPolicyMatched: false, // pre-send is a safety net, not a policy driver
+      customerText: customerText || '',
+    });
+    const next = String(contract.reply || '').trim();
+    return next || finalReply;
+  } catch (_) {
+    return finalReply;
+  }
+}
 const { TIMERS } = require('../../lib/constants');
 
 const WORKER_NAME = 'outgoing-whatsapp-worker';
@@ -548,6 +571,13 @@ async function processOutgoingWhatsapp(job, {
   });
   finalReply = String(routed.reply || '').trim();
   if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
+  if (!payload.escalation) {
+    finalReply = applyPreSendContract(finalReply, {
+      config: bot?.ai?.config || bot?.config || {},
+      escalationEnqueued: payload.handoffAcknowledgement === true || routed.escalated === true,
+      customerText: payload.text || '',
+    });
+  }
 
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
@@ -774,6 +804,13 @@ async function handleLidOutgoing({
     });
     finalReply = String(routed.reply || '').trim();
     if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
+    if (!payload.escalation) {
+      finalReply = applyPreSendContract(finalReply, {
+        config: bot?.ai?.config || bot?.config || {},
+        escalationEnqueued: payload.handoffAcknowledgement === true || routed.escalated === true,
+        customerText: payload.text || '',
+      });
+    }
     // FINAL Human-Takeover gate at the TRANSPORT boundary (mirrors the main path).
     // The @lid branch is the VAST majority of customers. Passed as beforeTransportSend
     // so the wrapper checks it AFTER its bot-send reservation, immediately before the
@@ -1316,6 +1353,7 @@ function startOutgoingRequeueLoop({ logger = console, intervalMs, runner = reque
 }
 
 module.exports = {
+  applyPreSendContract,
   cancelDisabledAutoReply,
   claimSendOrStale,
   startOutgoingRequeueLoop,

@@ -59,7 +59,11 @@ stub(path.resolve(__dirname, '..', 'src', 'services', 'notify', 'mailer.js'), { 
 const enqueued = [];
 stub(path.resolve(__dirname, '..', 'src', 'queues', 'message-queue.js'), {
   QUEUE_NAMES: { incomingMessages: 'incoming-messages', aiReplies: 'ai-replies', outgoingWhatsapp: 'outgoing-whatsapp' },
-  enqueueOutgoingWhatsapp: async (payload) => { enqueued.push(payload); return { id: `out-${enqueued.length}` }; },
+  enqueueOutgoingWhatsapp: async (payload) => {
+    if (payload.escalation === true && S.failEscalationEnqueue) throw new Error('escalation enqueue boom');
+    enqueued.push(payload);
+    return { id: `out-${enqueued.length}` };
+  },
   enqueueAiReply: async () => ({ id: 'ai-1' }),
 });
 
@@ -75,10 +79,16 @@ function job() {
 }
 function reset() {
   enqueued.length = 0;
+  S.failEscalationEnqueue = false;
   delete process.env.INSTRUCTION_ROUTING_ENABLED;
   delete process.env.SUPPORT_CONTRACT_ENABLED;
   delete process.env.BOUNDED_BOT_INSTRUCTIONS_ENABLED;
 }
+const ESCALATE_TENANT = () => ({
+  learningEnabled: false, memoryMessages: 50,
+  botInstructions: 'أسلوبك سعودي ومختصر جداً مع كل العملاء. أي مشكلة أو عطل يواجه العميل في الخدمة صعّدها فوراً للدعم.',
+  escalationContacts: [{ name: 'الدعم', phone: '966511111111' }],
+});
 const customerOut = () => enqueued.find((e) => e.source === 'ai_reply');
 const escalationOut = () => enqueued.find((e) => e.escalation === true);
 
@@ -119,6 +129,33 @@ test('§4 no fake escalation: a handoff claim with NO configured target is strip
   assert.doesNotMatch(out.reply, /الإدارة|يتواصل معك الفريق/, 'fake escalation claim must be stripped');
   assert.equal(escalationOut(), undefined, 'no real escalation could be enqueued (no target)');
   assert.ok(out.reply.trim().length >= 2, 'never an empty reply');
+});
+
+// ── Blocker 1: real escalation ordering + no false promise on failure ──────
+test('Blocker 1: team escalation is enqueued BEFORE the customer acknowledgement', async () => {
+  reset();
+  S.customerText = 'الاشتراك وقف عندي مشكلة';
+  S.aiReply = BAD_DRAFT;
+  S.config = ESCALATE_TENANT();
+
+  await processAiReply(job());
+
+  const escIdx = enqueued.findIndex((e) => e.escalation === true);
+  const custIdx = enqueued.findIndex((e) => e.source === 'ai_reply');
+  assert.ok(escIdx >= 0, 'a real escalation must be enqueued');
+  assert.ok(custIdx >= 0, 'a customer reply must be enqueued');
+  assert.ok(escIdx < custIdx, 'team escalation must be enqueued BEFORE the customer acknowledgement');
+});
+
+test('Blocker 1: escalation enqueue FAILURE → no success-claiming ack, job retries (throws)', async () => {
+  reset();
+  S.failEscalationEnqueue = true;
+  S.customerText = 'الاشتراك وقف عندي مشكلة';
+  S.aiReply = BAD_DRAFT;
+  S.config = ESCALATE_TENANT();
+
+  await assert.rejects(processAiReply(job()), 'job must throw so it retries safely');
+  assert.equal(customerOut(), undefined, 'NO customer acknowledgement may be sent when escalation failed');
 });
 
 // ── §9 multi-tenant proof ──────────────────────────────────────────────────
