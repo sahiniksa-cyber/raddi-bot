@@ -26,7 +26,9 @@ const { reconcileSupportReply, buildNeutralAck } = require('../services/ai/suppo
 // rewritten) draft — we fall back to a neutral acknowledgement that claims neither
 // a solution nor a handoff. Correctness over availability at the boundary.
 function applyPreSendContract(finalReply, { config, escalationEnqueued, customerText }) {
-  if (process.env.SUPPORT_CONTRACT_ENABLED === 'false') return finalReply;
+  // NOTE: no kill-switch short-circuit here — reconcileSupportReply respects the
+  // SUPPORT_CONTRACT_ENABLED kill-switch for the contract logic, but its internal
+  // destination-leak guard is a HARD privacy invariant that always runs.
   try {
     const contract = reconcileSupportReply({
       reply: finalReply,

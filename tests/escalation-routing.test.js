@@ -57,14 +57,14 @@ test('buildEscalationNotification applies contact messageTemplate variables', ()
 });
 
 test('normalizeEscalationPhone converts local Saudi numbers to whatsapp-web jid', () => {
-  assert.equal(normalizeEscalationPhone('0562529945'), '966562529945@c.us');
-  assert.equal(normalizeEscalationPhone('966562529945'), '966562529945@c.us');
+  assert.equal(normalizeEscalationPhone('0500000000'), '966500000000@c.us');
+  assert.equal(normalizeEscalationPhone('966500000000'), '966500000000@c.us');
 });
 
 test('prepareEscalation targets the requested contact and keeps marker private', () => {
   const config = {
     escalationContacts: [
-      { name: 'محمد', phone: '0562529945', role: 'المالك', when: 'المشاكل' },
+      { name: 'محمد', phone: '0500000000', role: 'المالك', when: 'المشاكل' },
     ],
   };
 
@@ -76,7 +76,7 @@ test('prepareEscalation targets the requested contact and keeps marker private',
   });
 
   assert.equal(result.customerReply, 'عطني إيميلك وأتواصل معك الحين');
-  assert.equal(result.ownerMessage.sender, '966562529945@c.us');
+  assert.equal(result.ownerMessage.sender, '966500000000@c.us');
   assert.match(result.ownerMessage.reply, /اشتراك العميل تعطّل/);
   assert.doesNotMatch(result.ownerMessage.reply, /\[تحويل:/);
 });

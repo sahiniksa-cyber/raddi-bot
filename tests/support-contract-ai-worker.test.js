@@ -334,6 +334,59 @@ test('scope: Tenant B deferred policy never escalates immediately (scoped or not
   assert.equal(escalationOut(), undefined, 'deferred policy must not escalate immediately');
 });
 
+// ── EMERGENCY: internal escalation destination must never reach the customer ──
+test('leak: exact live bug — Adobe subscription, AI leaks the escalation phone → blocked', async () => {
+  reset();
+  S.customerText = 'اشتراكي في ادوبي وقف';
+  S.aiReply = 'تواصل مع الدعم على 0551234567';
+  S.config = {
+    learningEnabled: false, memoryMessages: 50,
+    botInstructions: 'أي مشكلة أو عطل في الخدمة صعّدها للدعم.',
+    escalationContacts: [{ name: 'الدعم', phone: '0551234567' }],
+  };
+  await processAiReply(job());
+  const out = customerOut();
+  assert.ok(out, 'customer reply enqueued');
+  assert.ok(!/0551234567|966551234567/.test(out.reply), `internal number leaked to customer: ${out.reply}`);
+});
+
+test('leak: real escalation succeeds → customer gets handoff ack, team still gets the number', async () => {
+  reset();
+  S.customerText = 'اشتراكي في ادوبي وقف';
+  S.aiReply = 'تواصل مع الدعم على 0551234567'; // adversarial: model leaked it
+  S.config = {
+    learningEnabled: false, memoryMessages: 50,
+    botInstructions: 'أي مشكلة أو عطل في الخدمة صعّدها للدعم.',
+    escalationContacts: [{ name: 'الدعم', phone: '0551234567' }],
+  };
+  await processAiReply(job());
+  const out = customerOut();
+  assert.ok(!/0551234567|966551234567/.test(out.reply), 'number must not reach the customer');
+  assert.match(out.reply, /تم رفع طلبك للفريق المختص/, 'concise honest handoff ack');
+  const esc = escalationOut();
+  assert.ok(esc, 'the REAL team escalation must still be enqueued');
+  assert.match(String(esc.sender), /0?551234567|966551234567/, 'team escalation still routed to the real destination');
+});
+
+test('leak: LEGACY botInstructions phone — customer blocked, team still routed to it', async () => {
+  reset();
+  S.customerText = 'اشتراكي في ادوبي وقف';
+  S.aiReply = 'تواصل مع المالك على 0551234567 [تحويل:المالك|اشتراك ادوبي وقف]';
+  S.config = {
+    learningEnabled: false, memoryMessages: 50,
+    botInstructions: 'إذا ما عرفت الحل صعّد للمالك على 0551234567',
+    escalationContacts: [], // destination lives ONLY in botInstructions (legacy)
+  };
+  await processAiReply(job());
+  const out = customerOut();
+  assert.ok(out, 'customer reply enqueued');
+  assert.ok(!/0551234567|966551234567/.test(out.reply), `legacy internal number leaked: ${out.reply}`);
+  assert.match(out.reply, /تم رفع طلبك للفريق المختص/, 'honest handoff ack');
+  const esc = escalationOut();
+  assert.ok(esc, 'team escalation still enqueued');
+  assert.match(String(esc.sender), /966551234567/, 'team escalation routed to the legacy destination');
+});
+
 // ── §9 multi-tenant proof ──────────────────────────────────────────────────
 test('§9 Tenant A: service issue → Support A escalation, concise, no troubleshooting', async () => {
   reset();

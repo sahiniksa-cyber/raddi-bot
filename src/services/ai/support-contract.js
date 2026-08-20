@@ -30,6 +30,9 @@ const {
   extractTargetName,
   buildTrigger,
 } = require('../instruction-routing/instruction-router');
+// SINGLE source of truth for the legacy escalation fallback: the SAME extractor the
+// routing layer uses, so the guard protects exactly the value routing would dial.
+const { extractOwnerPhoneFromInstructions } = require('../../workers/escalation-routing');
 
 function killed() {
   return process.env.SUPPORT_CONTRACT_ENABLED === 'false';
@@ -518,13 +521,108 @@ function buildNeutralAck() {
   return 'وصلتني رسالتك.';
 }
 
+// ── Internal escalation-destination leak guard (EMERGENCY) ──────────────────
+// Internal escalation destinations (phone/target/jid/groupJid) are NEVER customer-
+// facing. This guard collects a tenant's OWN destinations and blocks any customer
+// reply that contains one, in any Saudi phone formatting variant. It is tenant-
+// scoped (only the tenant's own destinations) and does NOT block arbitrary phone
+// numbers — a public number in verified knowledge is untouched.
+function toWesternDigits(s) {
+  return String(s == null ? '' : s)
+    .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0));
+}
+
+// National-significant canonical form for Saudi numbers so 05x / 9665x / +9665x /
+// 5x all compare equal. Non-phone digit strings (e.g. group ids) return their digits.
+function canonicalPhone(raw) {
+  let d = toWesternDigits(raw).replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('966')) return d;
+  if (d.startsWith('0')) d = d.slice(1);
+  if (d.length === 9 && d.startsWith('5')) return `966${d}`;
+  return d;
+}
+
+function collectInternalDestinations(config = {}) {
+  const contacts = Array.isArray(config && config.escalationContacts) ? config.escalationContacts : [];
+  const out = new Set();
+  const addPhoneOrJid = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return;
+    if (s.includes('@')) out.add(s.toLowerCase()); // raw jid/group id literal
+    const ph = canonicalPhone(s);
+    if (ph && ph.length >= 9) out.add(ph);
+  };
+  for (const c of contacts) {
+    addPhoneOrJid(c && c.phone);
+    addPhoneOrJid(c && c.target);
+    addPhoneOrJid(c && c.jid);
+    addPhoneOrJid(c && c.groupJid);
+  }
+  // Legacy fallback: a phone the routing layer extracts from botInstructions is an
+  // INTERNAL escalation destination too — protect exactly what routing would dial.
+  try { addPhoneOrJid(extractOwnerPhoneFromInstructions(config)); } catch (_) { /* pure */ }
+  return [...out];
+}
+
+// Redact ONLY the platform-recognized internal escalation destinations from an
+// LLM-visible text (e.g. legacy botInstructions), WITHOUT mutating stored config
+// and WITHOUT touching arbitrary/public numbers or normal merchant knowledge.
+function redactInternalDestinations(text, config = {}) {
+  let out = String(text == null ? '' : text);
+  const dests = collectInternalDestinations(config);
+  if (!dests.length) return out;
+  const canonSet = new Set(dests.filter(d => /^\d+$/.test(d)));
+  const rawIds = dests.filter(d => d.includes('@'));
+  for (const r of rawIds) {
+    out = out.replace(new RegExp(r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '[محجوب]');
+  }
+  // Only digit-runs whose CANONICAL form equals a protected destination are masked.
+  out = out.replace(/\+?\d[\d\s()\-]{6,}\d/g, run => (canonSet.has(canonicalPhone(run)) ? '[محجوب]' : run));
+  return out;
+}
+
+function containsInternalDestination(text, config = {}) {
+  const dests = collectInternalDestinations(config);
+  if (!dests.length) return false;
+  const canonSet = new Set(dests.filter(d => /^\d+$/.test(d)));
+  const rawIds = dests.filter(d => d.includes('@'));
+  const t = toWesternDigits(text).toLowerCase();
+  for (const r of rawIds) if (t.includes(r)) return true;
+  const runs = t.match(/\+?\d[\d\s()\-‏‎]{6,}\d/g) || [];
+  for (const run of runs) {
+    if (canonSet.has(canonicalPhone(run))) return true;
+  }
+  return false;
+}
+
 /**
  * The decision contract, applied to a finalized draft.
  * @returns {{ reply:string, decision:string, diagnostics:string[] }}
  */
-function reconcileSupportReply({ reply, config = {}, escalationEnqueued = false, escalationPolicyMatched = false, customerText = '' } = {}) {
+function reconcileSupportReply(args = {}) {
+  const config = args.config || {};
+  const escalationEnqueued = args.escalationEnqueued === true;
+  const core = killed()
+    ? { reply: String(args.reply || ''), decision: 'DISABLED', diagnostics: [] }
+    : reconcileCore(args);
+  // FIX 2 — internal-destination leak guard is a HARD privacy invariant: it runs
+  // even when the support contract is otherwise disabled. No leaked destination
+  // ever survives to the customer.
+  if (containsInternalDestination(core.reply, config)) {
+    return {
+      reply: escalationEnqueued ? buildHandoffAck(config) : buildNeutralAck(),
+      decision: escalationEnqueued ? 'ESCALATE_REAL' : 'ACKNOWLEDGE_NO_ACTION',
+      diagnostics: [...core.diagnostics, 'internal_destination_redacted'],
+    };
+  }
+  return core;
+}
+
+function reconcileCore({ reply, config = {}, escalationEnqueued = false, escalationPolicyMatched = false, customerText = '' } = {}) {
   const original = String(reply || '');
-  if (killed()) return { reply: original, decision: 'DISABLED', diagnostics: [] };
 
   const diagnostics = [];
 
@@ -578,4 +676,7 @@ module.exports = {
   matchesScopeFamily,
   includesScopeToken,
   classifyEscalationScope,
+  collectInternalDestinations,
+  containsInternalDestination,
+  redactInternalDestinations,
 };
