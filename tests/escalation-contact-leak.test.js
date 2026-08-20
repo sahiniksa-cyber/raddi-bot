@@ -131,6 +131,49 @@ test('legacy: a leaking reply is blocked (guard) — real escalation → handoff
   assert.match(res.reply, /تم رفع طلبك للفريق المختص/);
 });
 
+// ── FINAL catch-all: every composed LLM message is sanitized ────────────────
+function composedText(config, history = [{ role: 'user', content: 'مرحبا' }]) {
+  return client(config).composeMessages(history, {}).map(m => m.content).join('\n');
+}
+
+test('compose: destination in escalationContacts.when is redacted from ALL messages', () => {
+  const config = { storeName: 'متجري', escalationContacts: [{ name: 'الدعم', phone: '0551234567', when: 'عند المشكلة كلم 0551234567' }] };
+  const text = composedText(config);
+  assert.ok(!/0551234567|966551234567/.test(text), `number leaked via .when: ${text.slice(0, 400)}`);
+  assert.ok(text.includes('الدعم'), 'contact name still present for the model');
+});
+
+test('compose: destination in escalationConditions / storeDescription is redacted', () => {
+  const config = {
+    storeName: 'متجري',
+    storeDescription: 'للطوارئ اتصل على 0551234567',
+    escalationConditions: 'صعّد وكلمهم على 0551234567',
+    escalationContacts: [{ name: 'الدعم', phone: '0551234567' }],
+  };
+  assert.ok(!/0551234567|966551234567/.test(composedText(config)), 'number leaked via a non-botInstructions field');
+});
+
+test('compose: a protected number in PRIOR history is redacted', () => {
+  const config = { storeName: 'متجري', escalationContacts: [{ name: 'الدعم', phone: '0551234567' }] };
+  const history = [
+    { role: 'user', content: 'مرحبا' },
+    { role: 'assistant', content: 'تواصل مع الدعم على 0551234567' }, // the already-leaked live reply
+    { role: 'user', content: 'طيب' },
+  ];
+  assert.ok(!/0551234567|966551234567/.test(composedText(config, history)), 'history leaked the number');
+});
+
+test('compose: a DIFFERENT public number (not a configured destination) stays visible', () => {
+  const config = {
+    storeName: 'متجري',
+    storeDescription: 'رقم المبيعات العام 0509999999',
+    escalationContacts: [{ name: 'الدعم', phone: '0551234567' }],
+  };
+  const text = composedText(config);
+  assert.ok(text.includes('0509999999'), 'public non-destination number must remain visible');
+  assert.ok(!/0551234567/.test(text), 'the internal destination is still redacted');
+});
+
 // ── multi-tenant isolation ──────────────────────────────────────────────────
 test('guard: tenant A guard does not use tenant B destinations', () => {
   const A = { escalationContacts: [{ name: 'الدعم', phone: '0551111111' }] };
