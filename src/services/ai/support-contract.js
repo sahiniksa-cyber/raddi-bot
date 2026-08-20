@@ -30,6 +30,9 @@ const {
   extractTargetName,
   buildTrigger,
 } = require('../instruction-routing/instruction-router');
+// SINGLE source of truth for the legacy escalation fallback: the SAME extractor the
+// routing layer uses, so the guard protects exactly the value routing would dial.
+const { extractOwnerPhoneFromInstructions } = require('../../workers/escalation-routing');
 
 function killed() {
   return process.env.SUPPORT_CONTRACT_ENABLED === 'false';
@@ -545,16 +548,40 @@ function canonicalPhone(raw) {
 function collectInternalDestinations(config = {}) {
   const contacts = Array.isArray(config && config.escalationContacts) ? config.escalationContacts : [];
   const out = new Set();
+  const addPhoneOrJid = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return;
+    if (s.includes('@')) out.add(s.toLowerCase()); // raw jid/group id literal
+    const ph = canonicalPhone(s);
+    if (ph && ph.length >= 9) out.add(ph);
+  };
   for (const c of contacts) {
-    for (const v of [c && c.phone, c && c.target, c && c.jid, c && c.groupJid]) {
-      const s = String(v == null ? '' : v).trim();
-      if (!s) continue;
-      if (s.includes('@')) out.add(s.toLowerCase()); // raw jid/group id literal
-      const ph = canonicalPhone(s);
-      if (ph && ph.length >= 9) out.add(ph);
-    }
+    addPhoneOrJid(c && c.phone);
+    addPhoneOrJid(c && c.target);
+    addPhoneOrJid(c && c.jid);
+    addPhoneOrJid(c && c.groupJid);
   }
+  // Legacy fallback: a phone the routing layer extracts from botInstructions is an
+  // INTERNAL escalation destination too — protect exactly what routing would dial.
+  try { addPhoneOrJid(extractOwnerPhoneFromInstructions(config)); } catch (_) { /* pure */ }
   return [...out];
+}
+
+// Redact ONLY the platform-recognized internal escalation destinations from an
+// LLM-visible text (e.g. legacy botInstructions), WITHOUT mutating stored config
+// and WITHOUT touching arbitrary/public numbers or normal merchant knowledge.
+function redactInternalDestinations(text, config = {}) {
+  let out = String(text == null ? '' : text);
+  const dests = collectInternalDestinations(config);
+  if (!dests.length) return out;
+  const canonSet = new Set(dests.filter(d => /^\d+$/.test(d)));
+  const rawIds = dests.filter(d => d.includes('@'));
+  for (const r of rawIds) {
+    out = out.replace(new RegExp(r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '[محجوب]');
+  }
+  // Only digit-runs whose CANONICAL form equals a protected destination are masked.
+  out = out.replace(/\+?\d[\d\s()\-]{6,}\d/g, run => (canonSet.has(canonicalPhone(run)) ? '[محجوب]' : run));
+  return out;
 }
 
 function containsInternalDestination(text, config = {}) {
@@ -651,4 +678,5 @@ module.exports = {
   classifyEscalationScope,
   collectInternalDestinations,
   containsInternalDestination,
+  redactInternalDestinations,
 };

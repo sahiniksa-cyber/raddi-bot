@@ -214,6 +214,7 @@ function prepareEscalation({ reply, config = {}, customerSender, customerPhoneNu
 module.exports = {
   buildEscalationNotification,
   extractEscalationRequest,
+  extractOwnerPhoneFromInstructions,
   normalizeArabic,
   normalizeEscalationPhone,
   normalizeEscalationTarget,

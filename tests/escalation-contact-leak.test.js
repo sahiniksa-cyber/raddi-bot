@@ -12,7 +12,9 @@ const {
   reconcileSupportReply,
   containsInternalDestination,
   collectInternalDestinations,
+  redactInternalDestinations,
 } = require('../src/services/ai/support-contract');
+const { prepareEscalation } = require('../src/workers/escalation-routing');
 
 function client(config) {
   return new AIClient(config, { info() {}, warn() {}, error() {} });
@@ -83,6 +85,50 @@ test('reconcile: leak + NO real escalation → "وصلتني رسالتك." (no 
   });
   assert.ok(!/551234567/.test(res.reply), `number survived: ${res.reply}`);
   assert.match(res.reply, /وصلتني رسالتك/);
+});
+
+// ── LEGACY botInstructions escalation phone (single source of truth) ────────
+const LEGACY = { botInstructions: 'إذا ما عرفت الحل صعّد للمالك على 0551234567', escalationContacts: [] };
+
+test('legacy: the botInstructions escalation phone is included in the guarded destinations', () => {
+  assert.ok(collectInternalDestinations(LEGACY).includes('966551234567'), 'legacy fallback phone must be protected');
+});
+
+test('legacy: server-side routing still resolves the botInstructions phone', () => {
+  const prepared = prepareEscalation({
+    reply: 'تمام، رفعت طلبك. [تحويل:المالك|اشتراك ادوبي وقف]',
+    config: LEGACY,
+    customerSender: '966500000001@s.whatsapp.net',
+    inboundText: 'اشتراكي في ادوبي وقف',
+  });
+  assert.ok(prepared.ownerMessage, 'escalation must still resolve a real destination');
+  assert.equal(prepared.ownerMessage.sender, '966551234567@c.us', 'routing must dial the legacy fallback');
+});
+
+test('legacy: buildSystemPrompt (long instructions) redacts the phone but keeps context', () => {
+  const long = `${'التزم بلهجة سعودية مختصرة وواضحة في كل الردود مع العملاء دائماً. '.repeat(3)}إذا ما عرفت الحل صعّد للمالك على 0551234567.`;
+  const sys = client({ storeName: 'متجري', botInstructions: long, escalationContacts: [] })
+    .buildSystemPrompt([{ role: 'user', content: 'مرحبا' }], {});
+  for (const v of ['0551234567', '966551234567', '+966551234567']) {
+    assert.ok(!sys.includes(v), `legacy phone leaked into prompt: ${v}`);
+  }
+  assert.ok(sys.includes('المالك') || sys.includes('صعّد'), 'routing/context wording preserved');
+});
+
+test('legacy: redactInternalDestinations masks the phone across variants, keeps other digits', () => {
+  const t = 'صعّد للمالك على 0551234567 أو +966 55 123 4567، والسعر 299 ريال';
+  const out = redactInternalDestinations(t, LEGACY);
+  assert.ok(!/0?551234567/.test(out.replace(/\s/g, '')), `phone survived redaction: ${out}`);
+  assert.ok(/299/.test(out), 'unrelated price digits must be preserved');
+});
+
+test('legacy: a leaking reply is blocked (guard) — real escalation → handoff ack', () => {
+  const res = reconcileSupportReply({
+    reply: 'تواصل مع المالك على +966 55 123 4567', config: LEGACY,
+    escalationEnqueued: true, escalationPolicyMatched: false, customerText: 'اشتراكي وقف',
+  });
+  assert.ok(!/551234567/.test(res.reply.replace(/\s/g, '')), `legacy destination leaked: ${res.reply}`);
+  assert.match(res.reply, /تم رفع طلبك للفريق المختص/);
 });
 
 // ── multi-tenant isolation ──────────────────────────────────────────────────

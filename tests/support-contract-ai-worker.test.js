@@ -368,6 +368,25 @@ test('leak: real escalation succeeds → customer gets handoff ack, team still g
   assert.match(String(esc.sender), /0?551234567|966551234567/, 'team escalation still routed to the real destination');
 });
 
+test('leak: LEGACY botInstructions phone — customer blocked, team still routed to it', async () => {
+  reset();
+  S.customerText = 'اشتراكي في ادوبي وقف';
+  S.aiReply = 'تواصل مع المالك على 0551234567 [تحويل:المالك|اشتراك ادوبي وقف]';
+  S.config = {
+    learningEnabled: false, memoryMessages: 50,
+    botInstructions: 'إذا ما عرفت الحل صعّد للمالك على 0551234567',
+    escalationContacts: [], // destination lives ONLY in botInstructions (legacy)
+  };
+  await processAiReply(job());
+  const out = customerOut();
+  assert.ok(out, 'customer reply enqueued');
+  assert.ok(!/0551234567|966551234567/.test(out.reply), `legacy internal number leaked: ${out.reply}`);
+  assert.match(out.reply, /تم رفع طلبك للفريق المختص/, 'honest handoff ack');
+  const esc = escalationOut();
+  assert.ok(esc, 'team escalation still enqueued');
+  assert.match(String(esc.sender), /966551234567/, 'team escalation routed to the legacy destination');
+});
+
 // ── §9 multi-tenant proof ──────────────────────────────────────────────────
 test('§9 Tenant A: service issue → Support A escalation, concise, no troubleshooting', async () => {
   reset();
