@@ -19,6 +19,7 @@ const { DEFAULT_CONFIG, MODEL_PRICES } = require('../../lib/constants');
 const { buildHistoryForReply } = require('./ai-history');
 const { prepareEscalation } = require('./escalation-routing');
 const { applyDeterministicEscalation } = require('../services/instruction-routing/escalation-rules');
+const { deriveEscalationRulesFromInstructions, reconcileSupportReply, buildNeutralAck } = require('../services/ai/support-contract');
 const { computeSlaBreach } = require('../services/instruction-routing/sla-breach');
 const { resolveTrustedEventTimestamp } = require('../services/ai/trusted-event-time');
 const { findDuplicateRecentReply, similarity: replySimilarity } = require('./reply-deduplication');
@@ -195,6 +196,93 @@ async function getConversationEscalationStats({ database = db, userId, conversat
     count24h: Number(row.n) || 0,
     lastSentAt: row.last_sent_at ? new Date(row.last_sent_at) : null,
   };
+}
+
+/**
+ * Forward the REAL escalation to the team and report whether it was actually
+ * enqueued/persisted (Blocker 1 — the customer acknowledgement may claim a
+ * handoff ONLY when this returns delivered:true, and the caller runs this BEFORE
+ * enqueuing the customer reply so the ORDER is "team escalation → then customer
+ * ack"). The escBaseKey is stable across job retries (conversationId + inbound
+ * sequence) so a retry cannot double-escalate. A genuine enqueue failure THROWS
+ * so the whole job retries safely (nothing customer-facing has been enqueued yet).
+ */
+async function forwardTeamEscalation({ escalation, config, conversation, userId, text, escBaseKey, logger }) {
+  if (!escalation || !escalation.ownerMessage) return { delivered: false };
+  const om = escalation.ownerMessage;
+  const contactTarget = om.contactTarget || om.sender;
+
+  const cooldown = await db.query(
+    `SELECT 1 FROM escalation_log
+     WHERE user_id = $1 AND conversation_id = $2 AND contact_target = $3 AND sent_at > NOW() - INTERVAL '30 minutes'
+     LIMIT 1`,
+    [userId, conversation.id, contactTarget],
+  );
+  const escStats = await getConversationEscalationStats({ database: db, userId, conversationId: conversation.id });
+  const tenMinAgo = Date.now() - 10 * 60 * 1000;
+  const lastSentMs = escStats.lastSentAt ? escStats.lastSentAt.getTime() : 0;
+  const maxEsc = parseInt(config.maxEscalationsPerConversation, 10);
+  const effectiveMaxEsc = Number.isFinite(maxEsc) ? maxEsc : 5;
+  const overCap = effectiveMaxEsc > 0 && escStats.count24h >= effectiveMaxEsc;
+  let tooSoon = escStats.count24h >= 1 && lastSentMs > tenMinAgo;
+
+  const explicitRequest = customerRequestedEscalation(text);
+  if (explicitRequest && !overCap) {
+    cooldown.rowCount = 0;
+    tooSoon = false;
+    logger.info('escalation', 'explicit customer request — bypassing cooldown/min-gap');
+  }
+
+  if (cooldown.rowCount > 0 || tooSoon || overCap) {
+    // Anti-noise suppression is never silent: a lighter "🔁 تحديث" still reaches
+    // the SAME team target, so the customer's request IS on record → delivered.
+    logger.warn('escalation', 'suppressed full escalation — forwarding a customer UPDATE instead', {
+      conversationId: conversation.id,
+      reason: cooldown.rowCount > 0 ? 'cooldown_30m' : (overCap ? 'cap_24h_reached' : 'min_gap_10m'),
+      count24h: escStats.count24h,
+    });
+    await enqueueOutgoingWhatsapp({
+      userId, tenantId: userId, channelId: 'whatsapp', customerId: conversation.sender,
+      conversationId: conversation.id, sender: om.sender,
+      reply: buildCustomerUpdateText({ customerSender: conversation.sender, text }),
+      escalation: true, customerSender: conversation.sender, customerPhoneNumber: conversation.phone_number,
+    }, { jobKey: `esc-update-${escBaseKey}`, delay: 0 });
+    return { delivered: true, suppressed: true };
+  }
+
+  // Full escalation. The enqueue is the load-bearing step — if it throws we let
+  // it propagate (caller retries the job). The escalation_log INSERT and the
+  // optional pause are best-effort AFTER a successful enqueue (the team already
+  // has it), so their failure must not un-claim a truthful acknowledgement.
+  await enqueueOutgoingWhatsapp({
+    userId, tenantId: userId, channelId: 'whatsapp', customerId: conversation.sender,
+    conversationId: conversation.id, sender: om.sender, reply: om.reply,
+    escalation: true, escalationSummary: om.summary,
+    customerSender: conversation.sender, customerPhoneNumber: conversation.phone_number,
+  }, { jobKey: buildEscalationJobKey(escBaseKey) });
+
+  try {
+    await db.query(
+      `INSERT INTO escalation_log (user_id, conversation_id, contact_target) VALUES ($1, $2, $3)`,
+      [userId, conversation.id, contactTarget],
+    );
+  } catch (logErr) {
+    logger.warn('escalation', `escalation_log insert failed (team already notified): ${logErr.message}`);
+  }
+
+  if (config.escalationPausesBot === true) {
+    const pm = parseInt(config.escalationPauseMinutes, 10);
+    const pauseMin = Number.isFinite(pm) && pm > 0 ? pm : 5;
+    try {
+      await db.query(
+        `UPDATE conversations SET escalated_until = NOW() + ($2 * INTERVAL '1 minute') WHERE id = $1 AND user_id = $3`,
+        [conversation.id, pauseMin, userId],
+      );
+    } catch (muteErr) {
+      logger.warn('escalation', `failed to set escalated_until: ${muteErr.message}`);
+    }
+  }
+  return { delivered: true };
 }
 
 /**
@@ -1151,16 +1239,36 @@ async function processAiReply(job) {
     // escalation machinery below fires deterministically, instead of hoping the
     // LLM volunteered the marker. An unresolved/ambiguous target injects NOTHING
     // (it stays a merchant setup task — never a silent promise to the customer).
-    if (process.env.INSTRUCTION_ROUTING_ENABLED === 'true') {
+    // Escalation policy precedence (§3 step 1). A matching tenant escalation rule
+    // fires a DETERMINISTIC escalation instead of hoping the LLM volunteered it.
+    // Rules come from BOTH the structured config (Instruction Routing) AND a
+    // runtime SHADOW of the merchant's legacy free-text botInstructions (the pure
+    // classifier/router, NO DB migration) so a tenant who only ever wrote
+    // "any problem → escalate" in free text is honored. Runs by DEFAULT; the
+    // SUPPORT_CONTRACT_ENABLED=false kill-switch disables the shadow layer.
+    let escalationPolicyMatched = false;
+    const supportContractOn = process.env.SUPPORT_CONTRACT_ENABLED !== 'false';
+    const routingOn = process.env.INSTRUCTION_ROUTING_ENABLED === 'true';
+    let shadowRules = [];
+    try { shadowRules = supportContractOn ? deriveEscalationRulesFromInstructions(config) : []; }
+    catch (shadowErr) { logger.warn('routing', `shadow escalation derivation failed: ${shadowErr.message}`); }
+    if (routingOn || shadowRules.length) {
       try {
-        const det = applyDeterministicEscalation(reply, config, {
+        const evalConfig = shadowRules.length
+          ? { ...config, escalationRules: [...(Array.isArray(config.escalationRules) ? config.escalationRules : []), ...shadowRules] }
+          : config;
+        const det = applyDeterministicEscalation(reply, evalConfig, {
           text,
           intent: ai.lastDebug?.qualityGate?.intent || '',
           slaBreached: slaBreach.sla_breached === true,
         });
         if (det.escalated) {
           reply = det.reply;
+          escalationPolicyMatched = true;
           logger.info('routing', `deterministic escalation fired → ${det.contact?.name || 'contact'}`);
+        } else if (det.alreadyMarked) {
+          // A rule matched and the LLM already carried a marker — still a policy hit.
+          escalationPolicyMatched = true;
         } else if (det.unresolved) {
           logger.warn('routing', 'escalation rule matched but target unresolved — no customer promise made');
         }
@@ -1329,6 +1437,43 @@ async function processAiReply(job) {
       return Number.isFinite(seq) && seq > max ? seq : max;
     }, Number.NEGATIVE_INFINITY);
     const generatedAgainstSeqValue = Number.isFinite(generatedAgainstSeq) ? generatedAgainstSeq : null;
+
+    // Blocker 1 — REAL escalation BEFORE any customer acknowledgement. Forward the
+    // team escalation first and learn whether it truly landed. A stable per-
+    // generation key (conversationId + inbound seq) keeps retries idempotent. A
+    // genuine enqueue failure throws → the job retries safely (nothing customer-
+    // facing has been enqueued yet), never a false "reached the team" promise.
+    const escBaseKey = `${conversation.id}-${generatedAgainstSeqValue == null ? (payload.messageId || 'na') : generatedAgainstSeqValue}`;
+    let escalationDelivered = false;
+    if (escalation.ownerMessage) {
+      const escResult = await forwardTeamEscalation({ escalation, config, conversation, userId, text, escBaseKey, logger });
+      escalationDelivered = escResult.delivered === true;
+    }
+
+    // Blocker 2 + 6 — the Customer-Service Contract is the LAST deterministic gate:
+    // it runs AFTER every regeneration (reopen-guard, semantic dedup, retries) so
+    // nothing bypasses it, and it is fail-CLOSED — if it throws, the dangerous draft
+    // must NOT continue; we fall back to a neutral acknowledgement that claims
+    // neither a solution nor a handoff. escalationEnqueued reflects the REAL result
+    // above (not merely that a target resolved), so no ack claims a handoff that did
+    // not actually happen.
+    try {
+      const contract = reconcileSupportReply({
+        reply: customerReply,
+        config,
+        escalationEnqueued: escalationDelivered,
+        escalationPolicyMatched: escalationPolicyMatched && escalationDelivered,
+        customerText: text,
+      });
+      if (contract.reply !== customerReply) {
+        logger.info('contract', `support contract → ${contract.decision} [${contract.diagnostics.join(',') || 'none'}]`);
+        customerReply = contract.reply;
+      }
+    } catch (contractErr) {
+      logger.warn('contract', `support contract failed — fail-closed to neutral ack: ${contractErr.message}`);
+      customerReply = buildNeutralAck();
+    }
+
     const replyMessageId = await storeAssistantMessage({
       userId,
       conversationId: conversation.id,
@@ -1367,129 +1512,13 @@ async function processAiReply(job) {
       replyDelayPreset: config.replyDelayPreset,
       source: 'ai_reply',
       preSendReviewRequired: true,
-      handoffAcknowledgement: Boolean(escalation.ownerMessage),
+      handoffAcknowledgement: escalationDelivered,
       generatedAgainstSeq: generatedAgainstSeqValue,
     }, {
       jobKey: String(replyMessageId),
       delay: replyDelayMs,
     });
     outgoingEnqueued = true;
-
-    // The escalation forwarding below is a best-effort SIDE CHANNEL — wrapped so
-    // a failure can never throw the job and trigger a customer re-send.
-    try {
-    if (escalation.ownerMessage) {
-      const contactTarget = escalation.ownerMessage.contactTarget || escalation.ownerMessage.sender;
-      const cooldown = await db.query(
-        `SELECT 1 FROM escalation_log
-         WHERE user_id = $1 AND conversation_id = $2 AND contact_target = $3 AND sent_at > NOW() - INTERVAL '30 minutes'
-         LIMIT 1`,
-        [userId, conversation.id, contactTarget],
-      );
-
-      // Per-conversation cap: at most 3 escalations / 24h, and a 10-minute
-      // gap between any two escalations on the same conversation. This guards
-      // against AI loops dragging the owner into noise.
-      const escStats = await getConversationEscalationStats({
-        database: db,
-        userId,
-        conversationId: conversation.id,
-      });
-      const tenMinAgo = Date.now() - 10 * 60 * 1000;
-      const lastSentMs = escStats.lastSentAt ? escStats.lastSentAt.getTime() : 0;
-      // Re-escalation cap is per-merchant configurable (0 = unlimited). The bot
-      // can escalate AGAIN on a new issue, not just once.
-      const maxEsc = parseInt(config.maxEscalationsPerConversation, 10);
-      const effectiveMaxEsc = Number.isFinite(maxEsc) ? maxEsc : 5;
-      const overCap = effectiveMaxEsc > 0 && escStats.count24h >= effectiveMaxEsc;
-      let tooSoon = escStats.count24h >= 1 && lastSentMs > tenMinAgo;
-
-      // The customer EXPLICITLY asked to reach the team ("ارسل للادارة مرة
-      // ثانية") — production 2026-06-12: the bot promised and the anti-noise
-      // guards silently ate it. An explicit request bypasses the cooldown and
-      // the 10-minute gap; the 3/24h cap stays as the hard spam ceiling.
-      const explicitRequest = customerRequestedEscalation(text);
-      if (explicitRequest && !overCap) {
-        cooldown.rowCount = 0;
-        tooSoon = false;
-        logger.info('escalation', 'explicit customer request — bypassing cooldown/min-gap');
-      }
-
-      if (cooldown.rowCount > 0 || tooSoon || overCap) {
-        // NO suppression is ever silent (production 2026-06-12 21:42: the
-        // 3/24h cap swallowed the 4th escalation while the customer was told
-        // "رسلت للإدارة" — the owner only found out from the angry customer).
-        // Every guard routes to a light "🔁 تحديث" on the SAME team target.
-        logger.warn('escalation', 'suppressed full escalation — forwarding a customer UPDATE instead', {
-          conversationId: conversation.id,
-          reason: cooldown.rowCount > 0 ? 'cooldown_30m' : (overCap ? 'cap_24h_reached' : 'min_gap_10m'),
-          count24h: escStats.count24h,
-        });
-        await enqueueOutgoingWhatsapp({
-          userId,
-          tenantId: userId,
-          channelId: 'whatsapp',
-          customerId: conversation.sender,
-          conversationId: conversation.id,
-          sender: escalation.ownerMessage.sender,
-          reply: buildCustomerUpdateText({ customerSender: conversation.sender, text }),
-          escalation: true,
-          customerSender: conversation.sender,
-          customerPhoneNumber: conversation.phone_number,
-        }, {
-          jobKey: `esc-update-${replyMessageId}`,
-          delay: 0,
-        }).catch((err) => logger.warn('escalation', `update forward failed: ${err.message}`));
-      } else {
-        await enqueueOutgoingWhatsapp({
-          userId,
-          tenantId: userId,
-          channelId: 'whatsapp',
-          customerId: conversation.sender,
-          conversationId: conversation.id,
-          messageId: payload.messageId,
-          providerMessageId: payload.providerMessageId,
-          sender: escalation.ownerMessage.sender,
-          reply: escalation.ownerMessage.reply,
-          escalation: true,
-          escalationSummary: escalation.ownerMessage.summary,
-          customerSender: conversation.sender,
-          customerPhoneNumber: conversation.phone_number,
-        }, {
-          jobKey: buildEscalationJobKey(replyMessageId),
-        });
-
-        await db.query(
-          `INSERT INTO escalation_log (user_id, conversation_id, contact_target) VALUES ($1, $2, $3)`,
-          [userId, conversation.id, contactTarget],
-        );
-
-        // Pause the bot after escalation ONLY if the merchant enabled it
-        // (default OFF). Default behavior now: the bot KEEPS HELPING after an
-        // escalation so the customer is never stranded when no human picks up.
-        // When enabled, the pause duration is configurable (default 5 min).
-        if (config.escalationPausesBot === true) {
-          const pm = parseInt(config.escalationPauseMinutes, 10);
-          const pauseMin = Number.isFinite(pm) && pm > 0 ? pm : 5;
-          try {
-            await db.query(
-              `UPDATE conversations
-                  SET escalated_until = NOW() + ($2 * INTERVAL '1 minute')
-                WHERE id = $1 AND user_id = $3`,
-              [conversation.id, pauseMin, userId],
-            );
-          } catch (muteErr) {
-            logger.warn('escalation', `failed to set escalated_until: ${muteErr.message}`);
-          }
-        }
-      }
-    }
-    } catch (escErr) {
-      // CX-2: the customer reply was already enqueued and the inbound already
-      // marked answered above, so a failure in the escalation side-channel must
-      // NOT throw (a retry would re-send a SECOND customer reply).
-      logger.warn('escalation', `escalation side-channel failed (customer already answered): ${escErr.message}`);
-    }
 
     // Fire-and-forget profile extraction. Never awaited, never throws — the
     // helper schedules a setImmediate and swallows every error internally.

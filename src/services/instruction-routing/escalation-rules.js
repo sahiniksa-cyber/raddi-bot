@@ -12,6 +12,7 @@
  */
 
 const { normalizeArabic, contactHasDestination, contactStableId } = require('./instruction-router');
+const { detectProblemIntent, matchesScopeFamily, includesScopeToken } = require('../ai/support-contract');
 
 function resolveContactById(contacts, id) {
   const list = Array.isArray(contacts) ? contacts : [];
@@ -20,7 +21,7 @@ function resolveContactById(contacts, id) {
   return list.find((c) => c && (String(c.id || '').trim() === want || contactStableId(c) === want)) || null;
 }
 
-function triggerMatches(rule, { norm, intent, slaBreached }) {
+function triggerMatches(rule, { norm, intent, slaBreached, rawText }) {
   const value = normalizeArabic(rule && rule.trigger_value);
   switch (rule && rule.trigger_type) {
     case 'topic':
@@ -28,6 +29,18 @@ function triggerMatches(rule, { norm, intent, slaBreached }) {
       return Boolean(value) && norm.includes(value);
     case 'intent':
       return Boolean(value) && String(intent || '') === String(rule.trigger_value || '');
+    case 'problem_intent':
+      // SEMANTIC support/problem intent — fires when the customer reports a
+      // malfunction regardless of their literal words (not a keyword match).
+      return detectProblemIntent(rawText || norm);
+    case 'scoped_problem_intent':
+      // A problem directive scoped to a family (payment/login/order/…): fires only
+      // when the customer is BOTH in that scope AND reporting a real problem.
+      return matchesScopeFamily(rawText || norm, rule.trigger_value) && detectProblemIntent(rawText || norm);
+    case 'scoped_problem_keyword':
+      // UNKNOWN merchant domain scoped by the merchant's OWN token: fires only when
+      // the customer names that domain AND reports a real problem — never global.
+      return includesScopeToken(rawText || norm, rule.trigger_value) && detectProblemIntent(rawText || norm);
     case 'sla_breach':
       // The breach itself is computed deterministically upstream (sla-breach.js);
       // here we only fire when the caller has already confirmed a real breach.
@@ -49,7 +62,7 @@ function evaluateEscalationRules(config = {}, { text, intent, slaBreached } = {}
   const contacts = Array.isArray(config.escalationContacts) ? config.escalationContacts : [];
   const norm = normalizeArabic(text || '');
   for (const rule of rules) {
-    if (!triggerMatches(rule, { norm, intent, slaBreached })) continue;
+    if (!triggerMatches(rule, { norm, intent, slaBreached, rawText: text })) continue;
     const contact = resolveContactById(contacts, rule.target_contact_id);
     if (contact && contactHasDestination(contact)) return { matched: true, rule, contact };
     return { matched: true, rule, contact: null, unresolved: true };

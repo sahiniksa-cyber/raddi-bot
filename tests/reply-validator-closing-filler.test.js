@@ -5,8 +5,9 @@ const { stripClosingFiller } = require('../src/services/ai/reply-validator');
 
 function withFlag(on, fn) {
   const prev = process.env.CLOSING_FILLER_STRIP_ENABLED;
+  // §6: stripping is now the DEFAULT; OFF is the explicit kill-switch (=== 'false').
   if (on) process.env.CLOSING_FILLER_STRIP_ENABLED = 'true';
-  else delete process.env.CLOSING_FILLER_STRIP_ENABLED;
+  else process.env.CLOSING_FILLER_STRIP_ENABLED = 'false';
   try { return fn(); } finally {
     if (prev === undefined) delete process.env.CLOSING_FILLER_STRIP_ENABLED;
     else process.env.CLOSING_FILLER_STRIP_ENABLED = prev;
