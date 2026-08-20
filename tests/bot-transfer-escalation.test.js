@@ -17,7 +17,7 @@ test('botSignalsTransfer is false for a normal answer', () => {
 });
 
 test('enforceEscalationTag appends marker when the BOT signals a transfer (no explicit customer request)', () => {
-  const cfg = { escalationContacts: [{ name: 'الفريق', phone: '0562529945' }] };
+  const cfg = { escalationContacts: [{ name: 'الفريق', phone: '0500000000' }] };
   const out = enforceEscalationTag('رح أحوّل طلبك للفريق الحين وبيتواصلون معك', cfg, 'سليمة، كم بتكلف؟');
   assert.match(out, /\[تحويل:الفريق\|/);
 });

@@ -39,7 +39,7 @@ test('prompt makes escalation marker mandatory when escalation contacts exist', 
     botInstructions: `${'x'.repeat(301)}
 متى تحوّل للمالك: سؤال ما تعرف إجابته`,
     escalationContacts: [
-      { name: 'محمد', phone: '0562529945', role: 'المالك', when: 'سؤال ما تعرف إجابته' },
+      { name: 'محمد', phone: '0500000000', role: 'المالك', when: 'سؤال ما تعرف إجابته' },
     ],
   });
 
@@ -47,7 +47,10 @@ test('prompt makes escalation marker mandatory when escalation contacts exist', 
 
   assert.match(prompt, /\[تحويل:/);
   assert.match(prompt, /يجب/);
-  assert.match(prompt, /0562529945/);
+  // PRIVACY: the contact NAME is available for routing, but the internal
+  // destination phone must NEVER be rendered into the model prompt.
+  assert.match(prompt, /محمد/);
+  assert.doesNotMatch(prompt, /0500000000/);
 });
 
 test('long custom instructions still include dashboard reply controls', () => {

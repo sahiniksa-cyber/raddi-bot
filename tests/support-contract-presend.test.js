@@ -70,6 +70,25 @@ test('Blocker 1: pre-send contract is FAIL-CLOSED — a thrown reconcile never s
   assert.ok(out.trim().length >= 2, 'fail-closed produces a safe non-empty neutral ack');
 });
 
+test('pre-send net: an internal escalation destination is blocked at the boundary', () => {
+  reset();
+  const config = { escalationContacts: [{ name: 'الدعم', phone: '0551234567' }] };
+  const out = applyPreSendContract('تواصل مع الدعم على 0551234567', {
+    config, escalationEnqueued: true, customerText: 'اشتراكي وقف',
+  });
+  assert.ok(!/0551234567|966551234567/.test(out), `destination leaked past pre-send: ${out}`);
+  assert.match(out, /تم رفع طلبك للفريق المختص/);
+});
+
+test('pre-send net: destination guard runs even with kill-switch (hard privacy invariant)', () => {
+  process.env.SUPPORT_CONTRACT_ENABLED = 'false';
+  try {
+    const config = { escalationContacts: [{ name: 'الدعم', phone: '0551234567' }] };
+    const out = applyPreSendContract('كلم الدعم على 0551234567', { config, escalationEnqueued: false, customerText: 'x' });
+    assert.ok(!/551234567/.test(out), `destination leaked with kill-switch: ${out}`);
+  } finally { delete process.env.SUPPORT_CONTRACT_ENABLED; }
+});
+
 test('pre-send net: kill-switch =false → passthrough (rollback)', () => {
   process.env.SUPPORT_CONTRACT_ENABLED = 'false';
   try {
