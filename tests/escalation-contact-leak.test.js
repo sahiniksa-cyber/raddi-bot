@@ -174,6 +174,53 @@ test('compose: a DIFFERENT public number (not a configured destination) stays vi
   assert.ok(!/0551234567/.test(text), 'the internal destination is still redacted');
 });
 
+// ── raw() provider entry point (auxiliary structured calls) ─────────────────
+const { buildExtractionRequest } = require('../src/services/ai/conversation-state');
+
+function rawCapture(config) {
+  const ai = client(config);
+  const captured = {};
+  ai.buildClient = () => ({
+    model: 'test-model',
+    openai: { chat: { completions: { create: async (payload) => { captured.payload = payload; return { choices: [{ message: { content: '{}' } }] }; } } } },
+  });
+  return { ai, captured };
+}
+
+test('raw: sanitizes every provider message; does not mutate the caller array', async () => {
+  const config = { escalationContacts: [{ name: 'الدعم', phone: '0551234567' }] };
+  const { ai, captured } = rawCapture(config);
+  const messages = [
+    { role: 'system', content: 'استخرج الحالة' },
+    { role: 'user', content: 'LAST_BOT_REPLY: تواصل مع الدعم على 0551234567' },
+  ];
+  await ai.raw({ messages });
+  const sent = captured.payload.messages.map(m => m.content).join('\n');
+  assert.ok(!/0551234567|966551234567/.test(sent), `raw leaked the number: ${sent}`);
+  assert.equal(messages[1].content, 'LAST_BOT_REPLY: تواصل مع الدعم على 0551234567', 'caller array must NOT be mutated');
+});
+
+test('raw: conversation-state extraction with a leaked lastBotReply sends no protected number', async () => {
+  const config = { escalationContacts: [{ name: 'الدعم', phone: '0551234567' }] };
+  const { ai, captured } = rawCapture(config);
+  const req = buildExtractionRequest({
+    previousState: {},
+    newTurns: [{ role: 'user', content: 'طيب' }],
+    lastBotReply: 'تواصل مع الدعم على 0551234567',
+  });
+  await ai.raw(req);
+  const sent = captured.payload.messages.map(m => m.content).join('\n');
+  assert.ok(!/0551234567|966551234567/.test(sent), `state-extraction leaked the number: ${sent}`);
+});
+
+test('raw: a different public number stays unchanged', async () => {
+  const config = { escalationContacts: [{ name: 'الدعم', phone: '0551234567' }] };
+  const { ai, captured } = rawCapture(config);
+  await ai.raw({ messages: [{ role: 'user', content: 'رقم المبيعات 0509999999' }] });
+  const sent = captured.payload.messages.map(m => m.content).join('\n');
+  assert.ok(sent.includes('0509999999'), 'public number must survive raw()');
+});
+
 // ── multi-tenant isolation ──────────────────────────────────────────────────
 test('guard: tenant A guard does not use tenant B destinations', () => {
   const A = { escalationContacts: [{ name: 'الدعم', phone: '0551111111' }] };
