@@ -162,6 +162,48 @@ test('R13: same raw job key is tenant-isolated', () => {
   assert.match(b, /^tenantB:/);
 });
 
+// (P) Platform-level / Multi-Tenant generality: the SAME code must compute
+// per-tenant from each tenant's OWN config — no hardcoded store/product/fee/SLA.
+// Two DIFFERENT fake tenants with different policies must yield different,
+// tenant-scoped outcomes and never leak into each other.
+test('P: SLA breach + escalation are computed generically from each tenant config (2 tenants, no leak)', () => {
+  const now = Date.parse('2026-08-15T00:00:00Z');
+  // Tenant A: SLA 12h, escalates refunds to "دعم أ".
+  const tenantA = {
+    slaPolicies: [{ amount: 12, unit: 'ساعة' }],
+    escalationContacts: [{ id: 'a1', name: 'دعم أ', phone: '966500000001' }],
+    escalationRules: [{ target_contact_id: 'a1', trigger_type: 'topic', trigger_value: 'الاسترجاع' }],
+  };
+  // Tenant B: SLA 3 days, escalates shipping to "دعم ب" — totally different config.
+  const tenantB = {
+    slaPolicies: [{ amount: 3, unit: 'أيام' }],
+    escalationContacts: [{ id: 'b1', name: 'دعم ب', phone: '966500000002' }],
+    escalationRules: [{ target_contact_id: 'b1', trigger_type: 'topic', trigger_value: 'الشحن' }],
+  };
+
+  const since = new Date(now - 25 * HOUR); // 25h elapsed
+
+  // Same elapsed time, DIFFERENT SLA per tenant → breach for A (12h), not for B (3d).
+  const aBreach = computeSlaBreach({ since, now, slaPolicies: tenantA.slaPolicies });
+  const bBreach = computeSlaBreach({ since, now, slaPolicies: tenantB.slaPolicies });
+  assert.equal(aBreach.sla_breached, true, 'tenant A (12h) is breached at 25h');
+  assert.equal(bBreach.sla_breached, false, 'tenant B (3d) is NOT breached at 25h');
+
+  // Escalation routes to EACH tenant's own contact from EACH tenant's own rule.
+  const aEsc = applyDeterministicEscalation('رد', tenantA, { text: 'سؤال عن الاسترجاع' });
+  assert.equal(aEsc.escalated, true);
+  assert.match(aEsc.reply, /\[تحويل:دعم أ\|/);
+
+  const bEsc = applyDeterministicEscalation('رد', tenantB, { text: 'سؤال عن الشحن' });
+  assert.equal(bEsc.escalated, true);
+  assert.match(bEsc.reply, /\[تحويل:دعم ب\|/);
+
+  // No leak: tenant A's trigger ("الاسترجاع") must NOT fire tenant B's rules,
+  // and tenant B's contact must never appear for tenant A.
+  assert.equal(applyDeterministicEscalation('رد', tenantB, { text: 'سؤال عن الاسترجاع' }).escalated, false);
+  assert.doesNotMatch(aEsc.reply, /دعم ب/);
+});
+
 // (14) The welcome message must not appear in the middle of an ongoing conversation.
 test('R14: welcome hint only on the first message, never mid-conversation', () => {
   const ai = new AIClient({ storeName: 'متجر', welcomeMessage: 'هلا والله', welcomeMode: 'inline', model: 'gpt-4o', openaiApiKey: 'x' },
