@@ -141,3 +141,47 @@ test('sendMessage pauses the AI on the conversation for 30 minutes (manual reply
   assert.ok(muteQuery, 'manual send must mute the AI so it does not talk over the human');
   assert.equal(muteQuery.params[0], 'conv-id-1', 'mute targets the resolved conversation');
 });
+
+test('sendMessage honors the merchant configured ownerPauseMinutes (not a hardcoded 30)', async () => {
+  // bot_configs returns a configured 45 — the dashboard path must use it.
+  const database = makeDb({
+    query: async (sql, params) => {
+      database.queries.push({ sql, params });
+      if (sql.includes("config->>'ownerPauseMinutes'")) {
+        return { rows: [{ owner_pause_minutes: '45' }] };
+      }
+      if (sql.includes('INSERT INTO conversations') || sql.includes('ON CONFLICT')) {
+        return { rows: [{ id: 'conv-id-1' }] };
+      }
+      if (sql.includes('INSERT INTO messages')) return { rows: [{ id: 'msg-id-1' }] };
+      return { rows: [] };
+    },
+  });
+  const ctrl = createBotController({ getUserBot: () => makeBot(), database });
+
+  await ctrl.sendMessage(makeReq(), makeRes());
+
+  const muteQuery = database.queries.find(q => q.sql.includes('SET escalated_until'));
+  assert.ok(muteQuery, 'manual send must set the takeover window');
+  assert.equal(muteQuery.params[0], 'conv-id-1');
+  assert.equal(muteQuery.params[1], 45, 'must use the configured 45 minutes, not a hardcoded 30');
+  assert.ok(/\$2 \* INTERVAL '1 minute'/.test(muteQuery.sql), 'window must be computed from configured minutes');
+});
+
+test('sendMessage skips the pause when the merchant disabled it (ownerPauseMinutes=0)', async () => {
+  const database = makeDb({
+    query: async (sql, params) => {
+      database.queries.push({ sql, params });
+      if (sql.includes("config->>'ownerPauseMinutes'")) return { rows: [{ owner_pause_minutes: '0' }] };
+      if (sql.includes('INSERT INTO conversations') || sql.includes('ON CONFLICT')) return { rows: [{ id: 'conv-id-1' }] };
+      if (sql.includes('INSERT INTO messages')) return { rows: [{ id: 'msg-id-1' }] };
+      return { rows: [] };
+    },
+  });
+  const ctrl = createBotController({ getUserBot: () => makeBot(), database });
+
+  await ctrl.sendMessage(makeReq(), makeRes());
+
+  const muteQuery = database.queries.find(q => q.sql.includes('SET escalated_until'));
+  assert.equal(muteQuery, undefined, 'no pause is set when the merchant disabled it');
+});

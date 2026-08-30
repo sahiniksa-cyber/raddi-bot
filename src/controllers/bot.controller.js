@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { TIMERS } = require('../../lib/constants');
+const { readOwnerPauseMinutes } = require('../services/whatsapp/owner-pause-config');
 
 function describeStartState(state = {}) {
   const status = state.status || 'unknown';
@@ -214,15 +215,23 @@ function createBotController({ getUserBot, database = null }) {
                 [conversationId, userId, sender, text, providerMessageId,
                   JSON.stringify({ source: 'manual_send' })],
               );
-              // Owner replied manually → pause the AI on this conversation for
-              // 30 minutes so it doesn't talk over the human (mirrors the
-              // fromMe-on-phone behavior). escalated_until may not exist on very
-              // old schemas — fail open.
+              // Owner replied manually from the dashboard → pause the AI on this
+              // conversation so it doesn't talk over the human (mirrors the
+              // fromMe-on-phone behavior). The window is the merchant's CONFIGURED
+              // ownerPauseMinutes (platform default when unset/invalid) — never a
+              // hardcoded 30. minutes<=0 means the merchant disabled the pause, so
+              // we skip it, matching the phone path. escalated_until may not exist
+              // on very old schemas — fail open.
               try {
-                await db.query(
-                  `UPDATE conversations SET escalated_until = NOW() + INTERVAL '30 minutes' WHERE id = $1`,
-                  [conversationId],
-                );
+                const minutes = await readOwnerPauseMinutes(db, userId);
+                if (Number.isFinite(minutes) && minutes > 0) {
+                  await db.query(
+                    `UPDATE conversations
+                        SET escalated_until = NOW() + ($2 * INTERVAL '1 minute')
+                      WHERE id = $1`,
+                    [conversationId, minutes],
+                  );
+                }
               } catch (_) { /* column missing on old schema — ignore */ }
             }
           } catch (dbErr) {

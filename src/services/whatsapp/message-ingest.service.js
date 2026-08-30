@@ -8,6 +8,7 @@ const escalationBridge = require('../escalation/escalation-bridge');
 const promptEditService = require('../prompt-edit/prompt-edit.service');
 const { isCustomerBlocked } = require('./do-not-reply');
 const { isAutoReplyEnabled } = require('../bot/auto-reply-control');
+const { DEFAULT_OWNER_PAUSE_MINUTES, parseOwnerPauseMinutes } = require('./owner-pause-config');
 
 // Builds an AIClient bound to a merchant's config — used by the prompt-edit
 // handler to smart-merge edits. Lazy-required to avoid a heavy import on the
@@ -225,8 +226,6 @@ function occurredAtFromWhatsappMessage(msg) {
   const occurredAt = new Date(selectedMs);
   return Number.isNaN(occurredAt.getTime()) ? null : occurredAt;
 }
-
-const DEFAULT_OWNER_PAUSE_MINUTES = 30;
 
 /**
  * Computes the timestamp until which the bot should stay muted on a conversation
@@ -587,10 +586,7 @@ class MessageIngestService {
            FROM bot_configs WHERE user_id = $1`,
         [userId],
       );
-      const raw = result?.rows?.[0]?.owner_pause_minutes;
-      if (raw === null || raw === undefined) return DEFAULT_OWNER_PAUSE_MINUTES;
-      const parsed = parseInt(raw, 10);
-      return Number.isFinite(parsed) ? parsed : DEFAULT_OWNER_PAUSE_MINUTES;
+      return parseOwnerPauseMinutes(result?.rows?.[0]?.owner_pause_minutes);
     } catch (_e) {
       return DEFAULT_OWNER_PAUSE_MINUTES;
     }
