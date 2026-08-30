@@ -531,6 +531,12 @@ async function processOutgoingWhatsapp(job, {
   finalReply = String(routed.reply || '').trim();
   if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
 
+  // FINAL owner-pause re-check, immediately before transport. Closes the race
+  // where the owner replied during waitForConnectedBot / the pre-send review.
+  if (await abortIfOwnerPausedBeforeSend(job, { userId, sender, replyMessageId, payload })) {
+    return { skipped: true, reason: 'owner_paused_transport_guard' };
+  }
+
   try { await bot.client?.sendPresenceUpdate?.('composing', deliverTo); } catch (_) {}
 
   const sendResult = await sendWhatsappReply(bot, { sender: deliverTo, reply: finalReply, providerMessageId });
@@ -734,6 +740,11 @@ async function handleLidOutgoing({
     });
     finalReply = String(routed.reply || '').trim();
     if (!finalReply) throw new Error('pre-send handoff produced no customer acknowledgement');
+    // FINAL owner-pause re-check on the @lid path too (the majority JID type),
+    // immediately before transport — mirrors the main path's transport guard.
+    if (await abortIfOwnerPausedBeforeSend(job, { userId, sender, replyMessageId, payload, lid: true })) {
+      return { skipped: true, reason: 'owner_paused_transport_guard', lid: true };
+    }
     const lidResult = await bot.client.sendMessage(sender, finalReply);
     await recordWhatsappMessageId({
       userId,
@@ -930,6 +941,43 @@ async function cancelOutgoingForQuota(job, { replyMessageId }) {
     attempts: job.attemptsMade,
     last_error: message,
   });
+}
+
+// FINAL transport guard (Human Takeover). The owner-pause check above runs at
+// job DEQUEUE — before waitForConnectedBot (up to 10s) and the pre-send AI
+// review (seconds). If the owner replies manually DURING that window, the early
+// check has already passed and the in-flight automated reply would still ship.
+// This runs the authoritative last check the instant before the real WhatsApp
+// send. If takeover is now active it aborts and sends NOTHING (no fallback).
+// Escalation/team notifications (payload.escalation) are exempt so real handoffs
+// keep working. Returns true when it canceled the send.
+async function abortIfOwnerPausedBeforeSend(job, {
+  userId, sender, replyMessageId, payload = {}, lid = false,
+} = {}) {
+  if (payload.escalation) return false;
+  const paused = await isConversationOwnerPaused({
+    userId,
+    conversationId: payload.conversationId,
+    sender,
+    replyMessageId,
+    ignoreEscalationPause: payload.handoffAcknowledgement === true,
+  });
+  if (!paused) return false;
+  const message = 'outgoing reply canceled at transport guard because owner replied (escalated_until active)';
+  await markReplyMessage(replyMessageId, 'canceled', {
+    sentBy: WORKER_NAME,
+    canceledAt: new Date().toISOString(),
+    error: message,
+    transportGuard: true,
+    lid,
+  }, messageScope(payload));
+  await updateJobStatus(job.id, {
+    status: 'canceled',
+    finished_at: new Date(),
+    attempts: job.attemptsMade,
+    last_error: message,
+  });
+  return true;
 }
 
 // The owner replying manually sets conversations.escalated_until (ingest for
@@ -1216,6 +1264,7 @@ function createOutgoingWhatsappWorker({ getUserBot }) {
 }
 
 module.exports = {
+  abortIfOwnerPausedBeforeSend,
   cancelDisabledAutoReply,
   claimSendOrStale,
   completeSuppressedOutgoing,

@@ -77,5 +77,9 @@ test('normal and lid sends ignore only the acknowledgement own escalation pause'
   const wiring = outgoingWorkerSrc.match(
     /ignoreEscalationPause:\s*payload\.handoffAcknowledgement\s*===\s*true/g,
   ) || [];
-  assert.equal(wiring.length, 2);
+  // Three owner-pause checks all honor the handoff-acknowledgement bypass:
+  // the early dequeue check on the normal path, the early check on the @lid
+  // path, and the shared final transport guard (abortIfOwnerPausedBeforeSend)
+  // that both paths call immediately before the real WhatsApp send.
+  assert.equal(wiring.length, 3);
 });
